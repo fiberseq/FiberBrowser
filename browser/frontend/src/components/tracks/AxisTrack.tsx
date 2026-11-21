@@ -1,3 +1,5 @@
+import { useMetaLocusStore } from '../../features/metaLocus/metaLocusStore';
+import { anchorWord, metaAxisZero, metaLabel } from '../../features/metaLocus/metaChrom';
 import { useContigCoordinates } from './axisCoordinates';
 import { crosshairBottomAt, logicalOffset } from '../../utils/scaledCoordinates';
 import { useRef, useEffect, useCallback, useState } from 'react';
@@ -12,6 +14,8 @@ import { usePanOffsetTransform } from '../../hooks/usePanOffsetTransform';
 import { TRACK_BACKGROUND } from './TrackContainerConstants';
 import { primerTargetOverlayVisible } from '../controls/primer-design/primerTargetOverlay';
 import { highlightRegion } from '../../utils/highlightActions';
+import { useLiveLiftAxis } from '../../features/liveLift/useLiveLiftAxis';
+import { liveLiftHaplotypeColor } from '../../features/liveLift/palette';
 
 interface Props {
   width: number;
@@ -96,6 +100,15 @@ export function AxisTrack({ width, height, overrideChrom, overrideStart, overrid
   const start = overrideStart ?? storeStart;
   const end = overrideEnd ?? storeEnd;
   const chrom = overrideChrom ?? storeChrom;
+  // The meta-locus's axis: -flank..+flank around the sites' anchor (features/metaLocus), drawn like relative coordinates.
+  const metaStatus = useMetaLocusStore(s => s.status);
+  const metaZero = metaAxisZero(chrom, metaStatus);
+  const relOn = (showRelativeCoords && relativeTSS !== null) || metaZero !== null;
+  const relTss = metaZero ?? relativeTSS;
+  const relReversed = metaZero === null && relativeGene?.strand === '-';
+  const relLabel = (pos: number) => (metaZero !== null && Math.round(pos - metaZero) === 0
+    ? anchorWord(metaStatus?.spec?.anchor) : formatRelativePosition(pos, relTss!, relReversed));
+  const { axis: liveLiftAxis } = useLiveLiftAxis(chrom, start, end, width, isReversed);
   const chromInfo = findChromInfo(chroms, chrom);
   // A contig a plugin pack built: its own readouts.
   const contig = useContigCoordinates(chrom);
@@ -116,13 +129,11 @@ export function AxisTrack({ width, height, overrideChrom, overrideStart, overrid
   const [highlightDrag, setHighlightDrag] = useState(false);
 
   const genomeToScreen = useCallback((pos: number) => {
-    const frac = (pos - start) / (end - start);
-    return isReversed ? (1 - frac) * width : frac * width;
-  }, [start, end, width, isReversed]);
+    return liveLiftAxis.toX(pos);
+  }, [liveLiftAxis]);
   const screenToGenome = useCallback((x: number) => {
-    const frac = x / width;
-    return Math.round(start + (isReversed ? 1 - frac : frac) * (end - start));
-  }, [start, end, width, isReversed]);
+    return Math.round(liveLiftAxis.fromX(x).pos);
+  }, [liveLiftAxis]);
 
   // Mouse handlers for drag-to-zoom
   const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -205,11 +216,11 @@ export function AxisTrack({ width, height, overrideChrom, overrideStart, overrid
     // Set crosshair for coordinate display
     if (!isDragging) {
       const pos = screenToGenome(x);
-      const useRelative = showRelativeCoords && relativeTSS !== null;
+      const useRelative = relOn;
       const label = contig
         ? contig.positionLabel(pos)
         : useRelative
-        ? formatRelativePosition(pos, relativeTSS!, relativeGene?.strand === '-')
+        ? relLabel(pos)
         : `${chrom}:${normalizeCircular(pos).toLocaleString()}${isCircular ? ' circular' : ''}`;
 
       // Find TrackContainer for correct crosshair positioning across all panels
@@ -221,7 +232,7 @@ export function AxisTrack({ width, height, overrideChrom, overrideStart, overrid
       // The line ends with the panels under the pointer (not at the window's bottom).
       setCrosshair(containerX, label, pos, container ? crosshairBottomAt(container, e.clientX) : null);
     }
-  }, [screenToGenome, isDragging, showRelativeCoords, relativeTSS, relativeGene, chrom, normalizeCircular, isCircular, setCrosshair, contig]);
+  }, [screenToGenome, isDragging, showRelativeCoords, relativeTSS, relativeGene, chrom, normalizeCircular, isCircular, setCrosshair, contig, metaZero, metaStatus]);
 
   const handleMouseLeave = useCallback(() => {
     setCrosshair(null, null, null);
@@ -236,6 +247,11 @@ export function AxisTrack({ width, height, overrideChrom, overrideStart, overrid
 
     ctx.fillStyle = TRACK_BACKGROUND.axis;
     ctx.fillRect(0, 0, width, height);
+    for (const { x0, x1, ins } of liveLiftAxis.blocks) {
+      ctx.fillStyle = '#e2e8f0'; ctx.fillRect(x0, 0, x1 - x0, height);
+      ctx.fillStyle = liveLiftHaplotypeColor(ins.hap_label); ctx.font = '9px sans-serif'; ctx.textAlign = 'center';
+      if (x1 - x0 > 65) ctx.fillText(ins.label, (x0 + x1) / 2, height - 3, x1 - x0 - 4);
+    }
 
     const size = end - start;
     const step = calculateTickStep(size, width);
@@ -248,12 +264,14 @@ export function AxisTrack({ width, height, overrideChrom, overrideStart, overrid
     ctx.lineTo(width, height - 1);
     ctx.stroke();
 
-    const useRelative = showRelativeCoords && relativeTSS !== null;
+    const useRelative = relOn;
 
     // The locus at the left and the width at the right come first: tick labels
     // that would run into them are left out (audit L1: the locus crowded the first tick).
     let regionText: string;
-    if (useRelative && relativeGene) {
+    if (useRelative && metaZero !== null && metaStatus) {
+      regionText = metaLabel(metaStatus);
+    } else if (useRelative && relativeGene) {
       regionText = `${relativeGene.name} TSS ±${Math.round(size / 2000)}kb`;
     } else if (width < 250) {
       // Abbreviated format for narrow panels
@@ -293,11 +311,10 @@ export function AxisTrack({ width, height, overrideChrom, overrideStart, overrid
     }
 
     // Align ticks to TSS in relative mode, otherwise to genome coordinates
-    const tickBase = useRelative ? relativeTSS! : contig ? contig.tickBase : 0;
+    const tickBase = useRelative ? relTss! : contig ? contig.tickBase : 0;
     const first = tickBase + Math.ceil((start - tickBase) / effectiveStep) * effectiveStep;
     for (let pos = first; pos < end; pos += effectiveStep) {
-      const frac = (pos - start) / (end - start);
-      const x = isReversed ? (1 - frac) * width : frac * width;
+      const x = genomeToScreen(pos);
 
       // Skip if too close to edges
       if (x < 30 || x > width - 30) continue;
@@ -312,7 +329,7 @@ export function AxisTrack({ width, height, overrideChrom, overrideStart, overrid
       const label = contig
         ? contig.tickLabel(pos, p => formatPosition(p, size))
         : useRelative
-        ? formatRelativePosition(pos, relativeTSS!, relativeGene?.strand === '-')
+        ? relLabel(pos)
         : formatPosition(normalizeCircular(pos), size);
       const half = ctx.measureText(label).width / 2;
       if (x - half < regionRight + 6 || x + half > sizeLeft - 6) continue;
@@ -398,7 +415,7 @@ export function AxisTrack({ width, height, overrideChrom, overrideStart, overrid
       }
     }
 
-  }, [start, end, chrom, width, height, primer, primerPanelOpen, genomeToScreen, isDragging, dragStartX, dragEndX, screenToGenome, isReversed, showRelativeCoords, relativeTSS, relativeGene, normalizeCircular, isCircular, canvasRenderVersion, highlightDrag, contig]);
+  }, [start, end, chrom, width, height, primer, primerPanelOpen, genomeToScreen, isDragging, dragStartX, dragEndX, screenToGenome, isReversed, showRelativeCoords, relativeTSS, relativeGene, normalizeCircular, isCircular, canvasRenderVersion, highlightDrag, contig, metaZero, metaStatus]);
 
   return (
     <div style={{ width, height, overflow: 'hidden' }}>

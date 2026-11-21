@@ -6,37 +6,15 @@ import { useBrowserStore } from '../../../stores/browserStore';
 import { useFeatureStore, type FeatureRef } from '../../../stores/featureStore';
 import { variantTypeHelp } from './nfrHelp';
 import { CheckboxRow } from '../../../components/controls/shared/CheckboxRow';
-/** Stacked bars of an NFR's variants over its region (one lane per variant, edge SD as faint whiskers). */
+import { ClassLanes } from '../../../components/charts/ClassLanes';
+/** Stacked bars of an NFR's variants over its region (one lane per variant, edge SD as faint whiskers): the shared
+ * ClassLanes, as the nucleosome panel's geometries. */
 export function VariantLanes({ nfr, width, highlight }: { nfr: NfrRegionResult; width: number; highlight?: string | null }) {
   const vs = nfr.variants;
-  const lo = Math.min(nfr.start, ...vs.map(v => v.L - v.Lsd)) - 40;
-  const hi = Math.max(nfr.end, ...vs.map(v => v.R + v.Rsd)) + 40;
-  const lane = 13, top = 4, h = top + Math.max(1, vs.length) * lane + 14;
-  const x = (p: number) => ((p - lo) / Math.max(1, hi - lo)) * width;
-  return (
-    <svg width={width} height={h} role="img" aria-label={`${nfr.id}: ${vs.length} variants over ${bp(nfr.start)}–${bp(nfr.end)}`} data-testid="nfr-lanes">
-      <rect x={x(nfr.start)} y={0} width={Math.max(1, x(nfr.end) - x(nfr.start))} height={h - 12} rx={3}
-        className="fill-fuchsia-50 dark:fill-fuchsia-900/20" />
-      {vs.map((v, i) => {
-        const y = top + i * lane;
-        const c = variantColor(v.name);
-        const dim = highlight && highlight !== v.name;
-        return (
-          <g key={v.id} opacity={dim ? 0.35 : 1}>
-            <line x1={x(v.L - v.Lsd)} x2={x(v.L + v.Lsd)} y1={y + 4.5} y2={y + 4.5} stroke={c} strokeOpacity={0.45} strokeWidth={1} />
-            <line x1={x(v.R - v.Rsd)} x2={x(v.R + v.Rsd)} y1={y + 4.5} y2={y + 4.5} stroke={c} strokeOpacity={0.45} strokeWidth={1} />
-            <rect x={x(v.L)} y={y} width={Math.max(2, x(v.R) - x(v.L))} height={9} rx={2} fill={c} fillOpacity={0.35 + 0.55 * Math.min(1, v.prevalence * 1.4)}>
-              <title>{`${nfr.id} ${v.name} ${v.relation}: ${bp(v.L)}–${bp(v.R)} (${bp(v.width)} bp), ${pct(v.prevalence)} of callable reads`}</title>
-            </rect>
-            <text x={Math.min(width - 2, x(v.R) + 3)} y={y + 8} fontSize={9} className="fill-gray-500 dark:fill-gray-400"
-              textAnchor={x(v.R) + 24 > width ? 'end' : 'start'}>{v.name}</text>
-          </g>
-        );
-      })}
-      <text x={0} y={h - 2} fontSize={9} className="fill-gray-400">{bp(lo)}</text>
-      <text x={width} y={h - 2} fontSize={9} textAnchor="end" className="fill-gray-400">{bp(hi)}</text>
-    </svg>
-  );
+  return <ClassLanes width={width} region={{ start: nfr.start, end: nfr.end }} highlight={highlight} testId="nfr-lanes" format={bp}
+    ariaLabel={`${nfr.id}: ${vs.length} variants over ${bp(nfr.start)}–${bp(nfr.end)}`}
+    lanes={vs.map(v => ({ id: v.name, name: v.name, L: v.L, R: v.R, Lsd: v.Lsd, Rsd: v.Rsd, color: variantColor(v.name), strength: v.prevalence,
+      title: `${nfr.id} ${v.name} ${v.relation}: ${bp(v.L)}–${bp(v.R)} (${bp(v.width)} bp), ${pct(v.prevalence)} of callable reads` }))} />;
 }
 
 /** A variant's mini profile: the share of its member reads open at each position (the NFR's callable reads, grey). */

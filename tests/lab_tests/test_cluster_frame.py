@@ -11,9 +11,9 @@ from services.clustering_features import extract_features_from_compact
 from state.browser_state import BrowserState
 
 
-def window(key, start=100, reverse=False, genome=None, dataset='d', blocks=None):
+def window(key, start=100, reverse=False, genome=None, dataset='d', blocks=None, **kw):
     return fc.RegionViewport(dataset_id=dataset, result_key=key, chrom='chr1', start=start, end=start+200,
-        genome=genome, reverse=reverse, blocks=blocks or [fc.FrameBlock(frame=(0, 100), genomic=(start, start+100))])
+        genome=genome, reverse=reverse, blocks=blocks or [fc.FrameBlock(frame=(0, 100), genomic=(start, start+100))], **kw)
 
 
 def request(views, **kwargs):
@@ -155,8 +155,9 @@ def test_wrapped_regions_require_the_whole_hull(state, monkeypatch):
                  dict(id='full', intervals=[[0, 200, 0]])]
         return WorkingSet(reads, total_overlapping=2, total_spanning=1, chrom=chrom, start=start, end=end)
     monkeypatch.setattr(BrowserState, 'build_working_set', working)
-    v = window('wrap', start=0, blocks=[fc.FrameBlock(frame=(0, 10), genomic=(190, 200)),
-                                      fc.FrameBlock(frame=(10, 100), genomic=(0, 90))])
+    # Blocks across a circular origin: an explicit flag (graph primary G0), never inferred from block order.
+    v = window('wrap', start=0, wraps_origin=True, blocks=[fc.FrameBlock(frame=(0, 10), genomic=(190, 200)),
+                                                         fc.FrameBlock(frame=(10, 100), genomic=(0, 90))])
     result = fc.run(base, request([v]))['results']['wrap']
     assert result['eligible_read_count'] == 2
     assert result['peak_covering_read_count'] == 1

@@ -5,6 +5,7 @@ import { DEBUG, generatePanelId, createDefaultSubTracks, createGenomeSubTracks, 
 import { restoreOrphanSplitSources } from './splitSources';
 import { mergeDatasets, unmergeDataset } from '../api/datasets';
 import { cancelFirstReadsJump, markFirstReadsJump, viewportKey } from '../utils/firstReadsJump';
+import { isLiveLift, opensOwnPanel } from '../utils/datasetKinds';
 
 
 // ============================================================
@@ -252,7 +253,8 @@ export function createDatasetSlice(set: (partial: Partial<BrowserState> | ((stat
       const filtered = panel.subTracks.filter(
         st => !st.type.startsWith('ortho-') || newOrthoTypes.has(st.type)
       );
-      const newSubTracks = ensureBuiltinSubTracks(filtered);
+      // A panel with no reads row (an older save's empty list) is left as saved, as migratePanelTracks leaves it.
+      const newSubTracks = filtered.some(st => st.type === 'reads') ? ensureBuiltinSubTracks(filtered) : filtered;
       const sameLength = newSubTracks.length === panel.subTracks.length;
       const sameContent = sameLength && newSubTracks.every((st, i) => st === panel.subTracks[i]);
       if (sameContent) return panel;
@@ -296,11 +298,13 @@ export function createDatasetSlice(set: (partial: Partial<BrowserState> | ((stat
     const existingLinkGroup = state.panels.find(p => p.linkGroup)?.linkGroup;
     const defaultLinkGroup = existingLinkGroup || (datasets.length > 1 ? `link-${state.nextLinkGroupId}` : null);
     const newPanels = datasets
-      .filter(d => !existingPanelDatasetIds.has(d.id))
+      // A live-lift source view's BAM shows only in its source view (opensOwnPanel).
+      .filter(d => !existingPanelDatasetIds.has(d.id) && opensOwnPanel(d))
       .map(d => ({
         id: generatePanelId(),
         contentType: 'dataset' as PanelContentType,
         datasetId: d.id,
+        ...(isLiveLift(d) ? { liftHaplotypeMode: d.live_lift?.settings?.haplotype_mode ?? 'split' } : {}),
         subTracks: createDefaultSubTracks(state.orthogonalTracks, state.compositeTracks),
         collapsed: false,
         linkGroup: defaultLinkGroup,
@@ -407,6 +411,7 @@ export function createDatasetSlice(set: (partial: Partial<BrowserState> | ((stat
       id: generatePanelId(),
       contentType: 'dataset',
       datasetId: dataset.id,
+      ...(isLiveLift(dataset) ? { liftHaplotypeMode: dataset.live_lift?.settings?.haplotype_mode ?? 'split' } : {}),
       subTracks: createDefaultSubTracks(state.orthogonalTracks, state.compositeTracks),
       collapsed: false,
       linkGroup: existingLinkGroup,  // Link to existing panels by default
@@ -431,7 +436,10 @@ export function createDatasetSlice(set: (partial: Partial<BrowserState> | ((stat
       : state.enabledModTypes;
 
     return {
-      datasets: [...state.datasets, dataset],
+      // Once per ID: a dataset the page already has (taken from the server while its own open was on its way) is
+      // updated, never listed twice.
+      datasets: state.datasets.some(d => d.id === dataset.id)
+        ? state.datasets.map(d => (d.id === dataset.id ? dataset : d)) : [...state.datasets, dataset],
       slotOrder: newSlotOrder,
       panels: placedPanels,
       downsampleCount: state.downsampleCount,

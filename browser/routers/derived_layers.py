@@ -25,13 +25,15 @@ async def load_derived_layers(
     """Attach a saved `.fiberlayers` bundle to matching loaded datasets."""
     if request is None:
         return {"success": False, "error": "No request body"}
+    dataset_ids = resolve_dataset_ids(state, dataset_ids=request.dataset_ids)
+    from services.lift.capability import require_for_ids
+    require_for_ids(state, dataset_ids, "consensus")
 
     def _do_load():
         bundle_path, error = resolve_derived_layer_payload_path(request.path)
         if error or not bundle_path:
             return {"success": False, "error": error or "Could not resolve derived-layer bundle"}
 
-        dataset_ids = resolve_dataset_ids(state, dataset_ids=request.dataset_ids)
         if not dataset_ids:
             return {"success": False, "error": "No loaded datasets to attach derived layers to"}
 

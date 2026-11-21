@@ -36,17 +36,15 @@ AUTO_JASPAR_TOP_MOTIFS = 10
 
 
 def normalized_vplot_matrix(vp_matrix, smooth: float = 0, log: bool = False) -> list[list[float]]:
-    """The V-plot matrix smoothed / logged as asked and scaled to its maximum.
+    """The V-plot matrix smoothed / logged as asked and scaled to its maximum: the one V-plot finishing
+    (services.vplot_matrix.finish_vplot: smooth, raw, log1p), then scaled to [0, 1].
 
     An empty size range gives a matrix with no rows: an empty matrix, not an error.
     """
     if vp_matrix.size == 0:
         return [[] for _ in range(vp_matrix.shape[0])]
-    if smooth > 0:
-        from scipy.ndimage import gaussian_filter
-        vp_matrix = gaussian_filter(vp_matrix.astype(float), sigma=smooth)
-    if log:
-        vp_matrix = np.log1p(vp_matrix)
+    from services.vplot_matrix import finish_vplot
+    vp_matrix = finish_vplot(vp_matrix, smooth=smooth if smooth and smooth > 0 else 0.0, log=bool(log))
     vp_max = float(vp_matrix.max()) if vp_matrix.max() > 0 else 1
     return [[float(x / vp_max) for x in row] for row in vp_matrix]
 

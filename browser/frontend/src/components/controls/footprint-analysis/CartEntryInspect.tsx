@@ -9,6 +9,7 @@ import { declareGenome, DECLARABLE_GENOMES } from '../../../api/reference';
 import type { FootprintGroup } from '../../../types';
 import { AnnotatedSequenceView, MotifHitList } from './helpers';
 import { VPlotChart } from '../../charts/VPlotChart';
+import { openSuppliedPlot } from '../../../features/plots/supplied';
 import { assignMotifColors } from './constants';
 import { AnalysisButton, AnalysisStatus, MotifPinBar, useMotifThreshold } from '../shared';
 import { formatP } from '../../../utils/motifSettings';
@@ -218,7 +219,7 @@ export function CartEntryInspect({ group, targetDatasetIds, width }: CartEntryIn
         <div className="flex items-center gap-2 text-[11px] text-gray-500">
           On {refChrom}, outside this view.
           <AnalysisButton theme="emerald" variant="soft"
-            onClick={() => { const s = useBrowserStore.getState(); if (source.panelId) s.navigatePanel(source.panelId, refChrom, regionStart, regionEnd); else s.setViewport(refChrom, regionStart, regionEnd); }}>
+            onClick={() => { const s = useBrowserStore.getState(); s.recordJump(source.panelId, { to: { chrom: refChrom, start: regionStart, end: regionEnd } }); if (source.panelId) s.navigatePanel(source.panelId, refChrom, regionStart, regionEnd); else s.setViewport(refChrom, regionStart, regionEnd); }}>
             Go there
           </AnalysisButton>
         </div>
@@ -446,6 +447,22 @@ function CartEntryVPlot({
           bandLabels
           centerCaption="x = bp from this definition's position"
         />
+      )}
+      {plot && plot.matrix.length > 0 && (
+        <div className="flex justify-end">
+          <button type="button" data-testid="class-vplot-open-in-plots"
+            className="rounded border border-gray-200 px-1.5 py-0.5 text-[10px] text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300"
+            title="Open in Plots: this V-plot exactly as drawn here (the Gallery, export)."
+            onClick={() => openSuppliedPlot({
+              type: 'vplot', name: `${group.name ?? 'Class'} V-plot`, datasets: targetDatasetIds,
+              spec: { origin: 'Footprints › Saved class V-plot', x0: -plot.window, dx: plot.pos_bin, xLabel: "bp from the class position", yLabel: 'footprint size (bp)',
+                measures: `footprint midpoints by size around the class position (±${plot.window} bp; first target dataset; reads in the analysis scope, the analysis sample), ${plot.size_bin} bp size × ${plot.pos_bin} bp position bins, smoothed σ 1 bin${view.log ? ', log1p' : ''}, scaled to the maximum`,
+                matrix: { kind: 'vplot', x0: -plot.window, dx: plot.pos_bin, valueLabel: view.log ? 'log1p count (max = 1)' : 'count (max = 1)' } },
+              series: [],
+              matrices: [{ id: targetDatasetIds[0] ?? 'ds', title: targetDatasetIds[0] ?? '', rows: plot.matrix.map((row, i) => ({ label: String(plot.size_min + i * plot.size_bin), values: row.map(v => (Number.isFinite(v) ? v : null)) })) }],
+              locus: { chrom, start: refStart ?? start, end: refEnd ?? end, genome: genome ?? null },
+            })}>Open in Plots</button>
+        </div>
       )}
     </div>
   );

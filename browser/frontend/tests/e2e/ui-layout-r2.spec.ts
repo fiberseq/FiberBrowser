@@ -76,7 +76,10 @@ test('side panels in the drawer all dock beside the reads together', async ({ se
 
   // Full view of one and back: the drawer comes back with both.
   await page.locator('[data-testid="analysis-overlay"] [aria-label="Expand to full view"]:visible').click();
-  await expect(page.getByTestId('analysis-overlay')).toHaveCount(0);
+  // Full view keeps every panel mounted (4dd83fc6d): the drawer stays in the DOM as the maximised panel's static
+  // container, but its tab strip is gone and the panel covers the panel area.
+  await expect(page.locator('[aria-label="Restore all panels"]:visible')).toBeVisible();
+  await expect(page.getByTestId('analysis-overlay-tabs')).toBeHidden();
   await page.locator('[aria-label="Restore all panels"]:visible').click();
   await expect(inDrawer(page)).toHaveCount(2);
 });

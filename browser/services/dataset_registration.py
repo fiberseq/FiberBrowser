@@ -4,7 +4,7 @@ from __future__ import annotations
 from services.dataset_generation import bump_dataset_generation
 import os
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Any
 
 from models.domain import AnnotationFile, Dataset
@@ -226,6 +226,35 @@ def invalidate_dataset_caches(state: Any, dataset_id: str) -> None:
             del coverage[key]
 
 
+def invalidate_dataset_layer_caches(state: Any, dataset_id: str, layers: Iterable[str]) -> int:
+    """Drop the dataset's cached rows that carry any of ``layers``: rows cached for every layer (None) or for a list
+    naming one of them. Rows without them stay, so a change to those layers alone (regularity tiles or patches
+    computed for a view) never makes the panels' ordinary reads cold. Returns how many entries were dropped.
+
+    The dataset's generation is left alone: other caches keyed by it (SV evidence) are still valid, and a load naming
+    these layers computes what it lacks itself (services/nuc/layers.py). The layers' epochs move instead, so a load
+    naming them that started before is neither cached nor joined (``working_sets.layer_epoch``)."""
+    from services.working_sets import _broad_cache_sync, broad_cache_layer_key, layer_key_includes
+    names = tuple(layers)
+    if not names:
+        return 0
+    from services.dataset_generation import bump_layer_epochs
+    cache_lock, _inflight = _broad_cache_sync(state)
+    dropped = 0
+    with cache_lock:
+        # loads still running with the old rows neither cache them nor serve later requests (``layer_epoch``)
+        bump_layer_epochs(state, dataset_id, names)
+        for key in [k for k in state._broad_cache if k[0] == dataset_id and layer_key_includes(broad_cache_layer_key(k), *names)]:
+            state._broad_cache.pop(key, None)
+            dropped += 1
+        # Working-set keys (make_working_cache_key): the layer key is the ninth field.
+        for key in [k for k in state._working_set_cache
+                    if k[0] == dataset_id and (len(k) <= 8 or layer_key_includes(k[8], *names))]:
+            state._working_set_cache.pop(key, None)
+            dropped += 1
+    return dropped
+
+
 BAM_LAYER_DETECTION_SAMPLE_LIMIT = 50
 
 
@@ -303,9 +332,13 @@ def configure_bam_dataset_layers(dataset: Dataset, primary_path: str) -> None:
             'msp': diag.get('has_msps', False) and not has_fire,
             'fire': has_fire,
         }
+        from services.nuc.scalars import SCALAR_GROUPS
         for ma_layer in diag.get('ma_layers', []):
+            if ma_layer in SCALAR_GROUPS:
+                continue   # a scan's per-molecule scalar group (nucmol, nfrmol): rule terms, not a layer to draw
             dataset.available_layers[ma_layer] = True
         dataset.has_circular_annotations = bool(diag.get('has_circular_annotations', False))
+        dataset.has_signal_tags = bool(diag.get('has_signal_tags', False))
         dataset.circular_contigs = dict(diag.get('circular_contigs') or {})
         add_legacy_inferred_layers(dataset)
         log_dataset_diagnostic(f"  BAM layers: {dataset.available_layers}")
@@ -604,26 +637,33 @@ def add_dataset_to_state(
     *,
     detect_bam_chroms: Callable[[str], list],
     detect_bigbed_chroms: Callable[[str], list],
+    data_type: str | None = None,
+    configure: Callable[[Dataset], None] | None = None,
 ) -> Dataset:
     """Add a dataset to BrowserState while preserving legacy side effects.
 
     Slow work first, outside the state lock (services/genome_loading lock order): the file inspection and, when
     the state has no chromosomes yet, the header's. Then, under the lock: a unique id (also against ids reserved
     by other registrations in flight), the dataset published with its order entry, and the chromosomes only if
-    they are still empty (a FASTA or genome loaded meanwhile wins)."""
+    they are still empty (a FASTA or genome loaded meanwhile wins).
+
+    ``data_type``: set instead of detected (a live-lift dataset, ``bam_livelift``); ``configure(dataset)``
+    runs after its layers are configured, before it is published."""
     from services.genome_loading import state_lock
     primary_path, is_bam = validate_dataset_source(path)
     lock = state_lock(state)
     with lock:
         dataset_id = unique_dataset_id(dataset_id, {**state.datasets, **dict.fromkeys(_reserved(state))})
         _reserved(state).add(dataset_id)
-    dataset = Dataset(dataset_id, path, label)
+    dataset = Dataset(dataset_id, path, label, data_type=data_type)
     try:
         try:
             if is_bam:
                 configure_bam_dataset_layers(dataset, primary_path)
             else:
                 configure_bigbed_dataset_layers(state, dataset_id, dataset, primary_path)
+            if configure is not None:
+                configure(dataset)
             detect = detect_bam_chroms if is_bam else detect_bigbed_chroms
             chroms = None if state.chroms else detect(primary_path)
             while True:

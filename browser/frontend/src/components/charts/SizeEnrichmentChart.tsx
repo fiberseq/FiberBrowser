@@ -3,6 +3,8 @@
  * (enrichment, ratios) or a sequential one (counts), with its colour bar, blank cells hatched, a hover readout and
  * PNG / SVG / PDF / TSV export (ChartSaveButton).
  */
+import { drawXTicks } from './ProfileLinesChart';
+import { formatTick, niceTicks } from '../../utils/niceTicks';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ChartSaveButton } from './ChartSaveButton';
 import { axisLabelX } from './VPlotChart';
@@ -35,6 +37,8 @@ export interface SizeEnrichmentChartProps {
   testId?: string;
   /** What a hovered value is ("enrichment", "footprints", "log2 ratio"). */
   valueLabel?: string;
+  /** A click on the cells: the genomic position under it (0-based, the bin's centre). */
+  onPositionClick?: (pos: number) => void;
 }
 
 const LEFT = 40;
@@ -120,10 +124,10 @@ export function drawSizeEnrichment(ctx: CanvasRenderingContext2D, w: number, h: 
   ctx.font = '9px sans-serif';
   ctx.textAlign = 'right';
   const range = Math.max(1, sizeMax - sizeMin);
-  const step = [10, 20, 25, 50, 100, 200, 250, 500, 1000].find(s => s >= range / Math.max(2, Math.min(7, Math.round(plotH / 26)))) ?? 1000;
-  for (let v = Math.ceil(sizeMin / step) * step; v <= sizeMax; v += step) {
+  const st = niceTicks(sizeMin, sizeMax, plotH, 45);
+  for (const v of st.major) {
     const y = top + plotH - ((v - sizeMin) / range) * plotH;
-    ctx.fillText(String(v), LEFT - 3, y + 3);
+    ctx.fillText(formatTick(v, st.step), LEFT - 3, Math.max(top + 7, y + 3));
   }
   ctx.save();
   ctx.translate(9, top + plotH / 2);
@@ -135,11 +139,9 @@ export function drawSizeEnrichment(ctx: CanvasRenderingContext2D, w: number, h: 
   const end = start + nCols * posBin;
   const mid = Math.round((start + end) / 2);
   const axisY = top + plotH + 12;
+  void mid; void axisLabelX;
+  drawXTicks(ctx, { lo: start, hi: end, left: LEFT, width: plotW, y: top + plotH, ink, kind: start < 0 ? 'relative' : 'genomic' });
   ctx.textAlign = 'center';
-  const lbl = [(start + 1).toLocaleString(), mid.toLocaleString(), end.toLocaleString()];
-  ctx.fillText(lbl[0], axisLabelX(LEFT, ctx.measureText(lbl[0]).width, w), axisY);
-  ctx.fillText(lbl[1], LEFT + plotW / 2, axisY);
-  ctx.fillText(lbl[2], axisLabelX(LEFT + plotW, ctx.measureText(lbl[2]).width, w), axisY);
   ctx.fillText(`Position (${sizeBin} x ${posBin} bp bins)`, LEFT + plotW / 2, axisY + 11);
   // Colour bar.
   const bx = LEFT + plotW + 6;
@@ -160,7 +162,7 @@ export function drawSizeEnrichment(ctx: CanvasRenderingContext2D, w: number, h: 
   if (scale.midLabel) ctx.fillText(scale.midLabel, bx + BAR_W + 2, top + plotH / 2 + 3);
   ctx.fillText(scale.loLabel, bx + BAR_W + 2, top + plotH);
   // The unit of a log2 bar (its labels are -L / 0 / +L), so an exported plot says what they are.
-  if (scale.kind === 'diverging' && scale.mid === 0 && top >= 10) ctx.fillText('log2', bx, top - 3);
+  if (scale.kind === 'diverging' && scale.mid === 0 && top >= 10) ctx.fillText(scale.label?.startsWith('A − B') ? 'A − B' : 'log2', bx, top - 3);
 }
 
 export function SizeEnrichmentChart(props: SizeEnrichmentChartProps) {
@@ -199,9 +201,20 @@ export function SizeEnrichmentChart(props: SizeEnrichmentChartProps) {
     setHover({ x, y, text: `${size}-${size + props.sizeBin - 1} bp at ${pos.toLocaleString()}: ${value}` });
   };
 
+  const onClick = props.onPositionClick ? (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const { plotW } = layout(width, height, !!props.title, !!props.subtitle);
+    const nCols = props.matrix[0]?.length ?? 0;
+    if (!nCols || x < LEFT || x >= LEFT + plotW) return;
+    const c = Math.floor(((x - LEFT) / plotW) * nCols);
+    props.onPositionClick!(Math.round(props.start + (c + 0.5) * props.posBin));
+  } : undefined;
+
   return (
     <div className="relative group" data-testid={testId ?? 'size-enrichment-chart'}>
-      <canvas ref={canvasRef} style={{ width, height }} onMouseMove={onMove} onMouseLeave={() => setHover(null)} />
+      <canvas ref={canvasRef} style={{ width, height, cursor: onClick ? 'pointer' : undefined }} onMouseMove={onMove} onMouseLeave={() => setHover(null)}
+        onClick={onClick} />
       {hover && (
         <div className="pointer-events-none absolute z-20 whitespace-nowrap rounded bg-gray-900/90 px-1.5 py-0.5 text-[10px] text-white"
           style={{ left: Math.min(hover.x + 10, Math.max(0, width - 200)), top: Math.max(0, hover.y - 22) }} data-testid="size-enrichment-hover">

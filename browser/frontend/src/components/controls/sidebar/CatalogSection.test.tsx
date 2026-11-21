@@ -4,12 +4,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
-const { getCatalog, loadGenome } = vi.hoisted(() => ({ getCatalog: vi.fn(), loadGenome: vi.fn() }));
+const { getCatalog, loadGenome, getStatus } = vi.hoisted(() => ({ getCatalog: vi.fn(), loadGenome: vi.fn(), getStatus: vi.fn() }));
 vi.mock('../../../api/catalog', () => ({
   getCatalog,
   catalogLoad: vi.fn(), catalogUnload: vi.fn(), catalogTrackLoad: vi.fn(), catalogTrackUnload: vi.fn(),
 }));
 vi.mock('../../../api/reference', () => ({ loadGenome }));
+vi.mock('../../../api/status', () => ({ getStatus }));
 
 const flush = () => act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
 
@@ -21,6 +22,7 @@ describe('CatalogSection reference', () => {
     vi.resetModules();
     getCatalog.mockReset().mockResolvedValue({ catalog: { genome: 'hg38', groups: [], tracks: [] } });
     loadGenome.mockReset().mockResolvedValue({ success: true });
+    getStatus.mockReset().mockResolvedValue({ has_fasta: false, current_genome: null });
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -57,6 +59,18 @@ describe('CatalogSection reference', () => {
 
     act(() => root.render(<CatalogSection />));
     await flush();
+    expect(loadGenome).not.toHaveBeenCalled();
+  });
+
+  it("never over the server's own reference (--fasta) the page has not heard of yet", async () => {
+    const { useBrowserStore } = await import('../../../stores/browserStore');
+    const { CatalogSection } = await import('./CatalogSection');
+    useBrowserStore.setState({ hasFasta: false, currentGenome: null } as never);
+    getStatus.mockResolvedValue({ has_fasta: true, current_genome: 'dm6' });
+
+    act(() => root.render(<CatalogSection />));
+    await flush();
+    expect(getStatus).toHaveBeenCalled();
     expect(loadGenome).not.toHaveBeenCalled();
   });
 });

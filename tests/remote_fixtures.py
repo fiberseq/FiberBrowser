@@ -152,8 +152,12 @@ class LocalSshd:
     """A user-mode OpenSSH server on 127.0.0.1 (key login as the current user)."""
 
     def __init__(self, extra_config: str = ""):
-        # Short paths: ssh control sockets live under this folder too.
-        self.dir = Path(tempfile.mkdtemp(prefix="fbs"))
+        # Short paths: ssh control sockets live under this folder too, so a long $TMPDIR (scratch dirs, macOS
+        # per-user folders) would overflow the Unix-socket limit: fall back to /tmp.
+        base = tempfile.gettempdir()
+        if len(base) > 40 and os.name != "nt":
+            base = "/tmp"
+        self.dir = Path(tempfile.mkdtemp(prefix="fbs", dir=base))
         d = self.dir
         for name in ("hostkey", "clientkey"):
             subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(d / name)], check=True)

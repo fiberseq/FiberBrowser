@@ -22,7 +22,7 @@ export function LoadedDatasetsList({ datasets }: LoadedDatasetsListProps) {
           <span className="truncate flex-1 text-gray-700 dark:text-gray-300" title={getDatasetHoverLabel(dataset)}>
             {getDatasetDisplayLabel(dataset)}
           </span>
-          <span className="text-[11px] text-ink-secondary">{dataset.data_type || 'bam'}</span>
+          <span className="text-[11px] text-ink-secondary">{dataset.data_type === 'bam_livelift' ? 'live lift' : (dataset.data_type || 'bam')}</span>
         </div>
       ))}
     </div>

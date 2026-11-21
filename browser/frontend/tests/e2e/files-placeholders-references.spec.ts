@@ -16,7 +16,7 @@ import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { Page } from '@playwright/test';
-import { DEMO_FIXTURE, expect, test, type ServerFixture } from './fixtures/server';
+import { DEMO_FIXTURE, blockNativeDialogs, expect, test, type ServerFixture } from './fixtures/server';
 
 test.use({ fixtureBam: 'demo' });
 
@@ -94,6 +94,7 @@ test('a later window opens a panel with its own reference at its reads (L12)', a
 
   // A fresh profile: nothing saved in the browser.
   const fresh = await browser.newContext();
+  await blockNativeDialogs(fresh);
   const later = await fresh.newPage();
   await boot(later, server);
   const key = body.genome.key;

@@ -152,10 +152,10 @@ describe('clusterRunPlan: what the run clusters on', () => {
     expect(plan.chip).toBe('Panels: none · 1 left out');
   });
 
-  it('SVs ticked and no peak: nothing to cluster on, and why', () => {
+  it('SVs ticked and no peak: a region method uses the whole view and explains the unused SVs', () => {
     const plan = clusterRunPlan(st({ selectedPeaks: new Set() }), names);
-    expect(plan.basis.kind).toBe('none');
-    expect(plan.headline).toMatch(/nothing to cluster on yet \(select peaks\)/);
+    expect(plan.basis.kind).toBe('whole-view');
+    expect(plan.headline).toContain('whole view (no peaks selected)');
     expect(plan.basis.unused).toBe('ticked SVs group reads only with Combinatorial');
   });
 

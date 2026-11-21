@@ -2,6 +2,8 @@
 // DAF-C API CLIENT
 // ============================================================================
 
+import { signalFilterUrl } from '../utils/signalFilters';
+import { readPolicyParams, readPolicyUrl } from '../utils/readPolicyParams';
 import type { LinkedRegion, ContactSelection, LinkedSession, DAFCStatus, SplitViewMode, SplitViewSemantics, ContactMode } from '../types/dafc';
 import { fetchApiResponse, fetchJson, fetchJsonSharedGet, withSortedParams } from './sharedFetch';
 import { withSandboxParam } from '../utils/sandbox';
@@ -119,7 +121,8 @@ export async function selectDafcRegion(
     y_start: yStart.toString(),
     y_end: yEnd.toString(),
   });
-  const res = await fetchApiResponse(`${API_BASE}/dafc/select?${params}`);
+  // DAF-C reads follow the read track's duplicate / QC-fail toggles.
+  const res = await fetchApiResponse(`${API_BASE}/dafc/select?${readPolicyParams(params)}`);
   if (!res.ok) throw new Error('Failed to select region');
   return res.json();
 }
@@ -173,7 +176,7 @@ export async function sendToLinkedSession(
   const body: Record<string, unknown> = { regions, read_ids: readIds };
   if (contactMode) body.contact_mode = contactMode;
   if (splitViewMode) body.split_view_mode = splitViewMode;
-  const res = await fetchApiResponse(`${API_BASE}/linked/session/${sessionId}/send`, {
+  const res = await fetchApiResponse(readPolicyUrl(`${API_BASE}/linked/session/${sessionId}/send`), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -207,7 +210,7 @@ export function getLinkedReadsImageUrl(
   });
   // Add version for cache busting
   if (version !== undefined) params.append('v', version.toString());
-  return withSandboxParam(`${API_BASE}/linked/reads/image?${params}`);
+  return withSandboxParam(signalFilterUrl(`${API_BASE}/linked/reads/image?${readPolicyParams(params)}`));
 }
 
 export type LinkedReadsDataResult = LinkedSession & {
@@ -219,7 +222,7 @@ export type LinkedReadsDataResult = LinkedSession & {
 };
 
 export async function getLinkedReadsData(sessionId: string): Promise<LinkedReadsDataResult> {
-  const res = await fetchApiResponse(`${API_BASE}/linked/reads/data?session_id=${sessionId}`);
+  const res = await fetchApiResponse(`${API_BASE}/linked/reads/data?${readPolicyParams(new URLSearchParams({ session_id: sessionId }))}`);
   if (!res.ok) throw new Error('Failed to get linked reads');
   return res.json();
 }
@@ -275,7 +278,7 @@ export async function getLinkedReadsCompact(
   });
   if (options.sampleSeed) params.set('sample_seed', options.sampleSeed);
   return fetchJsonSharedGet<LinkedReadsCompactResult>(
-    withSortedParams(`${API_BASE}/linked/reads/compact`, params),
+    withSortedParams(`${API_BASE}/linked/reads/compact`, readPolicyParams(params)),
   );
 }
 

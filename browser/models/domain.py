@@ -82,6 +82,7 @@ class CigarCoordMapper:
         '_aligned_starts',
         '_aligned_ends',
         '_aligned_offsets',
+        '_aligned_arrays',
         'large_indels',
     )
 
@@ -157,6 +158,7 @@ class CigarCoordMapper:
         self._aligned_starts = [query_starts[i] for i in aligned]
         self._aligned_ends = [query_ends[i] for i in aligned]
         self._aligned_offsets = [ref_offsets[i] for i in aligned]
+        self._aligned_arrays = None  # numpy copies of the three, built on first batched use
         self.large_indels = large
 
     def query_to_ref(self, query_pos):
@@ -330,6 +332,8 @@ class Dataset:
         from utils.validation import is_url, detect_data_format
 
         self.id = dataset_id
+        self.molecule_groups = []
+        self.joint_dedup = "off"
         self.cluster_assignments = {}
         self.cluster_element_info = None
         self.cluster_peak_regions = None
@@ -345,6 +349,8 @@ class Dataset:
         self.companion_layers = {}
         self.derived_layers = {}
         self.has_circular_annotations = False
+        # Producer signal evidence (bg/me/db tags) seen in the layer probe: gates the signal read filters.
+        self.has_signal_tags = False
         self.consensus_chemistry = None
         self.chemistry_metadata = {
             "chemistry": None,
@@ -391,16 +397,31 @@ class Dataset:
             else:
                 self.data_type = 'bigbed'
 
-    def get_reads(self, chrom, start, end, spanning=True, chrom_map=None, contig_links=None):
+    def get_reads(self, chrom, start, end, spanning=True, chrom_map=None, contig_links=None, hide_uncalled=None,
+                  include_duplicates=None, include_qcfail=None):
         """Load reads from BAM/BigBed files. Returns DataFrame.
 
         ``contig_links``: this dataset's plasmid links in its workspace
-        (``services.plasmid_reconcile.contig_links``)."""
+        (``services.plasmid_reconcile.contig_links``). ``hide_uncalled``: Min footprints' uncalled-read
+        rule for BAM records (None: as the request asked, default hide; services/signal_evidence).
+        ``include_duplicates`` / ``include_qcfail``: the read track's toggles for BAM records (None: as the
+        request asked, default hidden)."""
         import pandas as pd
         from services.bigbed_read_loader import load_reads_from_bigbed
         from services.dense_bam_loader import load_reads_from_bam
 
+        if self.data_type == 'bam_livelift':
+            # Dense read tables read the source BAM with target coordinates: refused (services/lift/capability).
+            from services.lift.capability import LiveLiftUnsupported
+            raise LiveLiftUnsupported("dense_reads", self.label)
         if self.data_type == 'bam':
+            if hide_uncalled is None:
+                from services.signal_evidence import request_hide_uncalled
+                hide_uncalled = request_hide_uncalled()
+            hide = bool(hide_uncalled)
+            from services.signal_evidence import request_include_duplicates, request_include_qcfail
+            dups = request_include_duplicates() if include_duplicates is None else bool(include_duplicates)
+            qcfail = request_include_qcfail() if include_qcfail is None else bool(include_qcfail)
             all_reads = []
             for bam_path in self.paths:
                 reads = load_reads_from_bam(
@@ -411,6 +432,9 @@ class Dataset:
                     spanning_only=spanning,
                     chrom_map=chrom_map,
                     contig_links=contig_links,
+                    hide_uncalled=hide,
+                    include_duplicates=dups,
+                    include_qcfail=qcfail,
                 )
                 if isinstance(reads, pd.DataFrame) and not reads.empty:
                     all_reads.append(reads)
@@ -437,27 +461,50 @@ class Dataset:
 
     def to_dict(self):
         from services.background_work import file_identity
+        from services.lift.reads import lift_identity
+        from services.nuc.store import nuc_identity, patch_labels_identity, regularity_identity
+        from services.read_group_samples import sample_keys
         import hashlib
         return {
-            "source_identity": hashlib.sha256(repr(file_identity(self.paths)).encode()).hexdigest(),
+            # A live-lift dataset's settings are part of what its reads are (lift_key): client caches follow them.
+            # So are nucleosome calls computed for its records (services/nuc): their layers join the rows.
+            "source_identity": hashlib.sha256(repr((file_identity(self.paths),
+                                                    tuple(tuple(p) for p in getattr(self, "molecule_groups", [])),
+                                getattr(self, "joint_dedup", "off"), *(lift_identity(self)),
+                                *nuc_identity(self, regularity=False))).encode()).hexdigest(),
+            # Regularity tiles and patches computed for a view change only rows carrying nucreg or nucpatch: read
+            # requests naming those layers add this to the source identity; nothing else reloads for them.
+            "regularity_identity": _regularity_key(regularity_identity(self)),
+            # The nucpatch lane's geometry labels: an overlay the read lanes fetch when this moves (no row reload).
+            "patch_labels_identity": patch_labels_identity(self),
             "id": self.id,
             "label": self.label,
             "path": self.path,
             "paths": self.paths,
             "color": self.color,
             "data_type": self.data_type,
+            "molecule_groups": getattr(self, "molecule_groups", []),
+            "joint_dedup": getattr(self, "joint_dedup", "off"),
             "is_remote": self.is_remote,
             "layer_type": self.layer_type,
             "available_layers": self.available_layers,
             "companion_layers": self.companion_layers,
             "derived_layers": self.derived_layers,
             "has_circular_annotations": self.has_circular_annotations,
+            "signal_tags": bool(getattr(self, "has_signal_tags", False)),
             "consensus_chemistry": self.consensus_chemistry,
             # Legacy name of consensus_chemistry (older frontends and sessions).
             "family_scan_chemistry": self.consensus_chemistry,
             "chemistry_metadata": self.chemistry_metadata,
+            # Its BAM read groups' samples as opaque keys: a native dataset is matched with the lifted dataset of its
+            # sample (the names stay on the server).
+            "sample_keys": sample_keys(self),
             # Plasmid maps linked to this BAM's contigs (and what did not match).
             **({"plasmid": self.plasmid_report} if getattr(self, "plasmid_report", None) else {}),
+            # A live-lift dataset's map, haplotypes and settings (services/lift/dataset.py).
+            **({"live_lift": self.live_lift.to_dict()} if getattr(self, "live_lift", None) is not None else {}),
+            # Opened by that live-lift dataset's linked source view (shown only there; no panel of its own on a reload).
+            **({"lift_source_of": self.lift_source_of} if getattr(self, "lift_source_of", None) else {}),
             # Fields a plugin pack attaches to a dataset of its own (plugins/packs.py): name -> value.
             **{k: v for k, v in (getattr(self, "pack_fields", None) or {}).items() if v},
         }
@@ -680,3 +727,9 @@ class AnnotationState:
     def set_cached(self, key, value):
         self._cache[key] = value
         self._cache.move_to_end(key)
+
+
+def _regularity_key(identity: tuple) -> str:
+    """A short key of a dataset's regularity identity ('' when it has no nucleosome outputs)."""
+    import hashlib
+    return hashlib.sha256(repr(identity).encode()).hexdigest()[:16] if identity else ''

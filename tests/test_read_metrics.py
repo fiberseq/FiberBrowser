@@ -369,6 +369,50 @@ def test_headless_metaprofile_counts_msp_and_fire_aliases_once():
     assert max(fire) == 1.0
 
 
+def test_server_headless_and_read_track_engine_agree_on_layer_profiles():
+    """The server's compact metaprofile, the headless figure engine and the read track's engine (the Plots profile
+    engine, 'touch' weighting, fed as ReadTrack computeMetaprofileFromReads feeds it: msp joins the fire channel)
+    give the same layer profiles, half-open bins, a read once per bin per channel, all within [0, 1]."""
+    import numpy as np
+    from services import profile_engine
+    from services.figure.tracks._metaprofile import compute_metaprofile
+
+    width = 4000
+    reads = [
+        {"id": "a", "intervals": [[0, 4000, 4000]],
+         "layers": {"nuc": {"intervals": [[100, 245, 145], [246, 391, 145], [800, 808, 8]]}}},
+        # msp and fire aliases of one call: once in the fire profile.
+        {"id": "b", "intervals": [[0, 3000, 3000]],
+         "layers": {"nuc": {"intervals": [[240, 385, 145]]},
+                    "msp": {"intervals": [[500, 700, 200]]}, "fire": {"intervals": [[500, 700, 200]]}}},
+        # An MSP past the body: covered by it.
+        {"id": "c", "intervals": [[1000, 2000, 1000]], "layers": {"msp": {"intervals": [[2000, 2600, 600]]}}},
+    ]
+    server = read_metrics.compute_compact_metaprofile_payload(
+        reads, width, ["nuc", "fire"], max_bins=500, include_legacy_profiles=False)["layers"]
+    headless = compute_metaprofile(reads, float(width), [], None)["layers"]
+
+    channel_reads = []
+    for read in reads:
+        spans: dict = {}
+        for name, layer in read["layers"].items():
+            key = "layer:" + ("fire" if name == "msp" else name)
+            spans.setdefault(key, []).extend([iv[0], iv[1]] for iv in layer["intervals"] if iv[2] > 0)
+        prim = read["intervals"]
+        channel_reads.append({"start": prim[0][0], "end": prim[-1][1], "spans": spans})
+    acc = profile_engine.accumulate_channels(channel_reads, 500, float(width), "touch")
+    cov = acc["coverage"]
+    track = {name[6:]: [v / c if c > 0 else v for v, c in zip(values, cov)] for name, values in acc["channels"].items()}
+
+    for name in ("nuc", "fire"):
+        assert max(server[name]) <= 1.0 and min(server[name]) >= 0.0, name
+        assert np.allclose(server[name], headless[name], atol=1e-6), name
+        assert np.allclose(server[name], track[name], atol=1e-6), name
+    assert server["fire"][62] == 0.5  # bin 496-504: read b's call (both aliases) once, of reads a and b
+    assert server["nuc"][100] == 0.5  # bin 800-808: [800, 808) ends at bin 100, not bin 101
+    assert server["nuc"][101] == 0.0
+
+
 def test_compact_metaprofile_coverage_reads_the_intervals_as_they_are_now():
     """The coverage span comes from the current intervals, not a cached index (keyed on identity and length)."""
     reads = [
@@ -379,4 +423,20 @@ def test_compact_metaprofile_coverage_reads_the_intervals_as_they_are_now():
     reads[0]["layers"]["tf"]["intervals"][0] = [10, 90, 80]  # same list, same length
     tf = read_metrics.compute_compact_metaprofile_payload(
         reads, 100, ["tf"], max_bins=100, include_legacy_profiles=False)["layers"]["tf"]
+    assert max(tf) <= 1.0
+
+
+def test_compact_metaprofile_live_lift_widening_keeps_holes_uncovered():
+    """A live-lift read's body spans widen at its outer ends to its layer calls; a connector hole stays uncovered."""
+    native = {"id": "native", "intervals": [[0, 100, 100]]}
+    lifted = {"id": "lifted", "intervals": [[0, 20, 20], [60, 80, 20]],
+              "layers": {"tf": {"intervals": [[85, 95, 10]]}},
+              "live_lift": {"segments": [[0, 80, 1, "+", True]], "connectors": [[20, 60]]}}
+    tf = read_metrics.compute_compact_metaprofile_payload(
+        [native, lifted], 100, ["tf"], max_bins=100, include_legacy_profiles=False)["layers"]["tf"]
+    assert tf[90] == 0.5   # the call past the body is covered by its read: 1 of 2, not 1 of 1
+    assert tf[40] == 0.0 and max(tf) <= 1.0
+    lifted["layers"]["tf"]["intervals"] = [[30, 40, 10]]  # a call in the hole: no lifted coverage there
+    tf = read_metrics.compute_compact_metaprofile_payload(
+        [native, lifted], 100, ["tf"], max_bins=100, include_legacy_profiles=False)["layers"]["tf"]
     assert max(tf) <= 1.0

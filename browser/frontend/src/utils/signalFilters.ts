@@ -52,6 +52,21 @@ export const SIGNAL_LABELS: Record<SignalEvidence['status'], string> = {
 };
 export const SIGNAL_TOOLTIP = 'Uses whole-alignment signal evidence and an assay-specific untreated control. No detectable signal can reflect low labelling or protected chromatin; it does not prove enzyme failure.';
 
+/** Whether any loaded dataset carries producer signal evidence: the server's layer probe (a sample of records
+ *  and the header) saw bg/me/db record tags or the signal tagger's header comment (`signal_tags`). Without it
+ *  the signal filters are not offered and do not apply (every read would be "annotation unavailable"). */
+export function datasetsCarrySignal(datasets: ReadonlyArray<{ signal_tags?: boolean }>): boolean {
+  return datasets.some(d => d.signal_tags === true);
+}
+
+/** The signal filters requests and the read track apply: the saved ones when a loaded dataset carries signal
+ *  evidence, else none (a saved filter waits, inert, for a dataset that has the tags). */
+export function effectiveSignalFilters(state: {
+  signalFilters: SignalFilters; datasets: ReadonlyArray<{ signal_tags?: boolean }>;
+}): SignalFilters {
+  return datasetsCarrySignal(state.datasets) ? state.signalFilters : DEFAULT_SIGNAL_FILTERS;
+}
+
 /** Preserve the enum's distinction between unclassified and unscored. */
 export function keepsSignal(signal: SignalEvidence | undefined, filters: SignalFilters): boolean {
   const status = signal?.status ?? 'unknown';

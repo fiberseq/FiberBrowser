@@ -1,5 +1,6 @@
 import { fetchApiResponse, fetchJson } from './sharedFetch';
 import { withPanelGenome } from './reference';
+import { readPolicyParams } from '../utils/readPolicyParams';
 import type { RegionCatalog } from '../types/regions';
 
 const API_BASE = '/api';
@@ -61,7 +62,8 @@ export function detectRegions(datasetId: string, scope: { chrom?: string; start?
     params.set('start', String(Math.max(0, Math.floor(scope.start))));
     params.set('end', String(Math.ceil(scope.end)));
   }
-  return fetchJson(`${API_BASE}/reads/regions?${params}`, init);
+  // The read track's duplicate / QC-fail toggles: the regions of the reads it shows (and their own cache entry).
+  return fetchJson(`${API_BASE}/reads/regions?${readPolicyParams(params)}`, init);
 }
 
 export interface RegionLabelResponse { label: string; gene: string | null; detail?: string; genome?: string }

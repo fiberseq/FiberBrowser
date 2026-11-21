@@ -167,8 +167,8 @@ export function CoOccurrenceTab({
             data-tour="footprints-open-coacc"
             title={
               footprintFilterKey
-                ? 'Open Co-accessibility (the position-by-position matrix) with this footprint layer and the active occupancy-filtered reads'
-                : 'Open Co-accessibility (the position-by-position matrix) using this footprint layer/signal for the current datasets'
+                ? 'Open Plots on Co-accessibility (the position-by-position matrix) with this footprint layer and the active occupancy-filtered reads'
+                : 'Open Plots on Co-accessibility (the position-by-position matrix) using this footprint layer/signal for the current datasets'
             }
           >
             <GridIcon size={13} aria-hidden="true" />
@@ -180,8 +180,8 @@ export function CoOccurrenceTab({
         Which saved footprints and classes sit on the same reads, and whether pairs co-occur more or less than chance.
       </p>
       <p className="text-[11px] text-gray-600 dark:text-gray-300" data-testid="coocc-subtitle">
-        Pairs of saved footprint classes (and size rules), bound together on the reads in view. Not the Co-accessibility
-        panel, which correlates openness position by position.
+        Pairs of saved footprint classes (and size rules), bound together on the reads in view. To correlate openness
+        position by position, use Plots › Co-accessibility.
       </p>
       <HowItWorks summary="How classes are counted" testId="coocc-counting-note">
         <p>Counts come from the saved footprints and classes ticked in Saved.</p>

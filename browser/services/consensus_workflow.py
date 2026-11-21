@@ -5,7 +5,6 @@ Successful results are installed atomically and displayed from frozen records.
 """
 from __future__ import annotations
 from collections import Counter, defaultdict
-from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import math
@@ -20,7 +19,7 @@ from services.chemistry_metadata import dataset_consensus_chemistry
 from utils.chrom import normalize_chrom_name
 from services.oriented_regions import source_ids, request_windows
 
-_EXECUTOR=ThreadPoolExecutor(max_workers=1,thread_name_prefix='fiberhmm-consensus')
+from services.scan.jobs import _EXECUTOR  # shared scan worker; legacy routes keep their job identities
 _INIT_LOCK=threading.Lock()
 LAYER_LABELS={
     'nuc_native_replay':('Native replay · nucleosomes','#64748b'),
@@ -292,7 +291,19 @@ def load_payload(state,request,options,progress):
             datasets.append(dict(dataset_id=dsid,paths=getattr(ds,'paths',None) or ds.path,
                 chemistry=request.get('chemistry_overrides',{}).get(dsid) or dataset_consensus_chemistry(ds)))
         from services.signal_bam_input import load_signal_bam_payload
-        return load_signal_bam_payload(load_bam_payload, datasets, {k:request[k] for k in ('chrom','start','end')}, options, progress)
+        region={k:request[k] for k in ('chrom','start','end')}
+        warning=None
+        if request.get('_one_view_per_molecule') and len(datasets)>1:
+            # The class engines count each physical molecule once (FiberHMM prepare_sources); refuse or deduplicate
+            # shared molecules before the load (services/consensus_molecules.py). Other loaders keep both copies.
+            from services.consensus_molecules import resolve_shared_molecules
+            inp=options.get('input') if isinstance(options,dict) else None
+            removed,warning=resolve_shared_molecules(state,datasets,region,
+                                                     minimum_mapq=int(getattr(inp,'minimum_mapq',0) or 0))
+            datasets=[dict(d,exclude_read_names=removed[d['dataset_id']]) if removed.get(d['dataset_id']) else d for d in datasets]
+        payload=load_signal_bam_payload(load_bam_payload, datasets, region, options, progress)
+        if warning:payload['browser_warnings']=[*payload.get('browser_warnings',[]),warning]
+        return payload
 
     from services.consensus_evidence import (_runtime as loader_runtime,_load_dataset_evidence,_flatten_paths,_resolve_bam_fetch_region,
         _chemistry_runtime,_prefix_library,_projection_members,_projection_member_key)
@@ -516,6 +527,9 @@ def recaller_preflight(state,dataset_ids,options):
 
 
 def submit(state,request,*,payload_loader=None,analysis_runner=None):
+    # Live-lift datasets first (409, services/lift/capability.py): never the BAM/BigBed guidance below.
+    from services.lift.capability import require_for_ids
+    require_for_ids(state,list(request.get('dataset_ids') or ()) or [request.get('dataset_id')],'consensus')
     from services.signal_evidence import active_signal_filters
     request = {**request, "signal_filters": active_signal_filters()}
     if request.get("region_windows") and payload_loader is None:
@@ -592,7 +606,8 @@ def submit(state,request,*,payload_loader=None,analysis_runner=None):
                     update_progress(job,stage,message,**work)
             progress.report=progress
             progress('loading','Loading native observations')
-            payload=(payload_loader or load_payload)(state,request,options,progress)
+            payload=(payload_loader(state,request,options,progress) if payload_loader else
+                     load_payload(state,{**request,'_one_view_per_molecule':True},options,progress))
             skipped=payload.pop('browser_warnings',None)
             if skipped:
                 with lock:job['warnings']=list(skipped)
@@ -618,7 +633,19 @@ def submit(state,request,*,payload_loader=None,analysis_runner=None):
             from fiberhmm.inference.consensus.artifacts import write_json
             progress('saving_input','Saving the complete native evidence snapshot')
             write_json(out/'evidence.json.gz',payload)
-            result=(analysis_runner or workflow.run_analysis)(payload,request.get('parameters'),out,progress)
+            from services.scan.legacy_execution import native_inputs, run_prepared
+            scan_inputs, reason = (native_inputs(state, request) if not payload.get('pooling')
+                                   and getattr(options.get('cr'), 'engine', None) == RECALLER_MODE and analysis_runner is None
+                                   else (None, 'This class engine or oriented population has no fp scan module'))
+            if scan_inputs:
+                result, execution_scan = run_prepared('fp', scan_inputs, payload, request.get('parameters'),
+                    out, progress, runner=workflow.run_analysis, cancel=job['_cancel'])
+                with lock:
+                    job.update(execution_engine='scan:fp', execution_scan=execution_scan)
+            else:
+                with lock:
+                    job.update(execution_engine='legacy', execution_note=reason)
+                result=(analysis_runner or workflow.run_analysis)(payload,request.get('parameters'),out,progress)
             if payload.get('pooling'):
                 from services.oriented_regions import retain_provenance
                 retain_provenance(result,payload)
@@ -1209,6 +1236,9 @@ def active(state,dataset_id,chrom,start,end):
     with lock:
         job=jobs.get(job_id)
         if not job or job['status']!='complete' or dataset_id not in job['index']:return False
+        from services.meta_locus_consensus import job_for_meta
+        if str(chrom).startswith('meta:'):
+            return job_for_meta(job,chrom)
         from services.oriented_regions import display_regions
         regions=display_regions(job['result'],dataset_id,chrom)
         return any(r['end']>start and r['start']<end for r in regions)
@@ -1542,6 +1572,19 @@ def _visible(record,filters,strand):
     return True
 
 
+def overlay_identity(state):
+    """What the active run's projected layers depend on (``apply_overlays``' receipt invariants: the job, its result,
+    display filters and curation revision), for caches of summaries over projected rows; () with no active run."""
+    job_id=state.__dict__.get('consensus_workflow_active')
+    if not job_id:return ()
+    jobs,lock=_session(state)
+    with lock:
+        job=jobs.get(job_id)
+        if not job:return (job_id,)
+        return (job_id,job.get('status'),id(job.get('result')),repr(sorted((job.get('filters') or {}).items())),
+                job.get('_curation',{}).get('revision',0))
+
+
 def projected_subset_is_current(state,dataset_id,chrom,start,end,source,reads):
     """Reuse only exact rows from this request's already projected working set.
 
@@ -1651,14 +1694,25 @@ def apply_overlays(state,dataset_id,chrom,start,end,working_set):
         job=jobs.get(state.consensus_workflow_active)
         if not job or job['status']!='complete' or dataset_id not in job['index']:return working_set
         from services.oriented_regions import display_regions
-        regions=display_regions(job['result'],dataset_id,chrom)
+        meta_view=str(chrom).startswith('meta:')
+        if meta_view:
+            # A meta-locus run's records are in the pooled oriented frame, which is the virtual contig itself.
+            from services.meta_locus_consensus import job_for_meta, meta_index
+            from services.meta_locus_jobs import pool_for_chrom
+            pool=pool_for_chrom(chrom)
+            if not job_for_meta(job,chrom) or pool is None:return working_set
+            meta_idx=meta_index(job,dataset_id,pool)
+            if meta_idx is None:return working_set
+            regions=[dict(chrom=chrom,start=0,end=2*pool.sites.flank)]
+        else:
+            regions=display_regions(job['result'],dataset_id,chrom)
         if not regions:return working_set
         region=dict(chrom=chrom,start=min(r['start'] for r in regions),end=max(r['end'] for r in regions))
         # Reference intervals as this view shows them (a circular view's own coordinates).
         place=_view_placement(state,chrom,start,end)
         if (normalize_chrom_name(region['chrom'])!=normalize_chrom_name(chrom)
                 or not place(region['start'],region['end'])):return working_set
-        index=job['index'][dataset_id];filters=dict(job['filters'])
+        index=meta_idx if meta_view else job['index'][dataset_id];filters=dict(job['filters'])
         memo=getattr(working_set,'_consensus_projection_memo',None)
         if _projection_memo_is_current(memo,job,index,filters,(dataset_id,chrom,start,end),working_set):
             return memo['projected']

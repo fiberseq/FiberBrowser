@@ -5,6 +5,7 @@ Extracted from server.py.
 from __future__ import annotations
 
 import asyncio
+import re
 import os
 
 from fastapi import APIRouter, Body, Depends, HTTPException
@@ -245,6 +246,9 @@ async def get_status(state=Depends(get_state), dafc_state=Depends(get_dafc_state
             "methylation": methylation_cache_entries,
         },
         "current_genome": getattr(state, 'current_genome', None),
+        # The reference loaded now is the one given on the command line (--fasta): a page restoring its saved
+        # reference keeps this one instead (CrashRecoveryBanner, App start-up).
+        "startup_reference": bool(getattr(state, "startup_fasta", None)) and state.fasta_path == getattr(state, "startup_fasta", None),
         "circular_chroms": getattr(state, "circular_chroms", {}),
         "plasmids": getattr(state, "plasmid_metadata", {}),
         "has_fire": state.fire_df is not None,
@@ -340,6 +344,8 @@ async def load_fasta_endpoint(path: str,
                 if err is None and state.fasta is not None:
                     state.reference_pairs = None
                     state.fasta_error = None
+                    from services.recent_genomes import record
+                    record(state)
                     return {
                         "success": True,
                         "path": state.fasta_path,
@@ -598,11 +604,16 @@ async def get_genomes():
 
 
 @router.post("/api/load_genome")
-async def load_genome(genome_id: str, state=Depends(get_state)):
+async def load_genome(genome_id: str, confirm_large: bool = False, state=Depends(get_state)):
     """Load an online genome (remote FASTA + cached GTF download).
 
     Runs blocking I/O (pysam, downloads, GTF parsing) in a thread pool
     to avoid freezing the event loop.
+
+    Downloads have no size cap but a warning size (services/http_download.py): one over it that was not
+    confirmed answers ``needs_confirmation`` with ``download`` (``url``, ``bytes``, ``threshold``) and changes
+    nothing; ``confirm_large=true`` goes ahead. A download of unknown size that passed it is listed in
+    ``download_warnings``.
     """
     if genome_id not in GENOME_REGISTRY:
         raise HTTPException(status_code=404, detail=f"Unknown genome: {genome_id}")
@@ -617,19 +628,201 @@ async def load_genome(genome_id: str, state=Depends(get_state)):
         from services.catalog_endpoint import catalog_genome
         if genome_id != catalog_genome() and genome_id != getattr(state, 'current_genome', None):
             raise HTTPException(status_code=403, detail="Only the catalog's genome can be loaded on a public server")
-        if genome_id == getattr(state, 'current_genome', None) and getattr(state, 'fasta', None) is not None:
+        from services.genome_loading import genome_already_loaded
+        # (Pending-aware: a genome whose annotation waits for a download confirmation is not loaded yet.)
+        if genome_already_loaded(state, genome_id):
             return {"success": True, "genome": genome_id, "message": "Genome already loaded"}
 
     from services.runtime import allow_shared_writes
 
     def load():
-        with allow_shared_writes():
+        from services.http_download import download_policy
+        events: list = []
+        with allow_shared_writes(), download_policy(confirmed=confirm_large, events=events):
             result = load_genome_blocking(state, genome_id, GENOME_REGISTRY[genome_id])
+        large = [e for e in events if e["kind"] in ("large_confirmed", "large_unknown_size")]
+        if large:
+            result["download_warnings"] = large
+        pending = next((e for e in events if e["kind"] == "confirm"), None)
+        if pending is not None and not result.get("needs_confirmation"):
+            result.update(needs_confirmation=True, download=pending)
         if result.get("success"):
             # Datasets given this genome as their own now fit the main one: the
             # second copy goes (services/panel_genomes.py).
             from services.panel_genomes import release_main_genome
             release_main_genome(state)
+            from services.recent_genomes import record
+            record(state)
+        return result
+    return await asyncio.to_thread(load)
+
+
+@router.get("/api/genome/fasta_assembly")
+def fasta_assembly_endpoint(path: str):
+    """The assembly a local FASTA is, from its index's contig lengths (``.fai``; the FASTA itself is not opened),
+    or null when it is no known assembly. A page restoring a remembered FASTA asks first: one of another assembly
+    than the loaded data is not restored. Local only (not on a public server)."""
+    from services.runtime import current_sandbox_id, get_public_mode
+    if get_public_mode() or current_sandbox_id() is not None:
+        raise HTTPException(status_code=403, detail="Not available here")
+    if re.match(r"^[a-z][a-z0-9+.-]*://", path or ""):
+        return {"exists": False, "assembly": None}
+    from services.lab.paths import readable
+    if not path or not readable(path) or not os.path.isfile(path):
+        return {"exists": False, "assembly": None}  # on a lab server, outside the member's roots: not shown
+    from services.assembly_fingerprint import Contig, fingerprint
+    from services.recent_genomes import fai_contigs
+    # The index through the confined reader: a .fai link outside the member's roots is never read.
+    contigs = [Contig(name, length) for name, length in fai_contigs(path).items()]
+    if not contigs:
+        return {"exists": True, "assembly": None}
+    fp = fingerprint(contigs, labels=[os.path.basename(path)])
+    return {"exists": True, "assembly": fp.assembly if fp.kind == "genome" else None}
+
+
+@router.post("/api/genome/reset_annotation")
+async def reset_annotation(genome_id: str, confirm_large: bool = False, state=Depends(get_state)):
+    """The registry genome's default annotation in place of the loaded one ("Reset to dm6 genes" in Reference &
+    Tracks): from ~/.fiberhmm/genomes, else downloaded as a genome load downloads it (warning size, ``confirm_large``).
+    The FASTA stays. Local work only: never on a public server or in a tour tab."""
+    if genome_id not in GENOME_REGISTRY:
+        raise HTTPException(status_code=404, detail=f"Unknown genome: {genome_id}")
+    from services.runtime import current_sandbox_id, get_public_mode
+    if get_public_mode() or current_sandbox_id() is not None:
+        raise HTTPException(status_code=403, detail="The annotation can't be changed here")
+    from services.genome_loading import load_genome_annotation_blocking
+
+    def load():
+        from services.http_download import download_policy
+        events: list = []
+        with download_policy(confirmed=confirm_large, events=events):
+            result = load_genome_annotation_blocking(state, genome_id, GENOME_REGISTRY[genome_id])
+        pending = next((e for e in events if e["kind"] == "confirm"), None)
+        if pending is not None and not result.get("needs_confirmation"):
+            result.update(needs_confirmation=True, download=pending)
+        if result.get("success"):
+            from services.recent_genomes import record
+            record(state)
+        return result
+    return await asyncio.to_thread(load)
+
+
+# ---------------------------------------------------------------------------
+# Recent and pinned genomes (services/recent_genomes.py): local work only
+# ---------------------------------------------------------------------------
+
+def _refuse_recent() -> None:
+    from services.runtime import current_sandbox_id, get_public_mode
+    if get_public_mode() or current_sandbox_id() is not None:
+        raise HTTPException(status_code=403, detail="Recent genomes aren't available here")
+
+
+@router.get("/api/recent_genomes")
+def recent_genomes_endpoint(limit: int | None = None):
+    """Pinned genomes (in pin order) and the most recent others (``recent_genomes_max``, default 8)."""
+    _refuse_recent()
+    from services.recent_genomes import listing
+    return listing(limit)
+
+
+@router.post("/api/recent_genomes/remove")
+def recent_genomes_remove(key: str = Body(..., embed=True)):
+    _refuse_recent()
+    from services.recent_genomes import remove
+    return remove(key)
+
+
+@router.post("/api/recent_genomes/clear")
+def recent_genomes_clear():
+    """Every recent entry goes; pinned ones stay."""
+    _refuse_recent()
+    from services.recent_genomes import clear_recent
+    return clear_recent()
+
+
+@router.post("/api/recent_genomes/pin")
+def recent_genomes_pin(key: str = Body(..., embed=True), pinned: bool = Body(True, embed=True)):
+    _refuse_recent()
+    from services.recent_genomes import set_pinned
+    try:
+        return set_pinned(key, pinned)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
+
+@router.post("/api/recent_genomes/reorder")
+def recent_genomes_reorder(keys: list[str] = Body(..., embed=True)):
+    _refuse_recent()
+    from services.recent_genomes import reorder_pinned
+    return reorder_pinned(keys)
+
+
+@router.post("/api/recent_genomes/open")
+async def recent_genomes_open(key: str = Body(..., embed=True), confirm_large: bool = Body(False, embed=True),
+                              state=Depends(get_state)):
+    """Load a pinned or recent genome in one step: a registry genome through the genome load (its cache, its
+    annotation), a local FASTA with its paired annotation. What is already loaded is kept (no re-download, no
+    reload). A missing file is reported, never asked for."""
+    _refuse_recent()
+    from services.recent_genomes import find, record
+    entry = find(key)
+    if entry is None:
+        return {"success": False, "error": "Not in your recent genomes"}
+
+    def load():
+        from services.genome_loading import reference_lock
+        from services.http_download import download_policy
+        if entry.get("kind") == "registry":
+            gid = entry.get("genome_id")
+            if gid not in GENOME_REGISTRY:
+                return {"success": False, "error": f"Unknown genome: {gid}"}
+            events: list = []
+            from services.runtime import allow_shared_writes
+            with allow_shared_writes(), download_policy(confirmed=confirm_large, events=events):
+                result = load_genome_blocking(state, gid, GENOME_REGISTRY[gid])
+            pending = next((e for e in events if e["kind"] == "confirm"), None)
+            if pending is not None and not result.get("needs_confirmation"):
+                result.update(needs_confirmation=True, download=pending)
+            if result.get("success"):
+                from services.panel_genomes import release_main_genome
+                release_main_genome(state)
+                record(state)
+            return result
+        fasta, gtf = entry.get("fasta"), entry.get("gtf")
+        if not fasta or not os.path.isfile(fasta):
+            return {"success": False, "missing": True, "error": f"File not found: {fasta}"}
+        access = path_access_error(fasta, original_path=fasta, expected="file")
+        if access:
+            return {"success": False, "error": access}
+        result = {"success": False, "fasta_path": fasta}
+        with reference_lock(state):
+            current = getattr(state, "fasta_path", None)
+            if getattr(state, "fasta", None) is not None and current and "://" not in str(current) \
+                    and os.path.realpath(current) == fasta:
+                result["already_loaded"] = True
+            else:
+                err = state._load_fasta(fasta)
+                if err is not None or state.fasta is None:
+                    state.fasta_error = err or "Failed to load FASTA"
+                    return {"success": False, "error": state.fasta_error}
+                state.reference_pairs = None
+                state.fasta_error = None
+            result["fasta_loaded"] = True
+            if gtf and os.path.isfile(gtf):
+                loaded_gtf = getattr(state, "gtf_path", None)
+                if not (getattr(state, "gtf_data", None) is not None and loaded_gtf and os.path.realpath(loaded_gtf) == gtf):
+                    from services.gene_annotations import load_gtf
+                    state.gtf_data = load_gtf(gtf)
+                    state.gtf_path = gtf
+                result["gtf_loaded"] = True
+            elif gtf:
+                result["gtf_loaded"] = False
+                result["gtf_error"] = f"Annotation not found: {gtf}"
+            result["success"] = True
+            result["genome_id"] = getattr(state, "current_genome", None)
+            transcripts = (getattr(state, "gtf_data", None) or {}).get("transcripts") if getattr(state, "gtf_data", None) else None
+            result["gene_count"] = len(transcripts) if transcripts is not None else 0
+        record(state)
         return result
     return await asyncio.to_thread(load)
 

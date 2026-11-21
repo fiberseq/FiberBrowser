@@ -10,6 +10,8 @@ import { AnalysisSortRulesEditor } from './analysis-rules/AnalysisSortRulesEdito
 import { PeakDetectionPanel } from './PeakDetectionPanel';
 import { useRememberedState } from '../../hooks/useRememberedState';
 
+const MOLECULE_SCALAR_GROUPS = new Set(['nucmol', 'nfrmol']);
+
 const ANALYSIS_RULE_TABS = [
   { key: 'peaks' as const, label: 'Peaks' },
   { key: 'cluster' as const, label: 'Cluster' },
@@ -135,7 +137,8 @@ export function ClusterFeatureRulesPanel({ isFullView }: { isFullView?: boolean 
     const seen = new Set(['']);
     for (const entry of getCanonicalLayerEntries(datasets)) {
       const value = entry.key === 'footprint' ? '' : entry.key;
-      if (seen.has(value)) continue;
+      // Per-molecule scalar groups are molecule metric terms, not layers.
+      if (seen.has(value) || MOLECULE_SCALAR_GROUPS.has(value)) continue;
       seen.add(value);
       out.push({ value, label: entry.label });
     }

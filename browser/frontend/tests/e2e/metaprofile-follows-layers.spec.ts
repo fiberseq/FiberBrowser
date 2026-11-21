@@ -1,10 +1,10 @@
 /**
  * The default metaprofile follows the active read layers, and the cluster
- * panel's profiles follow the default metaprofile.
+ * panel's Default profile channel follows the default metaprofile.
  *
  * Turn a secondary layer on in the Layers row: the default metaprofile shows
  * it at once (its cart settings say "Follow active layers"), and after
- * clustering the Profiles tab draws it. A hand edit of a source
+ * clustering the Profiles tab draws it under Default. A hand edit of a source
  * switches the track to manual, and the checkbox brings following back.
  *
  * Pinned to the tracked NAPA demo BAM (chr19:47514000-47518000).
@@ -58,7 +58,7 @@ async function cluster(page: Page) {
   await page.waitForTimeout(1200);
 }
 
-test('the default metaprofile and the cluster profiles follow the layers switched on', async ({ server, page }) => {
+test('the default metaprofile and the cluster Default profile follow the layers switched on', async ({ server, page }) => {
   test.setTimeout(180_000);
   await openAt(page, server);
 
@@ -86,11 +86,12 @@ test('the default metaprofile and the cluster profiles follow the layers switche
   const follow = cart.getByTestId('default-metaprofile-follow-layers');
   await expect(follow).toBeChecked();
 
-  // Cluster: the Profiles tab draws the layer.
+  // Cluster: the Profiles tab draws the layer under Default.
   await cluster(page);
   await panelButton(page, 'cluster-detail').click();
   const panel = page.locator('[data-panel-content-type="cluster-detail"]');
   await panel.locator('[data-analysis-tab="profiles"]').click();
+  await expect(panel.getByTestId('cluster-profile-channel-default')).toHaveAttribute('aria-pressed', 'true');
   await expect(panel.locator(`[data-testid="cluster-profile-chart"][data-layer="${layer}"]`)).toBeVisible({ timeout: 30_000 });
 
   // Turning the layer off drops it from both.

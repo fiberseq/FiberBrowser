@@ -6,12 +6,12 @@ import { useOpeningStore } from '../../stores/openingStore';
  * with the dataset's name and what the open is doing; its real panel replaces it. A failed open keeps its
  * placeholder with the reason, Retry and Dismiss (never a click that seems to do nothing).
  */
-export function OpeningPanels({ top, gap }: { top: number; gap: number }) {
+export function OpeningPanels({ top, gap, above = false }: { top: number; gap: number; /** over a maximised panel (full view in place, z 40) */ above?: boolean }) {
   const opening = useOpeningStore(s => s.opening);
   const retry = useOpeningStore(s => s.retry);
   if (!opening.length) return null;
   return (
-    <div className="absolute z-30 flex flex-col" style={{ top: top + gap, left: gap, right: gap, rowGap: gap }}
+    <div className={`absolute ${above ? 'z-[45]' : 'z-30'} flex flex-col`} style={{ top: top + gap, left: gap, right: gap, rowGap: gap }}
       data-testid="opening-panels" data-render-hide="true">
       {opening.map(o => (
         <div key={o.key} role="status" aria-live="polite" data-testid="opening-panel" data-error={o.error ? 'true' : undefined}

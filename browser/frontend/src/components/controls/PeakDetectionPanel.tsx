@@ -1,4 +1,7 @@
-import { SignalProfileChart } from '../charts/SignalProfileChart';
+import { SignalProfileChart, signalProfileTop } from '../charts/SignalProfileChart';
+import { PlotSetYScaleControl } from '../charts/PlotSetYScaleControl';
+import { DEFAULT_PLOT_SET_Y_SCALE, type PlotSetYScale } from '../../utils/plotSetYScale';
+import { useRememberedState } from '../../hooks/useRememberedState';
 import { removeMatchedGroups } from '../../utils/matchedGroupActions';
 import { Fragment, useState, useCallback, useRef, useMemo, useEffect } from 'react';
 import { useBrowserStore } from '../../stores/browserStore';
@@ -58,6 +61,8 @@ export function PeakDetectionPanel({ isFullView, embedded = false }: PeakDetecti
   const sourceGroups = usePeakSourceOptions();
 
   const [expandedRuleId, setExpandedRuleId] = useState<string | null>(null);
+  // Pooled and member profiles: own y per plot (the default) or one range per peak window across pooled + members.
+  const [memberYScale, setMemberYScale] = useRememberedState<PlotSetYScale>('peaks:member-yscale', () => DEFAULT_PLOT_SET_Y_SCALE);
   const [scanningRules, setScanningRules] = useState<Set<string>>(new Set());
   const {
     peakBedStatus,
@@ -179,11 +184,21 @@ export function PeakDetectionPanel({ isFullView, embedded = false }: PeakDetecti
                 </AnalysisStatus>
                 <details data-testid="peaks-pooled-profiles">
                   <summary className="cursor-pointer">Pooled and member profiles</summary>
-                  {[{ label: 'Pooled', profiles: scan.profiles }, ...Object.values(scan.members).map(m => ({ label: m.label, profiles: m.profiles }))].map(m => <div key={m.label}>
-                    <span>{m.label}</span>
-                    {m.profiles?.map(p => <SignalProfileChart key={p.start} signal={p.signal} thresholds={rule.thresholds} color={rule.color} width={280} height={100}
-                      viewStart={p.start} viewEnd={p.end} filename={`${rule.name}_${m.label}_${p.start}`} />)}
-                  </div>)}
+                  <PlotSetYScaleControl value={memberYScale} onChange={p => setMemberYScale(v => ({ ...v, ...p }))} testId="peaks-member-yscale"
+                    rawLabel="Signal" enrichment={false} scope={false} />
+                  {(() => {
+                    const sets = [{ label: 'Pooled', profiles: scan.profiles }, ...Object.values(scan.members).map(m => ({ label: m.label, profiles: m.profiles }))];
+                    // Shared y: one top per peak window (keyed by its start) across pooled and members, at least the thresholds.
+                    const tops: Record<number, number> = {};
+                    if (memberYScale.mode === 'shared') {
+                      for (const m of sets) for (const p of m.profiles ?? []) tops[p.start] = Math.max(tops[p.start] ?? 0, signalProfileTop(p.signal, rule.thresholds));
+                    }
+                    return sets.map(m => <div key={m.label}>
+                      <span>{m.label}</span>
+                      {m.profiles?.map(p => <SignalProfileChart key={p.start} signal={p.signal} thresholds={rule.thresholds} color={rule.color} width={280} height={100}
+                        viewStart={p.start} viewEnd={p.end} yMax={memberYScale.mode === 'shared' ? tops[p.start] : undefined} filename={`${rule.name}_${m.label}_${p.start}`} />)}
+                    </div>);
+                  })()}
                 </details>
               </div>)}
               <PeakRuleCard

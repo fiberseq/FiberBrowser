@@ -1,8 +1,21 @@
+import { effectiveReadLimit, useMetaLocusStore } from '../../../features/metaLocus/metaLocusStore';
+import { MetaReadsPending } from '../../../features/metaLocus/MetaLocusBar';
+import { isMetaChrom } from '../../../features/metaLocus/metaChrom';
+import { accumulateChannels, finishChannels, type ChannelRead } from '../../../features/plots/profileEngine';
+import { useNucPatchLabels } from '../../../utils/nucPatchLabels';
 import { defaultMetaprofileTogglesKey, togglesFromKey } from '../../../utils/defaultMetaprofile';
+import { useNucGeoFocusStore } from '../../../stores/nucGeoFocusStore';
+import { useNativeWheel } from '../../../hooks/useNativeWheel';
 import { splitAway, splitPinnedAway } from '../../../utils/splitLocus';
+import { linearSiteOrder } from '../../../features/graphPanel/siteSort';
+import { useLiftCorrespondence } from '../../../features/liveLift/useLiftCorrespondence';
+import { isBamBacked } from '../../../utils/datasetKinds';
 import { markReadViewDrawn } from '../../../utils/viewIdle';
 import { SplitAwayBanner } from './SplitAwayBanner';
-import { useRef, useEffect, useLayoutEffect, useMemo, useCallback, useState } from 'react';
+import { useRef, useEffect, useLayoutEffect, useMemo, useCallback, useState, useContext } from 'react';
+import { PanelDisplayContext, usePanelActive } from '../../../hooks/usePanelDisplayStore';
+import { useLiftHoverRows } from '../../../features/liveLift/linking/hover';
+import { readBadgeMode } from '../../../features/differences/displayOptions';
 import { usePanelDisplayStore as useBrowserStore } from '../../../hooks/usePanelDisplayStore';
 import { annotationViewportKey, type ReadAnnotation } from '../../../stores/annotationSlice';
 import { useConsensusViewStore } from '../../../stores/consensusViewStore';
@@ -11,13 +24,16 @@ import { useNativeLattice } from '../../../hooks/useNativeLattice';
 import { useEphemeralStore } from '../../../stores/ephemeralStore';
 import { useShallow } from 'zustand/react/shallow';
 import { DEBUG } from '../../../stores/utils';
-import { buildRuleMatchContext, getMatchingRuleId, hydrateOrthogonalTracks, peaksForPanelChrom, rulesNeedOrthogonalTrackData } from '../../../utils/ruleMatching';
+import { buildRuleMatchContext, getMatchingRuleId, hydrateOrthogonalTracks, peaksForPanelChrom, ruleHasNucConditions, rulesNeedOrthogonalTrackData } from '../../../utils/ruleMatching';
+import { nucSizeIndex, nucSizeMarkFor } from '../../../utils/nucLayers';
 import type { Props, CompactRead, ReadsResponse, SvSummary } from './types';
 import type { DatasetProfile, OrthogonalTrackViewportData } from '../../../types/dataset';
 import type { FirePeak } from '../../../types';
 import { EMPTY_OBJECT, EMPTY_STRING_ARRAY, EMPTY_NUMBER_ARRAY, SIDEBAR_WIDTH, getClusterColor } from './constants';
-import { readFilterFitsRequest, useReadTrackData } from './useReadTrackData';
+import { makeDataViewportKey, readFilterFitsRequest, useReadTrackData } from './useReadTrackData';
 import { useReadTrackMouse } from './useReadTrackMouse';
+import { useLiveLiftAxis } from '../../../features/liveLift/useLiveLiftAxis';
+import { ExpansionOverlay, DifferenceGuide } from '../../../features/liveLift/ExpansionOverlay';
 import { ReadTrackActions } from './ReadTrackActions';
 import { useReadActionsStore } from '../../../stores/readActionsStore';
 import { drawReadTrack } from './ReadTrackCanvas';
@@ -27,7 +43,7 @@ import { SV_BAND_HEIGHT, visibleSvSummary } from './svDrawing';
 import { useTrackFeedStore } from '../../../stores/trackFeedStore';
 import { useSvSplitRefresh } from './useSvSplitRefresh';
 import { overlaySvSummary, useFiberhmmReadLayers, useMergedReads } from '../../../features/fiberhmmLayers/useFiberhmmReadLayers';
-import { formatReadStatus, readFilterCounts } from './readCounts';
+import { formatReadStatus, readFilterCounts, userReadFilterSet } from './readCounts';
 import { isTopLocusStep } from '../../../utils/topLoci';
 import { findDatasetReadsLocus } from '../../../utils/datasetReadsLocus';
 import { ReadSampleNotice } from './ReadSampleNotice';
@@ -36,17 +52,18 @@ import { DEFAULT_MIN_FOOTPRINTS, MIN_FOOTPRINTS_ALL_READS, minFootprintsHidesUnc
 import { FindReadsControl } from './FindReadsControl';
 import { blockingProblemFor, findReadsPromptAllowed, useGenomeCheckStore } from '../../../stores/genomeCheckStore';
 import { GenomeMismatchNotice } from '../../controls/GenomeMismatchBanner';
-import { signalCountText, readPolicyHiddenText } from '../../../utils/signalFilters';
+import { datasetsCarrySignal, signalCountText, readPolicyHiddenText } from '../../../utils/signalFilters';
 import { useReadStatusStore } from '../../../stores/readStatusStore';
 import { syncBrowserReadOrder } from '../../../api/jupyter';
 import { getMetaprofileSourceEntries } from '../../../utils/layerColors';
+import { withLayerColours } from '../../../utils/layerColourFollow';
+import { useEffectiveLayerColors } from '../../../features/layerColours/state';
 import { useCanvasRenderVersion } from '../../../utils/canvasUtils';
 import { usePanOffsetTransform } from '../../../hooks/usePanOffsetTransform';
 import { installTrackSelectionGuard } from '../../../utils/pointerDrag';
 import { layerQualitiesNeeded, qualityLayerKey } from './layerQualityNeeds';
 import { computeReadTrackLayout } from './layout';
 import { clusterAssignmentForRead, clusteredReadIdSet } from './readFilter';
-import { addReadIntervals } from '../../../utils/metaprofileBins';
 import { logPerfTiming, nowMs } from '../../../utils/perfDebug';
 import { isLayerCacheEnabled } from '../../../utils/layerCache';
 import { branchScopesPanel, readIdSetForClusterRenderScope } from '../../../utils/readScopes';
@@ -61,6 +78,7 @@ import { windowAtLimit } from '../../../utils/readLimit';
 import { revealSetting } from '../../../utils/revealSetting';
 import { READ_LIMIT_SETTINGS } from '../../controls/sidebar/view/ReadDisplayLimits';
 import { splitReadFilter, useSplitPanelStore } from '../../../stores/splitPanelStore';
+import { clusterViewPayloadLayers } from '../../../utils/clusterViewChannels';
 
 const EMPTY_ANNOTATIONS: Record<string, ReadAnnotation[]> = {};
 const EMPTY_PEAKS: FirePeak[] = [];
@@ -121,7 +139,7 @@ const metaprofileLayerKey = (layer: string | null | undefined): string | null =>
 
 export function ReadTrack({
   width, height, datasetId: datasetIdProp, stateKey: stateKeyProp, datasetLabel, datasetColor,
-  overrideChrom, overrideStart, overrideEnd, overrideFilteredIds, panelLabel, readStrand,
+  overrideChrom, overrideStart, overrideEnd, overrideFilteredIds, panelLabel, readStrand, liftHap,
   disableSpanning = false,
   linkedSessionId, linkedRegion,
   linkedBoundsStart, linkedBoundsEnd,
@@ -138,6 +156,10 @@ export function ReadTrack({
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const consensusView=useConsensusViewStore(useShallow(s=>({jobId:s.jobId,selection:s.selection,selections:s.selections,catalog:s.catalog,latticeHits:s.latticeHits,latticeStyle:s.latticeStyle})));
+  // The nucleosome panel's focused geometries dim the other patches in the patch lane.
+  const nucGeoFocus = useNucGeoFocusStore(s => s.focused);
+  // the nucpatch lane's geometry labels (an overlay on the rows already loaded): redraw when they change
+  const nucPatchLabelsVersion = useNucPatchLabels(s => s.version);
   const canvasRenderVersion = useCanvasRenderVersion();
 
   // Grouped Zustand selectors — reduces listener count from ~50 to 4 per ReadTrack instance
@@ -156,9 +178,11 @@ export function ReadTrack({
   })));
 
   // What the default metaprofile shows (it follows the active layers unless set to manual): its layers are
-  // requested even while the track is hidden, since the cluster panel's profiles read them too.
+  // requested even while the track is hidden, since the cluster panel's Default profiles read them too.
   const defaultMetaprofileKey = useBrowserStore(s => defaultMetaprofileTogglesKey(s));
   const defaultMetaprofileToggles = useMemo(() => togglesFromKey(defaultMetaprofileKey), [defaultMetaprofileKey]);
+  // Cluster views (metaprofile channels, map colour): the layers they read join the request while clustered.
+  const clusterViewLayersKey = useBrowserStore(s => clusterViewPayloadLayers(s.clusterViewSettings).join(','));
   // Group 2: Config (rarely changes)
   const {
     enabledModTypes, fillSmallGaps, fillGapSize, hideTerminalGaps, terminalGapThreshold,
@@ -191,7 +215,7 @@ export function ReadTrack({
     exportMatchedReadCount: s.exportMatchedReadCount,
     exportMatchedReadFetchCount: s.exportMatchedReadFetchCount,
     showReadTooltip: s.showReadTooltip, showCoverageHistogram: s.showCoverageHistogram,
-    maxRegionForReads: s.maxRegionForReads,
+    maxRegionForReads: effectiveReadLimit(s.chrom, s.maxRegionForReads),
     readSeparatorMode: s.readSeparatorMode,
     readSeparatorMinHeight: s.readSeparatorMinHeight,
     readSeparatorWidth: s.readSeparatorWidth,
@@ -287,6 +311,8 @@ export function ReadTrack({
 
   // Use override values if provided (for split view), otherwise use store values
   const chrom = overrideChrom ?? storeChrom;
+  // A meta-locus still building, before its first reads: the panel says "building", not "no reads".
+  const metaPending = useMetaLocusStore(s => isMetaChrom(chrom) && s.status?.status === 'building' && !s.view);
   const start = overrideStart ?? storeStart;
   const end = overrideEnd ?? storeEnd;
   const spanningOnly = disableSpanning ? false : storeSpanningOnly;
@@ -294,13 +320,16 @@ export function ReadTrack({
   // Get per-panel state (stateKey is unique per panel for duplicates, falls back to datasetId)
   const myClusterAssignments = clusterAssignments[stateKey] ?? EMPTY_OBJECT;
   const myClusterOrder = clusterOrder[stateKey] ?? EMPTY_NUMBER_ARRAY;
-  const myReadSortOrder = readSortOrder[stateKey] ?? EMPTY_STRING_ARRAY;
+  const sortPanel = useBrowserStore(s => s.panels.find(p => (p.stateKey ?? p.datasetId) === stateKey));
+  const rawReadSortOrder = readSortOrder[stateKey] ?? EMPTY_STRING_ARRAY;
+  const myReadSortOrder = useMemo(() => linearSiteOrder(sortPanel, rawReadSortOrder), [sortPanel?.graphSiteSort, rawReadSortOrder]);
   const myClusterFocus = clusterFocus[stateKey] ?? null;
   const mySelectedClusters = selectedClusters[stateKey] ?? null;
   const hasClusterFocus = myClusterFocus !== null && myClusterFocus.size > 0;
+  const liftGrouping = useBrowserStore(s => s.panels.some(p => (p.stateKey ?? p.datasetId) === stateKey && p.liftGroupByHaplotype));
   const clusteredReadIds = useMemo(
-    () => clusteredReadIdSet(myClusterAssignments),
-    [myClusterAssignments],
+    () => liftGrouping ? null : clusteredReadIdSet(myClusterAssignments),
+    [myClusterAssignments, liftGrouping],
   );
   // Resolve the exact visible read IDs from the FRONTEND's authoritative per-node
   // cluster assignments and fetch by ID. The backend can only resolve cluster
@@ -341,14 +370,14 @@ export function ReadTrack({
   const splitReads = useSplitPanelStore(s => s.reads[stateKey]);
   // Away from where it was split its reads aren't classified (utils/splitLocus.ts): a banner says so,
   // or (Show all reads here) every read in view, unfiltered.
-  const splitPanel = useBrowserStore(s => (splitReads ? s.panels.find(p => p.contentType === 'dataset' && p.readSubset && (p.stateKey ?? p.datasetId) === stateKey) : undefined));
+  const splitPanel = useBrowserStore(s => s.panels.find(p => p.contentType === 'dataset' && p.readSubset && (p.stateKey ?? p.datasetId) === stateKey));
   const splitIsAway = splitAway(splitPanel?.readSubset, { chrom, start, end }, splitPanel);
   const splitAllHere = splitIsAway && Boolean(splitPanel?.readSubset?.showAllAway);
   // A split panel on its own contig (an insert-expanded Carriers panel) stays there; it says when its split went away.
   const splitPinned = useBrowserStore(s => splitPinnedAway(splitPanel?.readSubset, splitPanel, s.panels, { chrom: s.chrom, start: s.start, end: s.end }));
   const showSplitAwayBanner = Boolean(splitPanel && ((splitReads && splitIsAway && !splitAllHere) || splitPinned));
-  const subsetFilter = useMemo(() => (splitAllHere ? filteredReadIds[stateKey] : splitReadFilter(splitReads, filteredReadIds[stateKey])),
-    [splitAllHere, splitReads, filteredReadIds, stateKey]);
+  const subsetFilter = useMemo(() => (splitAllHere ? filteredReadIds[stateKey] : splitReadFilter(splitReads, filteredReadIds[stateKey], splitPanel?.readSubset?.rule)),
+    [splitAllHere, splitReads, filteredReadIds, stateKey, splitPanel?.readSubset?.rule]);
   const myFilteredReadIds = overrideFilteredIds ?? subsetFilter;
 
   const hasCluster = Object.keys(myClusterAssignments).length > 0;
@@ -357,21 +386,26 @@ export function ReadTrack({
   const hasFilter = myFilteredReadIds != null;
   const regionWidth = end - start;
   const sidebarWidth = gutterWidth ?? (hasCluster ? SIDEBAR_WIDTH : 0);
+  const { axis: liveLiftAxis, viewKey: liveLiftView, panel } = useLiveLiftAxis(chrom, start, end, Math.max(1, width - sidebarWidth), isReversed);
 
   const currentDataset = datasets.find(d => d.id === datasetId);
-  const isBAM = currentDataset?.data_type === 'bam';
+  const isBAM = isBamBacked(currentDataset);
   const layerType = currentDataset?.layer_type;
+  // The user's layer colours (Labels → Layer colours) win over a derived layer's own colour.
+  const userLayerColors = useEffectiveLayerColors();
   const layerColors = useMemo(() => {
     const colors: Record<string, string> = {};
     for (const [layerId, meta] of Object.entries(currentDataset?.derived_layers ?? {})) {
       if (meta.color) colors[layerId] = meta.color;
     }
-    return colors;
-  }, [currentDataset?.derived_layers]);
+    return { ...colors, ...userLayerColors };
+  }, [currentDataset?.derived_layers, userLayerColors]);
+  // The colormap as drawn: built-in rules and the TF overlay still at their stock colours follow the layer colours.
+  const drawColormap = useMemo(() => withLayerColours(activeColormap), [activeColormap, userLayerColors]);
   const layerAvailableInDataset = (dataset: typeof datasets[number] | undefined, key: string) => {
     const datasetLayers = dataset?.available_layers ?? {};
     const datasetLayerType = dataset?.layer_type;
-    const datasetIsBam = dataset?.data_type === 'bam';
+    const datasetIsBam = isBamBacked(dataset);
     const hasExplicitLayerMap = !!dataset?.available_layers;
     if (datasetLayers[key]) return true;
     if (datasetLayerType === key) return true;
@@ -436,7 +470,9 @@ export function ReadTrack({
     }
     return ids;
   }, [datasets, cachedLayerTypes]);
+  const clusterViewLayers = hasCluster && clusterViewLayersKey ? clusterViewLayersKey.split(',') : [];
   const wantsMethylation = Array.from(METHYLATION_LAYER_KEYS).some(key =>
+    clusterViewLayers.includes(key) ||
     !!enabledModTypes[key] ||
     !!defaultMetaprofileToggles[key] ||
     activeMetaprofileSourceIds.has(key) ||
@@ -445,6 +481,7 @@ export function ReadTrack({
   const hasMethylationLayer = Array.from(METHYLATION_LAYER_KEYS).some(layerAvailableForDataset);
   const needsMethylation = wantsMethylation && hasMethylationLayer;
   const batchWantsMethylation = Array.from(METHYLATION_LAYER_KEYS).some(key =>
+    clusterViewLayers.includes(key) ||
     !!enabledModTypes[key] ||
     !!defaultMetaprofileToggles[key] ||
     activeMetaprofileSourceIds.has(key) ||
@@ -475,6 +512,8 @@ export function ReadTrack({
     Object.entries(defaultMetaprofileToggles).forEach(([key, enabled]) => addIfNeeded(key, enabled));
     cachedSourceIds.forEach(key => addIfNeeded(key, true));
     activeMetaprofileSourceIds.forEach(key => addIfNeeded(key, true));
+    // A cluster view's chosen channel (or the map's regularity colour): its layer, while this panel is clustered.
+    clusterViewLayers.forEach(key => addIfNeeded(key, true));
     if (footprintAnalysisLayer) addIfNeeded(footprintAnalysisLayer, true);
     const availableLayerNames = targetDatasets.flatMap(dataset =>
       Object.entries(dataset.available_layers ?? {})
@@ -493,10 +532,10 @@ export function ReadTrack({
   };
   const requestedLayers = useMemo(() => {
     return buildRequestedLayers(currentDataset ? [currentDataset] : [], cachedMetaprofileSourceIds);
-  }, [enabledModTypes, defaultMetaprofileToggles, cachedMetaprofileSourceIds, activeMetaprofileSourceIds, footprintAnalysisLayer, currentDataset, layerType, isBAM]);
+  }, [enabledModTypes, defaultMetaprofileToggles, cachedMetaprofileSourceIds, activeMetaprofileSourceIds, footprintAnalysisLayer, currentDataset, layerType, isBAM, hasCluster, clusterViewLayersKey]);
   const batchRequestedLayers = useMemo(() => {
     return buildRequestedLayers(datasets, batchCachedMetaprofileSourceIds);
-  }, [enabledModTypes, defaultMetaprofileToggles, batchCachedMetaprofileSourceIds, activeMetaprofileSourceIds, footprintAnalysisLayer, datasets]);
+  }, [enabledModTypes, defaultMetaprofileToggles, batchCachedMetaprofileSourceIds, activeMetaprofileSourceIds, footprintAnalysisLayer, datasets, hasCluster, clusterViewLayersKey]);
   // Edge ambiguity (soft/loose) draws each footprint edge from the per-edge
   // sharpness dims (el/er, lq/rq). For BigBed those live in the nuc/tf LAYER
   // payload + its quality arrays, which only ship when include_layers AND
@@ -531,7 +570,16 @@ export function ReadTrack({
   // reads gone to by name stay in the display sample (pins).
   const excludedFromMenu = useReadActionsStore(s => s.excludedReadIds[stateKey]);
   const pinnedReadIds = useReadActionsStore(s => s.pinnedReadIds);
-  const readHighlightIds = useReadActionsStore(s => s.highlight?.ids ?? null);
+  const readHighlightMode = useReadActionsStore(s => s.highlight?.scopedRows ? 'rows' as const : 'names' as const);
+  const readHighlightIds = useReadActionsStore(s => s.highlight?.scopedRows ? s.highlight.scopedRows[datasetId] ?? null : s.highlight?.ids ?? null);
+  const highlightUncertainIds = useReadActionsStore(s => s.highlight?.uncertainIds);
+  const svCarrierEvidence = useBrowserStore(s => s.svCarrierEvidence[stateKey]);
+  const splitSvEvidence = splitPanel?.readSubset?.rule.svEvidenceLevels;
+  const uncertainSvIds = useMemo(() => new Set([
+    ...(highlightUncertainIds ?? []),
+    ...Object.entries(svCarrierEvidence ?? splitSvEvidence ?? {}).filter(([, level]) =>
+      level === 'putative' || level === 'conflicting' || level === 'ambiguous').map(([id]) => id),
+  ]), [highlightUncertainIds, svCarrierEvidence, splitSvEvidence]);
   const effectiveExcludeIds = useMemo(() => {
     if (!excludedFromMenu || excludedFromMenu.size === 0) return excludeIds;
     if (!excludeIds || excludeIds.size === 0) return excludedFromMenu;
@@ -561,19 +609,19 @@ export function ReadTrack({
   // --- Data fetching hook ---
   const {
     reads, totalReads, totalOverlappingReads, totalSpanningReads, loading, hasMethylationData,
-    workingReads, hiddenByMinFootprints, workingSampling, warning, fetchFailed,
+    workingReads, hiddenByMinFootprints, workingSampling, inScopeBeforeFilters, firstPaint, readScoped, warning, fetchFailed,
     displayReads: payloadDisplayReads, profileReads, displaySampleCount, fetchSequenceRef, currentDataSequenceRef, dataSequence,
-    coverageData, coverageMax, coverageReads, dataViewportKey, serverMetaprofile, fulfilledReadFetchCount,
+    coverageData, coverageMax, coverageReads, coverageLiveLift, dataViewportKey, serverMetaprofile, fulfilledReadFetchCount,
     overlayMarks, svSummary: payloadSvSummary,
   } = useReadTrackData({
-    stateKey, readStrand,
+    stateKey, readStrand, liftHap,
     chrom, start, end, datasetId, spanningOnly, width, isBAM,
     height: Math.max(0, height - (datasetLabel ? 16 : 0) - (showCoverageHistogram ? 30 : 0)),
     needsMethylation, needsLayers, requestedLayers, needsLayerQualities,
     batchNeedsMethylation, batchRequestedLayers, batchNeedsLayerQualities,
     useServerMetaprofile: canUseServerMetaprofile,
     serverMetaprofileLayers,
-    needsCigar, fillSmallGaps, fillGapSize, hideTerminalGaps,
+    needsCigar, needsMismatches: Boolean(enabledCigarTypes?.mismatches), fillSmallGaps, fillGapSize, hideTerminalGaps,
     terminalGapThreshold, minFpQuality, minFootprints, showDuplicateReads, showQcFailReads, downsampleCount, readDisplayMode, allReadsDisplayCap,
     backgroundReadCap,
     readRowHeight: renderReadRowHeight,
@@ -603,11 +651,14 @@ export function ReadTrack({
   // The SV summary band (fb-n9-sv): this view's SV clusters at the min size;
   // no band when nothing in view passes it.
   const svVisibleSummary = useMemo(
-    () => (svShown && dataViewportKey === [chrom, start, end, datasetId, linkedSessionId ?? '', linkedRegion ?? '', readStrand ?? ''].join('|')
+    () => (svShown && dataViewportKey === makeDataViewportKey(chrom, start, end, datasetId, linkedSessionId, linkedRegion, readStrand, liftHap)
       ? visibleSvSummary(svSummary, svMinLen, svMinSupport) : null),
-    [svShown, svSummary, svMinLen, svMinSupport, dataViewportKey, chrom, start, end, datasetId, linkedSessionId, linkedRegion, readStrand],
+    [svShown, svSummary, svMinLen, svMinSupport, dataViewportKey, chrom, start, end, datasetId, linkedSessionId, linkedRegion, readStrand, liftHap],
   );
-  const svBand = !publishFeed && svVisibleSummary && regionWidth <= maxRegionForReads ? SV_BAND_HEIGHT : 0;
+  // A first paint has no SV summary yet (it is computed over every read): the band keeps its place, empty, so the rows
+  // do not move when the full set lands.
+  const svPending = Boolean(firstPaint) && svDisplayEnabled && isBAM;
+  const svBand = !publishFeed && (svVisibleSummary || svPending) && regionWidth <= maxRegionForReads ? SV_BAND_HEIGHT : 0;
   // A panel's rows start right below the header (the SV and coverage rows are their own tracks).
   const topBandsHeight = (showCoverageHistogram ? 30 : 0) + svBand;
   useSvSplitRefresh({ stateKey, datasetId, chrom, start, end, enabled: svCapable && !linkedSessionId });
@@ -615,7 +666,11 @@ export function ReadTrack({
   // Reads left over from the previous view (the new request is still pending,
   // or failed) are drawn by nothing and must not be hit or read either: their
   // intervals would pair with the new chrom/start.
-  const currentDataViewportKey = [chrom, start, end, datasetId, linkedSessionId ?? '', linkedRegion ?? '', readStrand ?? ''].join('|');
+  const currentDataViewportKey = makeDataViewportKey(chrom, start, end, datasetId, linkedSessionId, linkedRegion, readStrand, liftHap);
+  // A live-lift panel: coverage may be a separate feed-driven row; publishFeed
+  // suppresses only the embedded histogram, not its map correspondence.
+  const liftCorrespondence = useLiftCorrespondence(currentDataset, chrom, start, end, liftHap,
+    storeShowCoverageHistogram && regionWidth <= maxRegionForReads);
   const isDataViewportStale = dataViewportKey !== currentDataViewportKey;
 
   // Family-tagged BAMs carry compact `fi`/`fq` dimensions on tf_sr. Keep an
@@ -712,15 +767,17 @@ export function ReadTrack({
   ]);
 
   const hitTestReads = isDataViewportStale ? NO_READS : displayReads;
+  const liveLiftBadgeMode = useBrowserStore(s => readBadgeMode(s));
 
   // --- Mouse interaction hook ---
   const {
     dragCluster, dragY, hoverCluster, hoverY,
-    selectedReadIds, hoveredRead, hoveredSv,
+    selectedReadIds, hoveredRead, hoveredSv, pointerRead,
     handleMouseDown, handleClick, handleMouseMove, handleMouseUp,
     handleMouseLeave, handleWheel,
     handleContextMenu, handleKeyDown, contextTarget, closeContextMenu, selectFootprintAt, selectReadById,
   } = useReadTrackMouse({
+    axis: liveLiftAxis, liveLiftBadgeMode,
     displayReads: hitTestReads, width, height, sidebarWidth, regionWidth, start, end, chrom, datasetId, stateKey,
     datasetLabel, datasetColor,
     hasCluster, myClusterAssignments, myClusterOrder, myClusterFocus, hasClusterFocus, mySelectedClusters,
@@ -730,6 +787,11 @@ export function ReadTrack({
     linkedBoundsStart, linkedSessionId, onViewportChange, panScope, genome,
     svEnabled: svShown, svMinLen, svBandHeight: svBand, svSummary: svVisibleSummary,
   });
+
+  // A live-lift panel and its linked source panel outline the molecule under the pointer in both (§5.3).
+  useNativeWheel(canvasRef, handleWheel);
+  const hoverPanelId = useContext(PanelDisplayContext);
+  const liftHoverRows = useLiftHoverRows(hoverPanelId, displayReads, isPanning ? null : pointerRead, chrom, linkedBoundsStart ?? start);
 
   // Cluster counts shown in tooltips should match the full cluster assignment,
   // not just the currently rendered/sample-limited rows.
@@ -746,7 +808,7 @@ export function ReadTrack({
     if (!hasCluster || displayReads.length === 0) return new Map<number, number>();
     const counts = new Map<number, number>();
     for (const read of displayReads) {
-      const cluster = clusterAssignmentForRead(myClusterAssignments, read.id);
+      const cluster = clusterAssignmentForRead(myClusterAssignments, read);
       if (cluster !== undefined) {
         counts.set(cluster, (counts.get(cluster) || 0) + 1);
       }
@@ -796,7 +858,7 @@ export function ReadTrack({
         return intEnd > visibleStart && intStart < visibleEnd;
       });
       if (isVisible) {
-        visibleIds.add(read.id);
+        visibleIds.add(read.analysis_id ?? read.id);
       }
     }
 
@@ -812,7 +874,7 @@ export function ReadTrack({
   const prevActiveIdsKeyRef = useRef<string>('');
   useEffect(() => {
     if (loading || isDataViewportStale || currentDataSequenceRef.current === 0) return;
-    const ids = displayReads.map(r => r.id);
+    const ids = Array.from(new Set(displayReads.map(r => r.analysis_id ?? r.id)));
     const idsKey = ids.join('\0');
     if (idsKey !== prevActiveIdsKeyRef.current) {
       prevActiveIdsKeyRef.current = idsKey;
@@ -828,192 +890,54 @@ export function ReadTrack({
     ruleCtx: import('../../../utils/ruleMatching').RuleMatchContext,
     resolution: number = 500
   ): { mod: number[]; fire: number[]; rules: Record<string, number[]>; layers: Record<string, number[]> } => {
-    const modProfile = new Float32Array(resolution);
-    const fireDiff = new Float32Array(resolution + 1);
+    // The one profile engine (features/plots/profileEngine), 'touch' weighting: an interval counts in every bin it
+    // touches, as this track always has (the numbers are unchanged; profileEngineParity.test.ts).
     // Rule sources the default metaprofile shows count even while its track is hidden (cluster profiles read them).
     const metaprofileRules = activeColormap.rules.filter(rule =>
       activeMetaprofileSourceIds.has(rule.id) || !!defaultMetaprofileToggles[rule.id]);
-    const ruleDiffs: Record<string, Float32Array> = {};
-    for (const rule of metaprofileRules) {
-      ruleDiffs[rule.id] = new Float32Array(resolution + 1);
-    }
-    const layerDiffs: Record<string, Float32Array> = {};
-    const layerPointProfiles: Record<string, Float32Array> = {};
-    const binSize = viewWidth / resolution;
-
-    const coverageDiff = new Float32Array(resolution + 1);
-
-    // Per-type modification counters, written into the layers dict so the
-    // default metaprofile's m6a/m5c/deam sources pick them up
-    // without any extra plumbing. Legacy `modProfile` still tracks the union
-    // (methyl) field for back-compat with the 'mod' toggle.
-    const getOrAllocLayer = (name: string) => {
-      let arr = layerDiffs[name];
-      if (!arr) {
-        arr = new Float32Array(resolution + 1);
-        layerDiffs[name] = arr;
-      }
-      return arr;
-    };
-    const getOrAllocPointLayer = (name: string) => {
-      let arr = layerPointProfiles[name];
-      if (!arr) {
-        arr = new Float32Array(resolution);
-        layerPointProfiles[name] = arr;
-      }
-      return arr;
-    };
-    const addRange = (diff: Float32Array, intStart: number, intEnd: number) => {
-      if (intEnd <= 0 || intStart >= viewWidth) return;
-      const startBin = Math.max(0, Math.floor(Math.max(0, intStart) / binSize));
-      const endBinExclusive = Math.min(resolution, Math.ceil(Math.min(viewWidth, intEnd) / binSize));
-      if (endBinExclusive <= startBin) return;
-      diff[startBin]++;
-      diff[endBinExclusive]--;
-    };
-
+    // Size-class rules read each call's nucsz mark while Size classes is on, as the read canvas does.
+    const metaprofileNucRules = !!enabledModTypes.nucsz && metaprofileRules.some(ruleHasNucConditions);
+    const channelReads: ChannelRead[] = [];
     for (const read of readsForProfile) {
-      if (read.methyl) {
-        for (const pos of read.methyl) {
-          if (pos < 0 || pos >= viewWidth) continue;
-          const bin = Math.min(resolution - 1, Math.floor(pos / binSize));
-          modProfile[bin]++;
-        }
-      }
-
-      if (read.methyl_m6a && read.methyl_m6a.length > 0) {
-        const arr = getOrAllocPointLayer('m6a');
-        for (const pos of read.methyl_m6a) {
-          if (pos < 0 || pos >= viewWidth) continue;
-          arr[Math.min(resolution - 1, Math.floor(pos / binSize))]++;
-        }
-      }
-      if (read.methyl_m5c && read.methyl_m5c.length > 0) {
-        const arr = getOrAllocPointLayer('m5c');
-        for (const pos of read.methyl_m5c) {
-          if (pos < 0 || pos >= viewWidth) continue;
-          arr[Math.min(resolution - 1, Math.floor(pos / binSize))]++;
-        }
-      }
-      if (read.deam && read.deam.length > 0) {
-        const arr = getOrAllocPointLayer('deam');
-        for (const [pos] of read.deam) {
-          if (pos < 0 || pos >= viewWidth) continue;
-          arr[Math.min(resolution - 1, Math.floor(pos / binSize))]++;
-        }
-      }
-
-      // Determine read span from all intervals (footprints + gaps), widened below to every layer/FIRE interval the read
-      // adds, so no bin gets a read's signal without its coverage. Each channel adds the union of the read's interval
-      // bins (utils/metaprofileBins): two intervals meeting inside one bin count the read once there, so every
-      // profile stays within [0, 1].
+      const spans: Record<string, Array<[number, number]>> = {};
+      const points: Record<string, number[]> = {};
+      const push = (name: string, a: number, b: number) => { (spans[name] ??= []).push([a, b]); };
+      if (read.methyl?.length) points.mod = read.methyl;
+      if (read.methyl_m6a?.length) points['layer:m6a'] = read.methyl_m6a;
+      if (read.methyl_m5c?.length) points['layer:m5c'] = read.methyl_m5c;
+      if (read.deam?.length) points['layer:deam'] = read.deam.map(([pos]) => pos);
       let readStart = Infinity, readEnd = -Infinity;
-      const widen = (a: number, b: number) => { if (a < readStart) readStart = a; if (b > readEnd) readEnd = b; };
-      const ruleIntervals: Record<string, [number, number][]> = {};
+      const nucIndex = metaprofileNucRules ? nucSizeIndex(read.layers?.nucsz) : null;
       for (const [intervalStart, intervalEnd, size] of read.intervals) {
         if (intervalStart < readStart) readStart = intervalStart;
         if (intervalEnd > readEnd) readEnd = intervalEnd;
-
-        if (metaprofileRules.length === 0) continue;
-        if (size <= 0) continue;
-        if (size < 10) continue;
-
-        const ruleId = getMatchingRuleId(intervalStart, intervalEnd, size, metaprofileRules, ruleCtx);
-
-        if (ruleId && ruleDiffs[ruleId]) {
-          (ruleIntervals[ruleId] ??= []).push([intervalStart, intervalEnd]);
-        }
+        if (metaprofileRules.length === 0 || size <= 0 || size < 10) continue;
+        const ruleId = getMatchingRuleId(
+          intervalStart, intervalEnd, size, metaprofileRules, ruleCtx,
+          nucIndex ? nucSizeMarkFor(nucIndex, intervalStart, intervalEnd, size) : null,
+        );
+        if (ruleId) push(`rule:${ruleId}`, intervalStart, intervalEnd);
       }
-      for (const [ruleId, ivs] of Object.entries(ruleIntervals)) addReadIntervals(ruleDiffs[ruleId], ivs, viewWidth, resolution);
-
-      // Per-layer presence profiles — iterate read.layers[name].intervals.
-      // Quality filters were applied at working-set construction so the
-      // intervals here reflect the filtered state automatically.
+      // Per-layer presence (quality filters were applied when the working set was built).
       if (read.layers) {
-        // msp and fire both feed the 'fire' profile: their intervals are united per read before binning, so a read
-        // carrying both aliases still counts once per bin.
-        const calledByProfile: Record<string, [number, number][]> = {};
         for (const [layerName, layer] of Object.entries(read.layers)) {
           const ivs = layer?.intervals;
           if (!ivs || ivs.length === 0) continue;
-          const profileLayerName = layerName === 'msp' ? 'fire' : layerName;
-          if (!layerDiffs[profileLayerName]) layerDiffs[profileLayerName] = new Float32Array(resolution + 1);
-          const called = (calledByProfile[profileLayerName] ??= []);
-          for (const [intStart, intEnd, size] of ivs) {
-            if (size <= 0) continue;
-            called.push([intStart, intEnd]);
-            widen(intStart, intEnd);
-          }
-        }
-        for (const [profileLayerName, called] of Object.entries(calledByProfile)) {
-          addReadIntervals(layerDiffs[profileLayerName], called, viewWidth, resolution);
+          const name = `layer:${layerName === 'msp' ? 'fire' : layerName}`;
+          for (const [intStart, intEnd, size] of ivs) if (size > 0) push(name, intStart, intEnd);
         }
       }
-
-      // FIRE density profile
-      if (read.fire) {
-        const spans: [number, number][] = [];
-        for (const [fStart, fEnd] of read.fire) { spans.push([fStart, fEnd]); widen(fStart, fEnd); }
-        addReadIntervals(fireDiff, spans, viewWidth, resolution);
-      }
-
-      // Increment coverage bins for this read's span
-      if (readStart < readEnd) {
-        addRange(coverageDiff, readStart, readEnd);
-      }
+      if (read.fire) for (const [fStart, fEnd] of read.fire) push('fire', fStart, fEnd);
+      channelReads.push({ start: readStart < readEnd ? readStart : 0, end: readStart < readEnd ? readEnd : 0, spans, points });
     }
-
-    const coverage = new Float32Array(resolution);
-    const fireProfile = new Float32Array(resolution);
-    const ruleProfiles: Record<string, number[]> = {};
-    const layerProfiles: Record<string, number[]> = {};
-    let coverageRunning = 0;
-    let fireRunning = 0;
-    const ruleRunning = new Map<string, number>();
-    const layerRunning = new Map<string, number>();
-    for (const id of Object.keys(ruleDiffs)) ruleRunning.set(id, 0);
-    for (const id of Object.keys(layerDiffs)) layerRunning.set(id, 0);
-    for (const id of Object.keys(layerPointProfiles)) {
-      if (!layerProfiles[id]) layerProfiles[id] = new Array(resolution).fill(0);
-    }
-
-    // Normalize by per-position coverage to account for non-spanning reads
-    for (let bin = 0; bin < resolution; bin++) {
-      coverageRunning += coverageDiff[bin];
-      coverage[bin] = coverageRunning;
-      fireRunning += fireDiff[bin];
-      fireProfile[bin] = fireRunning;
-      for (const [ruleId, diff] of Object.entries(ruleDiffs)) {
-        const next = (ruleRunning.get(ruleId) ?? 0) + diff[bin];
-        ruleRunning.set(ruleId, next);
-        if (!ruleProfiles[ruleId]) ruleProfiles[ruleId] = new Array(resolution).fill(0);
-        ruleProfiles[ruleId][bin] = next;
-      }
-      for (const [layerName, diff] of Object.entries(layerDiffs)) {
-        const next = (layerRunning.get(layerName) ?? 0) + diff[bin];
-        layerRunning.set(layerName, next);
-        if (!layerProfiles[layerName]) layerProfiles[layerName] = new Array(resolution).fill(0);
-        layerProfiles[layerName][bin] = next;
-      }
-      for (const [layerName, points] of Object.entries(layerPointProfiles)) {
-        if (!layerProfiles[layerName]) layerProfiles[layerName] = new Array(resolution).fill(0);
-        layerProfiles[layerName][bin] += points[bin];
-      }
-
-      if (coverage[bin] > 0) {
-        modProfile[bin] /= coverage[bin];
-        fireProfile[bin] /= coverage[bin];
-        for (const rule of metaprofileRules) {
-          if (ruleProfiles[rule.id]) ruleProfiles[rule.id][bin] /= coverage[bin];
-        }
-        for (const layerName in layerProfiles) {
-          layerProfiles[layerName][bin] /= coverage[bin];
-        }
-      }
-    }
-
-    return { mod: Array.from(modProfile), fire: Array.from(fireProfile), rules: ruleProfiles, layers: layerProfiles };
-  }, [activeColormap, activeMetaprofileSourceIds, defaultMetaprofileToggles]);
+    const profiles = finishChannels(accumulateChannels(channelReads, resolution, viewWidth, 'touch'));
+    const zeros = () => new Array(resolution).fill(0);
+    const rules: Record<string, number[]> = {};
+    for (const rule of metaprofileRules) rules[rule.id] = profiles[`rule:${rule.id}`] ?? zeros();
+    const layers: Record<string, number[]> = {};
+    for (const [name, values] of Object.entries(profiles)) if (name.startsWith('layer:')) layers[name.slice(6)] = values;
+    return { mod: profiles.mod ?? zeros(), fire: profiles.fire ?? zeros(), rules, layers };
+  }, [activeColormap, activeMetaprofileSourceIds, defaultMetaprofileToggles, enabledModTypes.nucsz]);
 
   // Compute metaprofile from the profile read pool, not the final drawn
   // sample, so profile tracks do not shift when Fit-mode sampling changes.
@@ -1106,7 +1030,7 @@ export function ReadTrack({
         const perCluster: Record<number, Record<string, number[]>> = {};
         for (const clusterId of clusterIds) {
           const clusterReads = profileReads.filter(
-            r => clusterAssignmentForRead(myClusterAssignments, r.id) === clusterId,
+            r => clusterAssignmentForRead(myClusterAssignments, r) === clusterId,
           );
           if (clusterReads.length === 0) continue;
           const cp = computeMetaprofileFromReads(clusterReads, viewWidth, ruleCtx);
@@ -1238,9 +1162,11 @@ export function ReadTrack({
 
   // Redraw on entering/leaving an export: figures leave out on-screen hints.
   const exportInProgress = useBrowserStore(s => s.exportInProgress);
+  // Hidden by full view: nothing is drawn (a relabel or a pan elsewhere draws it once when it is shown again).
+  const panelActive = usePanelActive();
   useLayoutEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canvas || !panelActive) return;
     canvas.dataset.readTrackReady = 'false';
     if (hasStaleDisplayReads) {
       // While the new view loads, the previous frame stays up; if its request
@@ -1252,11 +1178,13 @@ export function ReadTrack({
 
     const drawStarted = nowMs();
     drawReadTrack({
+      axis: liveLiftAxis,
       canvas,
       displayReads,
       width,
       selectedConsensusFamilies,
       relatedConsensusFamilies:highlightedConsensusFamilies,
+      nucGeoFocus,
       consensusViewJobId:consensusView.jobId,
       nativeLattice,latticeShowHits:consensusView.latticeHits,latticeStyle:consensusView.latticeStyle,
       height: renderHeight,
@@ -1288,7 +1216,7 @@ export function ReadTrack({
       readSeparatorWidth,
       showCoverageHistogram,
       isReversed,
-      activeColormap,
+      activeColormap: drawColormap,
       genes,
       allPeaks,
       orthogonalTracks: orthogonalTracksForRules,
@@ -1300,7 +1228,11 @@ export function ReadTrack({
       linkedBoundsStart,
       linkedSessionId,
       linkedHighlightIds,
+      liftHoverRows: exportInProgress ? undefined : liftHoverRows,
+      liveLiftBadgeMode,
       readHighlightIds: exportInProgress ? null : readHighlightIds,
+      readHighlightMode,
+      uncertainSvIds,
       selectedReadIds,
       selectedFootprints,
       footprintCrossHighlight,
@@ -1313,6 +1245,7 @@ export function ReadTrack({
       maxRegionForReads,
       coverageData: coverageData ?? undefined,
       coverageMax,
+      coverageLiveLift,
       annotationOverlays: myAnnotationOverlays ?? undefined,
       annotationColors,
       enabledAnnotationTypes,
@@ -1321,6 +1254,8 @@ export function ReadTrack({
       annotationThresholds,
       layerColors,
       svEnabled: svShown,
+      liftCorrespondence,
+      liftHap,
       svMinLen,
       svBandHeight: svBand,
       svSummary: svVisibleSummary,
@@ -1355,7 +1290,7 @@ export function ReadTrack({
       const { panOffset: currentPanOffset, panScope: currentPanScope, setPanOffset } = useEphemeralStore.getState();
       if (currentPanOffset !== 0 && currentPanScope === panScope) setPanOffset(0);
     }
-  }, [loading, dataSequence, isDataViewportStale, displayReads, width, renderHeight, regionWidth, chrom, start, end, hasCluster, myClusterAssignments, myClusterOrder, drawLoadingState, hasStaleDisplayReads, fetchFailed, genes, allPeaks, hasFilter, myFilteredReadIds, datasetLabel, datasetColor, sidebarWidth, enabledModTypes, enabledCigarTypes, isBAM, layerType, modificationOverlays, overlayMarks, jupyterReadHighlights, jupyterFootprintColorMap, allJupyterMarkers, hasClusterFocus, myClusterFocus, mySelectedClusters, linkedBoundsStart, linkedHighlightIds, clusterStateConsensus, isReversed, activeColormap, orthogonalTracksForRules, renderFillReadHeight, renderReadRowHeight, readSeparatorMode, readSeparatorMinHeight, readSeparatorWidth, renderReadScrollOffset, selectedReadIds, showCoverageHistogram, maxRegionForReads, selectedFootprints, footprintCrossHighlight, footprintGroups, selectedFamilyGroupId, footprintAnalysisLayer, coverageData, coverageMax, myAnnotationOverlays, annotationColors, enabledAnnotationTypes, annotationOpacityMin, annotationOpacityMax, annotationThresholds, layerColors, isPanning, canvasRenderVersion, consensusView, highlightedConsensusFamilies, nativeLattice, exportInProgress, readHighlightIds, svDisplayEnabled, svShown, svMinLen, svBand, svVisibleSummary, zoomedOutBannerShown, fiberhmmLayers.svActive, fiberhmmLayers.settings.linkSplit]);
+  }, [loading, dataSequence, isDataViewportStale, displayReads, width, renderHeight, regionWidth, chrom, start, end, hasCluster, myClusterAssignments, myClusterOrder, drawLoadingState, hasStaleDisplayReads, fetchFailed, genes, allPeaks, hasFilter, myFilteredReadIds, datasetLabel, datasetColor, sidebarWidth, enabledModTypes, enabledCigarTypes, isBAM, layerType, modificationOverlays, overlayMarks, jupyterReadHighlights, jupyterFootprintColorMap, allJupyterMarkers, hasClusterFocus, myClusterFocus, mySelectedClusters, linkedBoundsStart, linkedHighlightIds, liftHoverRows, liveLiftBadgeMode, clusterStateConsensus, isReversed, activeColormap, drawColormap, orthogonalTracksForRules, renderFillReadHeight, renderReadRowHeight, readSeparatorMode, readSeparatorMinHeight, readSeparatorWidth, renderReadScrollOffset, selectedReadIds, showCoverageHistogram, maxRegionForReads, selectedFootprints, footprintCrossHighlight, footprintGroups, selectedFamilyGroupId, footprintAnalysisLayer, coverageData, coverageMax, coverageLiveLift, myAnnotationOverlays, annotationColors, enabledAnnotationTypes, annotationOpacityMin, annotationOpacityMax, annotationThresholds, layerColors, isPanning, canvasRenderVersion, consensusView, highlightedConsensusFamilies, nativeLattice, exportInProgress, readHighlightMode, readHighlightIds, uncertainSvIds, svDisplayEnabled, svShown, svMinLen, svBand, svVisibleSummary, zoomedOutBannerShown, fiberhmmLayers.svActive, fiberhmmLayers.settings.linkSplit, liftCorrespondence, liftHap, liveLiftAxis, nucGeoFocus, nucPatchLabelsVersion, panelActive]);
 
   // What this panel loaded and shows, for Copilot's troubleshooting diagnostics.
   useEffect(() => {
@@ -1394,19 +1329,22 @@ export function ReadTrack({
       datasetId, chrom, start, end, isReversed, sidebarWidth,
       linkedOffset: linkedBoundsStart !== undefined ? linkedBoundsStart - start : 0,
       reads: feedSnapshot?.reads ?? NO_READS,
+      liftCorrespondence,
       dataChrom: feedSnapshot?.chrom ?? chrom,
       dataStart: feedSnapshot?.start ?? start,
       dataEnd: feedSnapshot?.end ?? end,
       sv: feedSnapshot?.sv ?? null,
+      svPending: svPending && !feedSnapshot?.sv,
       zoomedOut: zoomedOutPastReads,
       panScope,
       linked: Boolean(linkedSessionId),
     });
-  }, [stateKey, publishFeed, datasetId, chrom, start, end, isReversed, sidebarWidth, linkedBoundsStart, feedSnapshot, zoomedOutPastReads, panScope, linkedSessionId]);
+  }, [stateKey, publishFeed, datasetId, chrom, start, end, isReversed, sidebarWidth, linkedBoundsStart, feedSnapshot, zoomedOutPastReads, panScope, linkedSessionId, liftCorrespondence, svPending]);
   useEffect(() => () => { if (stateKey && publishFeed) useTrackFeedStore.getState().drop(stateKey); }, [stateKey, publishFeed]);
 
   const { text: statusText, title: statusTitle } = formatReadStatus({
     loading,
+    partial: Boolean(firstPaint),
     displayed: displayReads.length,
     serverReturned: reads.length,
     working: workingReads,
@@ -1417,7 +1355,8 @@ export function ReadTrack({
   const signalSummary = useBrowserStore(s => s.signalCounts[stateKey]?.counts);
   const policyStatus = signalSummary ? readPolicyHiddenText(signalSummary) : '';
   const visibleStatusText = policyStatus ? `${statusText} · ${policyStatus}` : statusText;
-  const signalStatusTitle = signalSummary ? `${statusTitle}; Signal: ${signalCountText(signalSummary)} (before call filters and sampling)` : statusTitle;
+  const showSignal = useBrowserStore(s => datasetsCarrySignal(s.datasets));
+  const signalStatusTitle = signalSummary && showSignal ? `${statusTitle}; Signal: ${signalCountText(signalSummary)} (before call filters and sampling)` : statusTitle;
   const setReadStatus = useReadStatusStore(st => st.setStatus);
   useEffect(() => {
     if (!stateKey) return;
@@ -1471,8 +1410,10 @@ export function ReadTrack({
   // filter values change so a fresh extreme setting warns again.
   const [aggressiveFilterDismissed, setAggressiveFilterDismissed] = useState(false);
   useEffect(() => { setAggressiveFilterDismissed(false); }, [minFootprints, minFpQuality]);
-  const hasReadFilterSetting = minFootprints > 0 || minFpQuality > 0;
-  const filterCounts = readFilterCounts(totalReads, workingReads, workingSampling, spanningOnly);
+  // Only filters the user set count, and only over reads the request did not pick by name (a cluster cohort is not
+  // a filter hiding the rest of the view).
+  const hasReadFilterSetting = userReadFilterSet(minFootprints, minFootprintsAuto, minFpQuality);
+  const filterCounts = readFilterCounts(totalReads, workingReads, workingSampling, spanningOnly, readScoped, inScopeBeforeFilters);
   const filteredOutCount = filterCounts.hidden;
   const filteredFraction = filterCounts.fraction;
   // In a one-strand panel the other strand's reads aren't filtered out by
@@ -1563,12 +1504,15 @@ export function ReadTrack({
       data-read-track-render-count={displayReads.length}
       data-read-track-fetch-count={fulfilledReadFetchCount}
       data-read-track-loading={loading ? 'true' : 'false'}
+      data-read-track-partial={firstPaint ? 'true' : 'false'}
       data-read-track-error={fetchFailed ? `Could not load reads for ${datasetLabel || currentDataset?.label || datasetId}. Reload the region, then export again.` : undefined}
       data-consensus-highlight-families={[...highlightedConsensusFamilies].join(',')}
       data-native-lattice-read-count={nativeLattice?Object.keys(nativeLattice.reads).length:0}
       data-read-track-export-expanded={exportFullReadTracks && (readDisplayMode === 'all' || matchedExportActive) ? 'true' : undefined}
     >
-      {!isDataViewportStale && <ReadSampleNotice datasetId={datasetId} sampling={workingSampling} />}
+      <ExpansionOverlay axis={liveLiftAxis} viewKey={liveLiftView} sidebar={sidebarWidth} panel={panel} />
+      <DifferenceGuide axis={liveLiftAxis} viewKey={liveLiftView} chrom={chrom} sidebar={sidebarWidth} />
+      {!isDataViewportStale && <ReadSampleNotice datasetId={datasetId} sampling={workingSampling} firstPaint={firstPaint} />}
       {latticeMessage&&<div data-testid={`native-lattice-status-${datasetId}`} className="absolute bottom-0 left-1 z-20 bg-white/90 dark:bg-gray-900/90 text-[11px] text-gray-600 dark:text-gray-300 px-1 pointer-events-none">{latticeMessage}</div>}
       {/* The read count ("584/3,170 visible") is shown in the panel header (readStatusStore). */}
       {warning && !loading && (
@@ -1753,7 +1697,8 @@ export function ReadTrack({
         />
       )}
       {showSplitAwayBanner && splitPanel && <SplitAwayBanner panel={splitPanel} pinned={splitPinned} />}
-      {showEmptyCard && (
+      <MetaReadsPending chrom={chrom} />
+      {showEmptyCard && !metaPending && (
         <div className={`absolute inset-0 z-20 flex justify-center p-1 pointer-events-none ${height >= 220 ? 'items-center' : 'items-start pt-2'}`} data-render-hide="true">
           {/* In a short track the card scrolls rather than being cut top and bottom (M14). */}
           <div className="max-h-full overflow-y-auto bg-white/90 dark:bg-gray-800/90 backdrop-blur-sm rounded-lg px-4 py-3 shadow-sm border border-gray-200 dark:border-white/10 pointer-events-auto" data-testid={`read-track-empty-card-${datasetId}`}>
@@ -1812,6 +1757,7 @@ export function ReadTrack({
       )}
       <canvas
         ref={canvasRef}
+        data-wheel-gutter={sidebarWidth}
         width={width}
         height={renderHeight}
         onClick={handleClick}
@@ -1824,8 +1770,7 @@ export function ReadTrack({
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseLeave}
-        onWheel={handleWheel}
-        title="Drag to pan. Right-click a read for actions; Shift+click selects a read, Cmd/Ctrl+click a footprint. Cmd/Ctrl+scroll zooms row height."
+        title="Drag to pan. Right-click a read for actions; Shift+click selects a read, Cmd/Ctrl+click a footprint. Cmd/Ctrl+scroll zooms the genomic region around the pointer. Shift+scroll sizes read rows in all panels together; plain scroll moves through rows."
         className={`block select-none outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500 ${cursorClass}`}
         draggable={false}
         // SVG/PDF figures place reads as one high-resolution image.
@@ -1890,6 +1835,8 @@ export function ReadTrack({
           myReadStateDetails={myReadStateDetails}
           annotationOverlays={myAnnotationOverlays}
           annotationColors={annotationColors}
+          svSummary={svSummary}
+          datasetId={datasetId}
         />
       )}
       {hoveredSv && !isPanning && !contextTarget && (

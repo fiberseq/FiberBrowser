@@ -103,8 +103,10 @@ def render(spec: FigureSpec, state, fmt: str = "png", scale: float = 2.0, max_pi
     from services.read_quality_filters import backend_quality_filters, quality_filters_for_request
 
     colormap = spec.fe.get("activeColormap") or {}
-    from services.signal_evidence import signal_filters_for_request
-    with signal_filters_for_request(spec.fe.get("signalFilters")), quality_filters_for_request(backend_quality_filters(colormap.get("qualityFilters"))):
+    from services.signal_evidence import signal_filters_for_request, state_carries_signal
+    # As in the browser: saved signal filters apply only while a loaded dataset carries signal tags.
+    signal_filters = spec.fe.get("signalFilters") if state_carries_signal(state) else None
+    with signal_filters_for_request(signal_filters), quality_filters_for_request(backend_quality_filters(colormap.get("qualityFilters"))):
         return _render(spec, state, fmt, scale, max_pixels)
 
 

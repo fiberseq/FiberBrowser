@@ -59,3 +59,19 @@ def test_a_reload_never_lands_between_the_close_and_the_next_page(client):
 def test_quit_is_not_available_to_the_copilot():
     from services.natural_language_commands import is_copilot_api_call_allowed
     assert is_copilot_api_call_allowed("POST", "/api/quit")[0] is False
+
+
+def test_keep_running_never_stops_the_server_when_the_last_tab_closes(client, monkeypatch):
+    """A shared test server (FIBERBROWSER_KEEP_RUNNING): a script's tab closing never stops it."""
+    monkeypatch.setenv("FIBERBROWSER_KEEP_RUNNING", "1")
+    utility._tab_last_seen.clear()
+    utility._pending_shutdown_task = None
+    assert client.post("/api/tabs/heartbeat", params={"tab": "script"}).status_code == 200
+    reply = client.post("/api/shutdown", params={"tab": "script"}).json()
+    assert "staying up" in reply["message"]
+    assert utility._pending_shutdown_task is None
+    assert utility._should_shut_down(utility._last_tab_closed + utility.SHUTDOWN_CHECK_S + 1) is False
+    monkeypatch.delenv("FIBERBROWSER_KEEP_RUNNING")
+    assert utility._should_shut_down(utility._last_tab_closed + utility.SHUTDOWN_CHECK_S + 1) is True
+    utility._tab_last_seen.clear()
+    utility._closed_tabs.clear()

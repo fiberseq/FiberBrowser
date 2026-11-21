@@ -837,7 +837,7 @@ def pipeline_command() -> dict:
         from services.fiberhmm_runtime import fiberhmm_install_help
         hint = fiberhmm_install_help()
     except Exception:
-        hint = "Install FiberHMM 3 (pip install 'fiberhmm[consensus]>=3.0.3,<4') in FiberBrowser's Python."
+        hint = "Install FiberHMM 3 (pip install 'fiberhmm[consensus]>=3.2.0,<4') in FiberBrowser's Python."
     return {"argv": None, "source": None, "env": {},
             "hint": "fiberhmm-pipeline (FiberHMM 3.0 or newer) is not installed. " + hint}
 
@@ -1113,6 +1113,9 @@ DEFAULT_OPTIONS = {
     "prob_threshold": None,     # ML threshold override (0-255)
     "use_m5c": "auto",          # DddA CpG-aware recall: auto | on | off
     "cpg_mask_policy": "unmethylated-only",
+    # Minimum MAPQ, always passed to a new run (owner, 20 Nov 2026): the value the wizard shows, so a different
+    # FiberHMM default cannot change a run silently. None: not passed (a Library re-call passes its recorded value).
+    "min_mapq": 0,
 }
 CPG_POLICIES = ("unmethylated-only", "methylated-only")
 ALIGNMENT_SETS = ("primary", "primary-supplementary", "all")
@@ -1165,6 +1168,19 @@ def normalize_options(raw: Optional[dict]) -> dict:
     if options["cpg_mask_policy"] not in CPG_POLICIES:
         raise InputError("CpG masking policy: unmethylated-only or methylated-only.", "options")
     options["chimera_filter"] = bool(options["chimera_filter"])
+    mapq = options["min_mapq"]
+    if mapq in ("", None):
+        options["min_mapq"] = DEFAULT_OPTIONS["min_mapq"]
+    else:
+        try:
+            if isinstance(mapq, bool) or float(mapq) != int(float(mapq)):
+                raise ValueError(mapq)
+            mapq = int(float(mapq))
+        except (TypeError, ValueError) as exc:
+            raise InputError("Minimum MAPQ: a whole number from 0 to 255.", "options") from exc
+        if not 0 <= mapq <= 255:
+            raise InputError("Minimum MAPQ: a whole number from 0 to 255.", "options")
+        options["min_mapq"] = mapq
     threshold = options["prob_threshold"]
     if threshold in ("", None):
         options["prob_threshold"] = None
@@ -1188,8 +1204,11 @@ def normalize_options(raw: Optional[dict]) -> dict:
 
 
 def changed_options(options: dict, enzyme: str) -> list[str]:
-    """Human names of the options that differ from the defaults (for the job card)."""
+    """Human names of the options that differ from the defaults (for the job card), and the MAPQ, which a new run
+    always passes."""
     labels = []
+    if options.get("min_mapq") is not None:
+        labels.append(f"MAPQ {options['min_mapq']}")
     if options["dedup"] != "auto":
         labels.append(f"duplicates {options['dedup']}")
     if options["dedup_mode"] == "collapse" and options["dedup"] != "off":
@@ -1214,11 +1233,15 @@ def changed_options(options: dict, enzyme: str) -> list[str]:
 
 
 def option_args(options: dict, enzyme: str, help_text: Optional[str]) -> list[str]:
-    """Pipeline flags for the non-default options, spelled as this pipeline spells them."""
+    """Pipeline flags for the non-default options, spelled as this pipeline spells them, and ``--min-mapq``, which a
+    new run always passes (``min_mapq`` None: not passed)."""
     wanted: list[tuple[str, list[list[str]]]] = []
 
     def want(name: str, *spellings: list[str]) -> None:
         wanted.append((name, list(spellings)))
+
+    if options.get("min_mapq") is not None:
+        want("minimum MAPQ", ["--min-mapq", str(options["min_mapq"])])
 
     if options["dedup"] == "on":
         want("PCR duplicate marking on", ["--dedup", "on"], ["--dedup"])

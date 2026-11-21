@@ -15,7 +15,7 @@ def prefs_file(tmp_path, monkeypatch):
 
 
 def test_merge_per_genome_and_forget(prefs_file):
-    assert AP.load_preferences() == {'chipatlas_selection': {}, 'pinned_motifs': {}}
+    assert AP.load_preferences() == {'chipatlas_selection': {}, 'pinned_motifs': {}, 'layer_colors': {}}
     AP.update_preferences({'chipatlas_selection': {'dm6': {'cellTypeClasses': ['Embryo'], 'cellTypes': ['S2', 'S2', ' ']}}})
     AP.update_preferences({'chipatlas_selection': {'hg38': {'cellTypeClasses': [], 'cellTypes': ['K562']}},
                            'pinned_motifs': {'fly': ['vfl']}})

@@ -45,6 +45,14 @@ describe('layer color semantics', () => {
     expect(keys).toEqual(expect.arrayContaining(['nuc', 'tf']));
   });
 
+  it('never offers the nucleosome lane layers (sizes, segments, regularity, patches) as coverage metaprofiles', () => {
+    const keys = getMetaprofileSourceEntries([
+      { available_layers: { nuc: true, nucsz: true, nucseg: true, nucreg: true, nucpatch: true } },
+    ]).map(entry => entry.key);
+    expect(keys).toContain('nuc');
+    for (const k of ['nucsz', 'nucseg', 'nucreg', 'nucpatch']) expect(keys).not.toContain(k);
+  });
+
   it('presents FiberHMM DddA mCG spans as named molecular layers', () => {
     const groups = getCanonicalLayerGroups([{
       available_layers: { nuc: true, tf: true, ddda_mcg: true, ddda_mcg_hemi: true },

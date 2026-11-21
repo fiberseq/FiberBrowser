@@ -57,7 +57,7 @@ export function KeyboardShortcutsModal({ open, onClose }: Props) {
         </div>
         <div className="px-4 py-3 space-y-4">
           {SHORTCUT_CATEGORIES.map(category => {
-            const items = KEYBOARD_SHORTCUTS.filter(s => s.category === category);
+            const items = KEYBOARD_SHORTCUTS.filter(s => s.category === category && (!s.available || s.available()));
             if (items.length === 0) return null;
             return (
               <div key={category}>

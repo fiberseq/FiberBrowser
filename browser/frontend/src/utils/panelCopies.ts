@@ -1,11 +1,12 @@
 import type { PanelConfig } from '../types';
+import { withoutGraphMembership } from '../stores/graphMembership';
 import { canLinkToMainView, inComparisonGroup, type Locus } from './panelNavigation';
 
 /** Independent panel state and locus used by panel copies and region views. */
 export function copyPanelAtSite(source: PanelConfig, id: string, main: Locus, linked = false): PanelConfig {
   const linkedGenomeCopy = Boolean(linked && source.genome && !source.ownLocus && !inComparisonGroup(source));
   return {
-    ...source,
+    ...withoutGraphMembership(source),
     id,
     subTracks: source.subTracks.map(track => ({ ...track })),
     stateKey: id,

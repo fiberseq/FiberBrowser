@@ -1,3 +1,5 @@
+import { openPlots } from '../../../features/plots/workspace';
+import { openSuppliedPlot } from '../../../features/plots/supplied';
 import type { FootprintAnalysisResult } from '../../../api/footprints';
 import type { SelectedFootprint, FootprintGroup } from '../../../types';
 import type { Dataset } from '../../../types/dataset';
@@ -11,6 +13,9 @@ import { useBrowserStore } from '../../../stores/browserStore';
 import { AnalysisButton, AnalysisPanelHeader, AnalysisStatus } from '../shared';
 import { wilsonCountInterval } from '../../../utils/statistics';
 import { Trash } from '../../ui/Icons';
+import { PlotSetYScaleControl } from '../../charts/PlotSetYScaleControl';
+import { DEFAULT_PLOT_SET_Y_SCALE, type PlotSetYScale } from '../../../utils/plotSetYScale';
+import { useRememberedState } from '../../../hooks/useRememberedState';
 
 interface SizesTabProps {
   result: FootprintAnalysisResult;
@@ -40,6 +45,11 @@ export function SizesTab({
   footprintGroups, addFootprintGroup, updateFootprintGroup, removeFootprintGroup,
   hideCartList,
 }: SizesTabProps) {
+  // Several selected footprints: their histograms on their own y (default) or one shared y (reads per bin compare).
+  const [yScale, setYScale] = useRememberedState<PlotSetYScale>('footprints:sizes-yscale', () => DEFAULT_PLOT_SET_Y_SCALE);
+  const sharedTop = useMemo(() => (yScale.mode === 'shared' && selectedFootprints.length > 1
+    ? Math.max(0, ...selectedFootprints.map((_fp, fpIdx) => sizeHistogramTop(result, targetDatasets, fpIdx))) || undefined
+    : undefined), [yScale.mode, selectedFootprints, result, targetDatasets]);
   return (
     <div className="space-y-3">
       <AnalysisPanelHeader
@@ -67,8 +77,14 @@ export function SizesTab({
           </AnalysisButton>
         ) : undefined}
       />
+      {selectedFootprints.length > 1 && (
+        <PlotSetYScaleControl value={yScale} onChange={p => setYScale(v => ({ ...v, ...p }))} testId="footprint-sizes-yscale"
+          rawLabel="Reads" enrichment={false} scope={false}
+          sharedHint="Every selected footprint's histogram on one reads axis (its tallest bar or interval sets it)" />
+      )}
       {selectedFootprints.map((fp, fpIdx) => (
         <FootprintSizeBlock
+          yMax={sharedTop}
           // Keyed by the footprint so a new selection starts from its own range.
           key={`${fp.chrom}:${fp.absStart}-${fp.absEnd}:${fp.layer ?? ''}`}
           fp={fp}
@@ -134,6 +150,22 @@ export function SizesTab({
   );
 }
 
+/** The top a footprint's size histogram needs: its tallest bar or Wilson upper limit over the datasets. */
+export function sizeHistogramTop(result: FootprintAnalysisResult, targetDatasets: Dataset[], fpIdx: number): number {
+  let top = 0;
+  for (const ds of targetDatasets) {
+    const stats = result.overlap_stats[ds.id]?.per_footprint?.[fpIdx];
+    const counts = stats?.size_histogram?.counts ?? [];
+    const total = stats?.overlap_count ?? 0;
+    for (const value of counts) {
+      const v = Number(value) || 0;
+      if (v <= 0) continue;
+      top = Math.max(top, v, wilsonCountInterval(v, total).high);
+    }
+  }
+  return top;
+}
+
 /** Default range for a clicked footprint: its size class, to adjust from. */
 function defaultRange(size: number): { min: number; max: number | null } {
   if (size >= 90) return { min: 90, max: null };
@@ -168,8 +200,10 @@ function sizeRangeGroup(fp: SelectedFootprint, fpIdx: number, min: number, max: 
 }
 
 function FootprintSizeBlock({
-  fp, fpIdx, selectedCount, result, isFullView, targetDatasets, chartWidth, footprintGroups, addFootprintGroup,
+  fp, fpIdx, selectedCount, result, isFullView, targetDatasets, chartWidth, footprintGroups, addFootprintGroup, yMax,
 }: {
+  /** A shared y top across the selected footprints' histograms (absent: own y). */
+  yMax?: number;
   fp: SelectedFootprint;
   fpIdx: number;
   selectedCount: number;
@@ -281,7 +315,8 @@ function FootprintSizeBlock({
           Try turning off <span className="font-mono">Full-length</span> or loosening Quality filters.
         </AnalysisStatus>
       ) : (
-        <div ref={chartBoxRef} className="min-w-0" data-testid="footprint-size-histogram">
+        <div ref={chartBoxRef} className="min-w-0" data-testid="footprint-size-histogram"
+          data-y-max={yMax ?? sizeHistogramTop(result, targetDatasets, fpIdx)} data-y-fixed={yMax != null ? 'true' : 'false'}>
           <HistogramChart
             groups={histogram.groups}
             width={histogramWidth}
@@ -290,9 +325,16 @@ function FootprintSizeBlock({
             groupedLayout={targetDatasets.length > 1}
             selection={selection}
             onSelectRange={selectBins}
+            yMax={yMax}
           />
-          <div className="mt-0.5 text-[11px] text-gray-500">
+          <div className="mt-0.5 flex items-center gap-2 text-[11px] text-gray-500">
             Sizes of the footprints reads have here. Drag across the bars to choose a size range.
+            <button type="button" className="ml-auto rounded border border-amber-300 px-1 text-[10px] font-semibold text-amber-900 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-100"
+              data-testid="footprint-size-open-supplied" title="Open this histogram in Plots: these exact counts per dataset (Compare, export, the Gallery)."
+              onClick={() => openClassHistogramInPlots(result, targetDatasets, fpIdx, fp)}>Open in Plots</button>
+            <button type="button" className="rounded border border-gray-200 px-1 text-[10px] text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300"
+              data-testid="footprint-size-open-in-plots" title="The footprint size histogram of the whole view in Plots (a different measure: every footprint whose midpoint is in view, from the display sample), per dataset or cluster."
+              onClick={() => openPlots({ type: 'size-histogram', where: 'view', groupBy: 'dataset' })}>the view's histogram in Plots</button>
           </div>
         </div>
       )}
@@ -321,4 +363,22 @@ function FootprintSizeBlock({
       {savedMessage && <div className="text-[11px] text-emerald-700 dark:text-emerald-300">{savedMessage} (see Saved)</div>}
     </div>
   );
+}
+
+/** This footprint's size histogram (the analysis's counts, per dataset) as a supplied plot in Plots, exactly. */
+export function openClassHistogramInPlots(result: { overlap_stats: Record<string, { per_footprint?: Array<{ size_histogram?: { bins: number[]; counts: number[]; bin_width?: number } } | undefined> } | undefined> },
+  datasets: Array<{ id: string; color?: string; label?: string; name?: string }>, fpIdx: number, fp: { absStart: number; absEnd: number; size?: number; chrom?: string }): string | null {
+  const first = datasets.map(ds => result.overlap_stats[ds.id]?.per_footprint?.[fpIdx]?.size_histogram).find(Boolean);
+  if (!first) return null;
+  const bw = first.bin_width ?? (first.bins.length > 1 ? first.bins[1] - first.bins[0] : 5);
+  const s = useBrowserStore.getState();
+  return openSuppliedPlot({
+    type: 'size-histogram', name: `Footprint sizes at ${fp.absStart.toLocaleString('en-US')}`, groupBy: 'dataset',
+    datasets: datasets.map(ds => getDatasetDisplayLabel(ds as never)),
+    spec: { origin: 'Footprints › Sizes', x0: first.bins[0], dx: bw, xLabel: `footprint size (${bw} bp bins)`, yLabel: 'reads',
+      measures: `per read, the size of its first footprint overlapping ${fp.absStart.toLocaleString('en-US')}–${fp.absEnd.toLocaleString('en-US')} (reads in the analysis scope, the analysis sample); ${bw} bp bins from ${first.bins[0]} to ${first.bins[first.bins.length - 1] + bw} bp; reads per bin` },
+    series: datasets.map(ds => ({ id: ds.id, title: getDatasetDisplayLabel(ds as never), ...(ds.color ? { color: ds.color } : {}),
+      values: (result.overlap_stats[ds.id]?.per_footprint?.[fpIdx]?.size_histogram?.counts ?? first.bins.map(() => 0)).map(Number) })),
+    locus: { chrom: fp.chrom ?? s.chrom, start: fp.absStart, end: fp.absEnd, genome: null },
+  });
 }

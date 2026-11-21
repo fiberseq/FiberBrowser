@@ -461,7 +461,10 @@ def _fetch(ctx: TrackContext, plan: dict, max_reads: int, filter_param: str, ser
     issued here through DataCache.get with a key of all its parameters.
     """
     from services.read_endpoint import compact_reads_payload_for_request
+    from services.lift.capability import require
 
+    # Figure read tracks paint extent hulls: refused for live-lift datasets (§3.10).
+    require(ctx.state.get_dataset(ctx.panel.dataset_id) if hasattr(ctx.state, 'get_dataset') else None, 'figure')
     fe, ds = ctx.fe, ctx.panel.dataset
     meta_layers = sorted(_active_metaprofile_ids(fe)) if server_meta else []
     params = dict(
@@ -913,6 +916,7 @@ def _group_on_chrom(group: dict, chrom) -> bool:
 
 
 def _paint_reads(p: _Painter, reads: list, st: dict, peaks: list, genes: list, dataset: dict):
+    from services.figure.layer_colours import mark_color as _mark_color
     ctx, fe, cmap = p.ctx, p.fe, p.cmap
     n = len(reads)
     rows_all = np.arange(n)
@@ -933,9 +937,12 @@ def _paint_reads(p: _Painter, reads: list, st: dict, peaks: list, genes: list, d
     if not loaded:
         spec_panels = getattr(getattr(p.ctx, 'spec', None), 'panels', None) or []
         loaded = [panel.dataset for panel in spec_panels if isinstance(getattr(panel, 'dataset', None), dict)] or [dataset]
+    # The user's layer colours (Labels -> Layer colours) win over both, as in the browser.
+    from services.figure.layer_colours import layer_colors_for
     layer_colors = {**assign_extra_layer_colors(loaded),
                     **{k: v.get('color') for k, v in (dataset.get('derived_layers') or {}).items()
-                       if isinstance(v, dict) and v.get('color')}}
+                       if isinstance(v, dict) and v.get('color')},
+                    **layer_colors_for(fe)}
     targeted = set()
     for rule in rules:
         for t in rule.get('targetLayers') or []:
@@ -1017,7 +1024,7 @@ def _paint_reads(p: _Painter, reads: list, st: dict, peaks: list, genes: list, d
             fs, fe_ = flat.s, flat.e
             size = fe_ - fs
             vis = ~((fe_ < 0) | (fs > p.region))
-            color = np.broadcast_to(rc.rgb(rc.MOD_COLORS['fire']), (flat.n, 3)).copy()
+            color = np.broadcast_to(rc.rgb(_mark_color(fe, 'fire', rc.MOD_COLORS['fire'])), (flat.n, 3)).copy()
             vo = np.ones(flat.n, np.float32)
             if has_targeted('fire'):
                 m, cols, ops = rc.match_rules(rules, rctx, fs, fe_, size, 'fire', {'aq': q}, None,
@@ -1144,6 +1151,7 @@ def _paint_primary(p: _Painter, reads, enabled, rules, rctx, groups, has_targete
 
 
 def _paint_marks(p: _Painter, reads, enabled, evidence: bool):
+    from services.figure.layer_colours import mark_color
     mh = max(2.0, p.fh)
     mw = max(1.0, p.scale * 0.8)
     band = (0.0, mh)
@@ -1165,9 +1173,9 @@ def _paint_marks(p: _Painter, reads, enabled, evidence: bool):
 
     if not evidence and (enabled.get('m6a') or enabled.get('mod')):
         marks(m6a_positions,
-              rc.MOD_COLORS['m6a'], p.layer_opacity('m6a', 1))
+              mark_color(p.fe, 'm6a', rc.MOD_COLORS['m6a']), p.layer_opacity('m6a', 1))
     if not evidence and enabled.get('m5c'):
-        marks(lambda r: r.get('methyl_m5c'), rc.MOD_COLORS['m5c'], p.layer_opacity('m5c', 1))
+        marks(lambda r: r.get('methyl_m5c'), mark_color(p.fe, 'm5c', rc.MOD_COLORS['m5c']), p.layer_opacity('m5c', 1))
     show_opp = bool(enabled.get('deam_opportunity'))
     if show_opp and evidence:
         op = p.layer_opacity('deam_opportunity', 1)
@@ -1179,8 +1187,8 @@ def _paint_marks(p: _Painter, reads, enabled, evidence: bool):
         if show_opp:
             marks(lambda r: [d[0] for d in r.get('deam') or []], rc.MOD_COLORS['deam_observed'], op)
         else:
-            marks(lambda r: [d[0] for d in r.get('deam') or [] if d[1] != 1], rc.MOD_COLORS['deam_r'], op)
-            marks(lambda r: [d[0] for d in r.get('deam') or [] if d[1] == 1], rc.MOD_COLORS['deam_y'], op)
+            marks(lambda r: [d[0] for d in r.get('deam') or [] if d[1] != 1], mark_color(p.fe, 'deam_r', rc.MOD_COLORS['deam_r']), op)
+            marks(lambda r: [d[0] for d in r.get('deam') or [] if d[1] == 1], mark_color(p.fe, 'deam_y', rc.MOD_COLORS['deam_y']), op)
 
 
 def _consensus_record_color(record: dict, colors: dict) -> str:

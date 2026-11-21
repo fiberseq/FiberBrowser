@@ -466,6 +466,22 @@ describe('a command-line dataset takes precedence over the last session', () => 
     expect(saveAutoSave).toHaveBeenCalledTimes(1);
   });
 
+  it('remembered "reopen" is declined when data was opened on the command line (the app opened with a BAM)', async () => {
+    setLastSessionPreference('reopen');
+    mockEntry = entryFor({ start: 47_515_000, end: 47_516_000 });
+    stubServer({ previous_exit: 'clean' }, url => (url.includes('/api/datasets') && !url.includes('/add')
+      ? json({ datasets: [{ ...savedDataset, id: 'cli', paths: ['/data/cli.bam'] }] }) : null));
+    useBrowserStore.setState({ datasets: [{ ...savedDataset, id: 'cli', paths: ['/data/cli.bam'] }], start: 100, end: 200 } as any);
+    await act(async () => {
+      root.render(<CrashRecoveryBanner />);
+      for (let i = 0; i < 10; i++) await new Promise(r => setTimeout(r, 0));
+    });
+    expect(useBrowserStore.getState().start).toBe(100);   // the saved locus was not reopened over the file
+    expect(useBrowserStore.getState().datasets.map(d => d.id)).toEqual(['cli']);
+    expect(container.querySelector('[data-testid="crash-recovery-banner"]')).toBeNull();
+    expect(launchOfferPending()).toBe(false);
+  });
+
   it('a crash still offers recovery in its banner beside a command-line dataset', async () => {
     mockEntry = entryFor({ selectedPeaks: [1] });
     stubServer({ previous_exit: 'crash' }, url => (url.includes('/api/datasets') && !url.includes('/add')

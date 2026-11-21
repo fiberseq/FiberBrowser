@@ -7,10 +7,9 @@
  * (utils/footprintSizeSettings, saved with the session). One request per round to /api/cluster/vplot
  * (group_by 'all' or per cluster, raw values).
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useBrowserStore } from '../../../stores/browserStore';
-import { ALL_READS_KEY, fetchFootprintSizes, type FootprintSizeData } from '../../../api/clustering';
 import { SizeEnrichmentChart } from '../../charts/SizeEnrichmentChart';
 import {
   ALL_FOOTPRINTS, FOOTPRINT_SIZE_NORMALIZATION_LABELS, FOOTPRINT_SIZE_NORMALIZATIONS, FOOTPRINT_SIZE_VIEW_HELP, footprintSizeCaption,
@@ -24,40 +23,22 @@ import { getLayerColor } from '../../../utils/layerColors';
 import { FOOTPRINT_SIZE_COLORMAP_LABELS, FOOTPRINT_SIZE_COLORMAPS, type FootprintSizeColormap } from '../../../utils/footprintSizeColormaps';
 import { downloadTextFile } from '../../../utils/analysisExport';
 import { AnalysisSelect, AnalysisSettingsSection, AnalysisStatus } from '../shared';
-import type { ClusterOperationRound } from './clusterOperationRounds';
-import type { ClusterSummary } from './OverviewTabContent';
-import { getClusterLabel } from '../../tracks/ReadTrack';
+import {
+  footprintSizePlots, useFootprintSizeData,
+  type FootprintSizePlot, type FootprintSizesClusters, type FootprintSizesTarget,
+} from './useFootprintSizeData';
 import { pickedClusterData, useClusterPicks } from './clusterPicks';
 import { ClusterPickChips } from './ClusterPickChips';
+import { openPlots } from '../../../features/plots/workspace';
+import { useLayerColorVersion } from '../../../features/layerColours/state';
 
-export interface FootprintSizePanel {
-  /** Panel state key. */
-  key: string;
-  datasetId: string;
-  label: string;
-  /** The dataset's own name (all-reads plots are per dataset: a split panel's group name would mislabel them). */
-  datasetLabel?: string;
-  color?: string;
-}
-
-export interface FootprintSizesTarget {
-  chrom: string;
-  start: number;
-  end: number;
-  /** A panel on another assembly: its reference key. */
-  genome: string | null;
-  panels: FootprintSizePanel[];
-}
+export type { FootprintSizePanel, FootprintSizesTarget } from './useFootprintSizeData';
 
 export interface FootprintSizesViewProps {
   /** All reads, per dataset (always available). */
   allReads: FootprintSizesTarget;
   /** Per cluster (only with clusters). */
-  clusters?: FootprintSizesTarget & {
-    rounds: ClusterOperationRound[]; visible: ClusterSummary[];
-    /** Which read is in which cluster (a merge or branch switch keeps the count but changes the plots). */
-    assignmentSignature?: string;
-  } | null;
+  clusters?: FootprintSizesClusters | null;
   chartWidth: number;
   isFullView?: boolean;
   sampleSeed?: string;
@@ -67,23 +48,18 @@ export interface FootprintSizesViewProps {
   note?: string | null;
 }
 
-interface Plot {
-  id: string;
-  title: string;
-  color?: string;
-  data: FootprintSizeData;
-}
+type Plot = FootprintSizePlot;
 
-const SIZE_BINS = [1, 2, 5, 10, 20, 50];
-const POS_BINS = [1, 2, 5, 10, 20, 50, 100];
-const SIZE_PRESETS = [
+export const SIZE_BINS = [1, 2, 5, 10, 20, 50];
+export const POS_BINS = [1, 2, 5, 10, 20, 50, 100];
+export const SIZE_PRESETS = [
   { value: '10-300', label: 'All (10-300)' },
   { value: '10-120', label: 'Small FP (10-120)' },
   { value: '35-80', label: 'TF-size (35-80)' },
   { value: '80-240', label: 'Nuc (80-240)' },
   { value: '10-600', label: 'Wide (10-600)' },
 ];
-const COLOR_MAX_ENRICH = [{ value: 0, label: 'Auto' }, ...[1.5, 2, 3, 4, 8].map(v => ({ value: v, label: `${v}x` }))];
+export const COLOR_MAX_ENRICH = [{ value: 0, label: 'Auto' }, ...[1.5, 2, 3, 4, 8].map(v => ({ value: v, label: `${v}x` }))];
 
 function Segmented<T extends string>({ value, options, onChange, testId, label }: {
   value: T | null; options: Array<{ value: T; label: string; title: string }>; onChange: (v: T) => void; testId: string; label: string;
@@ -103,7 +79,7 @@ function Segmented<T extends string>({ value, options, onChange, testId, label }
 }
 
 /** A number box that commits on blur or Enter (typing "250" does not snap at "2"). */
-function CommitNumber({ value, onCommit, min, ariaLabel, className, testId }: {
+export function CommitNumber({ value, onCommit, min, ariaLabel, className, testId }: {
   value: number; onCommit: (v: number) => void; min: number; ariaLabel: string; className: string; testId?: string;
 }) {
   const [text, setText] = useState(String(value));
@@ -115,7 +91,7 @@ function CommitNumber({ value, onCommit, min, ariaLabel, className, testId }: {
   );
 }
 
-function SigmaInput({ label, value, onChange, testId, title }: { label: string; value: number; onChange: (v: number) => void; testId: string; title: string }) {
+export function SigmaInput({ label, value, onChange, testId, title }: { label: string; value: number; onChange: (v: number) => void; testId: string; title: string }) {
   return (
     <label className="inline-flex items-center gap-1 cursor-help" title={title}>
       <span>{label}</span>
@@ -128,111 +104,29 @@ function SigmaInput({ label, value, onChange, testId, title }: { label: string; 
 }
 
 export function FootprintSizesView({ allReads, clusters, chartWidth, isFullView, sampleSeed, settingsKey = '', note }: FootprintSizesViewProps) {
+  // Re-render when the user's layer colours change (Labels → Layer colours).
+  const layerColorVersion = useLayerColorVersion();
   const settings = useBrowserStore(s => s.footprintSizeSettings);
   const setSettings = useBrowserStore(s => s.setFootprintSizeSettings);
   const dark = useBrowserStore(s => s.darkMode);
   const datasets = useBrowserStore(s => s.datasets);
   // Min footprints' uncalled-read rule: the plots are of the reads the read track shows.
-  const hideUncalled = useBrowserStore(s => s.minFootprints !== -1);
-  const layerOptions = useMemo(() => footprintSizeLayerOptions(datasets, settings.layer), [datasets, settings.layer]);
+  const layerOptions = useMemo(() => footprintSizeLayerOptions(datasets, settings.layer), [datasets, settings.layer, layerColorVersion]);
   const [showSettings, setShowSettings] = useState(false);
   const useClusters = !!clusters && clusters.panels.length > 0 && settings.groupBy === 'clusters';
   const target = useClusters ? clusters! : allReads;
   const picks = useClusterPicks(useClusters ? clusters!.panels.map(p => p.key) : []);
 
-  const [entry, setEntry] = useState<{ key: string; byPanel: Record<string, Record<string, FootprintSizeData>> } | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const seq = useRef(0);
-
-  // Everything a plot depends on: the fetch runs when (and only when) this changes.
-  const requestKey = useMemo(() => JSON.stringify({
-    kind: 'fiberbrowser.footprint_sizes.v1',
-    group: useClusters ? 'cluster' : 'all',
-    chrom: target.chrom, start: target.start, end: target.end, genome: target.genome,
-    panels: target.panels.map(p => `${p.key}:${p.datasetId}`),
-    rounds: useClusters ? clusters!.rounds.map(r => Object.entries(r.assignments).map(([d, a]) => `${d}:${Object.keys(a).length}:${r.keyByDataset[d]}`)) : null,
-    assignments: useClusters ? clusters!.assignmentSignature ?? null : null,
-    mode: settings.mode, normalization: settings.normalization, sigmaSizeBp: settings.sigmaSizeBp, sigmaPosBp: settings.sigmaPosBp,
-    sizeBin: settings.sizeBin, posBin: settings.posBin, sizeMin: settings.sizeMin, sizeMax: settings.sizeMax,
-    minFootprints: settings.minFootprints, layer: settings.layer, sampleSeed: sampleSeed ?? null, settingsKey, hideUncalled,
-  }), [useClusters, target, clusters, settings.mode, settings.normalization, settings.sigmaSizeBp, settings.sigmaPosBp,
-    settings.sizeBin, settings.posBin, settings.sizeMin, settings.sizeMax, settings.minFootprints, settings.layer, sampleSeed, settingsKey, hideUncalled]);
-
-  useEffect(() => {
-    if (!target.panels.length || target.end <= target.start) { setLoading(false); return; }
-    const controller = new AbortController();
-    const mine = ++seq.current;
-    setError(null);
-    const common = {
-      sizeBin: settings.sizeBin, posBin: settings.posBin, sizeMin: settings.sizeMin, sizeMax: settings.sizeMax,
-      mode: settings.mode, normalization: settings.normalization, sigmaSizeBp: settings.sigmaSizeBp, sigmaPosBp: settings.sigmaPosBp,
-      minFootprints: settings.minFootprints, layer: settings.layer, sampleSeed, panelGenome: target.genome, signal: controller.signal,
-      hideUncalled,
-    };
-    const timer = window.setTimeout(() => {
-      setLoading(true);
-      const jobs: Array<Promise<Array<[string, string, Record<string, FootprintSizeData>]>>> = [];
-      if (useClusters) {
-        for (const round of clusters!.rounds) {
-          jobs.push(fetchFootprintSizes(target.chrom, target.start, target.end, {
-            ...common, groupBy: 'cluster', clusterAssignments: round.assignments, datasetIds: Object.keys(round.assignments),
-          }).then(res => Object.entries(round.keyByDataset).flatMap(([ds, key]) => {
-            const d = res.data?.[ds];
-            return d && !('error' in d) ? [[key, ds, d as Record<string, FootprintSizeData>]] as Array<[string, string, Record<string, FootprintSizeData>]> : [];
-          })));
-        }
-      } else {
-        const datasetIds = [...new Set(target.panels.map(p => p.datasetId))];
-        jobs.push(fetchFootprintSizes(target.chrom, target.start, target.end, { ...common, groupBy: 'all', datasetIds })
-          .then(res => target.panels.flatMap(p => {
-            const d = res.data?.[p.datasetId];
-            if (d && 'error' in d) throw new Error(String((d as { error: string }).error));
-            return d ? [[p.key, p.datasetId, d as Record<string, FootprintSizeData>]] as Array<[string, string, Record<string, FootprintSizeData>]> : [];
-          })));
-      }
-      Promise.all(jobs)
-        .then(parts => {
-          if (seq.current !== mine || controller.signal.aborted) return;
-          const byPanel: Record<string, Record<string, FootprintSizeData>> = {};
-          for (const [key, , d] of parts.flat()) byPanel[key] = d;
-          setEntry({ key: requestKey, byPanel });
-        })
-        .catch(err => {
-          if (controller.signal.aborted || err?.name === 'AbortError' || seq.current !== mine) return;
-          setError(`Footprint size plots could not be computed: ${err instanceof Error ? err.message : String(err)}`);
-        })
-        .finally(() => { if (seq.current === mine && !controller.signal.aborted) setLoading(false); });
-    }, 250);
-    return () => { controller.abort(); window.clearTimeout(timer); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [requestKey]);
+  const { entry, requestKey, loading, error } = useFootprintSizeData({
+    target, useClusters, clusters, settings, sampleSeed, settingsKey,
+  });
 
   const byPanel = entry?.key === requestKey ? entry.byPanel : null;
   const shownClusters = useClusters ? pickedClusterData(clusters!.visible, picks.picked) : [];
 
   // The plots, in panel order: one per dataset (panels sharing a dataset show it once), or per cluster.
-  const plots: Plot[] = useMemo(() => {
-    if (!byPanel) return [];
-    const out: Plot[] = [];
-    const seenDs = new Set<string>();
-    for (const p of target.panels) {
-      const d = byPanel[p.key];
-      if (!d) continue;
-      if (!useClusters) {
-        if (seenDs.has(p.datasetId)) continue;
-        seenDs.add(p.datasetId);
-        const m = d[String(ALL_READS_KEY)];
-        if (m) out.push({ id: `${p.key}|all`, title: p.datasetLabel ?? p.label, color: p.color, data: m });
-        continue;
-      }
-      for (const c of shownClusters) {
-        const m = d[String(c.cluster)];
-        if (m) out.push({ id: `${p.key}|${c.cluster}`, title: `${target.panels.length > 1 ? `${p.label} · ` : ''}${getClusterLabel(c.cluster, true)}`, color: c.color, data: m });
-      }
-    }
-    return out;
-  }, [byPanel, target.panels, useClusters, shownClusters]);
+  const plots: Plot[] = useMemo(() => footprintSizePlots(byPanel, target.panels, useClusters, shownClusters),
+    [byPanel, target.panels, useClusters, shownClusters]);
 
   const display = useMemo(() => plots.map(p => displayMatrix(p.data.matrix, settings)), [plots, settings]);
   const sharedScale = useMemo(() => colorScaleFor(display, settings), [display, settings]);
@@ -320,6 +214,15 @@ export function FootprintSizesView({ allReads, clusters, chartWidth, isFullView,
           options={SIZE_BINS.map(v => ({ value: v, label: `${v} bp` }))} selectClassName="w-16" />
         <AnalysisSelect<number> label="Pos bin" value={settings.posBin} onChange={v => set({ posBin: v })}
           options={POS_BINS.map(v => ({ value: v, label: `${v} bp` }))} selectClassName="w-16" />
+        <button type="button" data-testid="footprint-sizes-open-in-plots"
+          onClick={() => openPlots({
+            type: settings.view === 'vplot' ? 'vplot' : 'size-enrichment', source: settings.layer, where: 'view',
+            groupBy: useClusters ? 'cluster' : 'dataset', compare: ratio ? 'log2ratio' : 'off', size: { ...settings, ratio: null },
+          })}
+          className="rounded border border-cyan-200 px-1.5 py-0.5 text-[11px] text-cyan-800 hover:bg-cyan-50 dark:border-cyan-900/60 dark:text-cyan-200 dark:hover:bg-cyan-950/40"
+          title="Open in Plots: the same plot with these settings, in the Plots workspace (save, name, pin, export).">
+          Open in Plots
+        </button>
         {plots.length > 0 && (
           <button type="button" onClick={exportAll} data-testid="footprint-sizes-export-tsv"
             className="ml-auto rounded border border-gray-200 px-1.5 py-0.5 text-[11px] hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-gray-800"

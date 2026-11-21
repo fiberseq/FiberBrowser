@@ -1,4 +1,5 @@
 import { keepSvSplitsInView } from './svSlice';
+import { clampMetaSpan } from '../features/metaLocus/metaChrom';
 import { geneTss } from '../utils/coordinates';
 import type { BrowserState } from './browserStore';
 import type { Gene, FirePeak, ChromInfo, Bookmark, ViewportHistoryEntry, Interval, PanelConfig, FootprintGroup } from '../types';
@@ -6,23 +7,50 @@ import { keepMatched } from '../utils/matchedRegions';
 import { DEBUG, LAST_GENOME_STORAGE_KEY, LAST_FASTA_PATH_STORAGE_KEY, loadBookmarksFromStorage, saveBookmarksToStorage, makeCleanTransientState, saveFootprintGroupsToStorage } from './utils';
 import { useEphemeralStore } from './ephemeralStore';
 import { computeRuleOffset } from './peakRuleSlice';
-import { findChromInfo } from '../utils/chromAliases';
+import { findChromInfo, sameChrom } from '../utils/chromAliases';
 import { isPanOrZoom, moveLikewise, siteLockSuppressed } from './siteLock';
 import { hasViewLinks, linkedPanelMoving, linkedPanelView } from '../utils/panelExtensions';
 import { PER_PANEL_STATE_KEYS } from './panelSlice';
+import { currentMatchedRun } from '../utils/clusterMatchedRun';
+
+/**
+ * A current graph cluster run (DESIGN_GRAPH_PRIMARY §3.5) whose package's target is on this contig. Its regions are
+ * graph columns fixed by the run, not by the view, so pans, zooms, bookmark jumps, Back/Forward and an aliased name
+ * of the contig ('3' for 'chr3') keep it (the linear rules below would clear it once its peaks leave the view or
+ * peaks are locked). Leaving the contig clears it as usual.
+ */
+/** A graph run's cluster state (kept by keepGraphRun; peaks still follow the linear rules, so a new window's peaks
+ * are scanned as usual). */
+const GRAPH_RUN_KEYS = ['clusterAssignments', 'clusterOrder', 'clusterPatterns', 'clusterCentroids', 'clusterPeakWidths',
+  'clusterMetricCohort', 'clusterPeakRegions', 'dynamicClustering', 'clusterTreeNodes', 'clusterTreeRootIds', 'activeClusterTreeNodeId'] as const;
+
+/** A move's state change, with a surviving graph run's cluster state left as it is. */
+function keepGraphRun(state: BrowserState, chrom: string, result: Partial<BrowserState>): Partial<BrowserState> {
+  if (!graphRunSurvivesMove(state, chrom)) return result;
+  const out: Record<string, unknown> = { ...result };
+  for (const k of GRAPH_RUN_KEYS) delete out[k];
+  return out as Partial<BrowserState>;
+}
+
+export function graphRunSurvivesMove(state: BrowserState, chrom: string): boolean {
+  const run = currentMatchedRun(state.clusterMatchedRun, state.clusterAssignments);
+  if (!run?.graph) return false;
+  const contig = run.graph.targetContig;
+  return Boolean(contig) && sameChrom(contig!, chrom);
+}
 
 /**
  * setViewport moves the main view. Panels with their own view keep their
  * clusters and filters (the main view's reset of those maps skips their
  * keys), and locked ones pan/zoom along with it.
  */
-function withSiteRules(state: BrowserState, chrom: string, start: number, end: number, result: Partial<BrowserState>): Partial<BrowserState> {
+function withSiteRules(state: BrowserState, chrom: string, start: number, end: number, result: Partial<BrowserState>, panOverride?: boolean): Partial<BrowserState> {
   // Panning and zooming keep the order of known reads, as independent panels do.
   // A jump to another locus drops it; newly encountered reads follow the ordered ones.
   if (isPanOrZoom(state, { chrom, start, end }) && 'readSortOrder' in result) {
     result = { ...result, readSortOrder: state.readSortOrder };
   }
-  return withViewLinks(state, chrom, start, end, withLockedSites(state, chrom, start, end, result));
+  return withViewLinks(state, chrom, start, end, withLockedSites(state, chrom, start, end, result, panOverride));
 }
 
 /**
@@ -49,14 +77,15 @@ function withViewLinks(state: BrowserState, chrom: string, start: number, end: n
   return changed ? { ...result, panels: out } : result;
 }
 
-function withLockedSites(state: BrowserState, chrom: string, start: number, end: number, result: Partial<BrowserState>): Partial<BrowserState> {
+function withLockedSites(state: BrowserState, chrom: string, start: number, end: number, result: Partial<BrowserState>, panOverride?: boolean): Partial<BrowserState> {
   const own = state.panels.filter(p => p.viewportOverride);
   if (own.length === 0) return result;
   const out: Record<string, unknown> = { ...result };
   const prev = { chrom: state.chrom, start: state.start, end: state.end };
   const next = { chrom: (out.chrom as string) ?? chrom, start: (out.start as number) ?? start, end: (out.end as number) ?? end };
   const locking = !siteLockSuppressed() && own.some(p => p.siteLocked);
-  const pan = isPanOrZoom(prev, next);
+  // (Back / Forward pass the jump's own answer: the return trip moves the panels the jump moved, never decided anew.)
+  const pan = panOverride ?? isPanOrZoom(prev, next);
   // A linked panel moves with a pan or zoom; one showing exactly the main
   // view (a plain linked copy) also follows a jump elsewhere, and like the
   // main view leaves its filters and clusters behind.
@@ -99,20 +128,61 @@ function groupsLeavingChrom(groups: FootprintGroup[], fromChrom: string): Footpr
  * (a panel at its own locus keeps its clusters and filters; a linked copy
  * follows). Saved footprint definitions survive.
  */
-function jumpState(state: BrowserState, chrom: string, start: number, end: number, extra: Partial<BrowserState>): Partial<BrowserState> {
+function jumpState(state: BrowserState, chrom: string, start: number, end: number, extra: Partial<BrowserState>, panOverride?: boolean): Partial<BrowserState> {
   const { footprintGroups: _dropped, ...clean } = makeCleanTransientState();
   void _dropped;
-  return withSiteRules(state, chrom, start, end, {
+  // A current graph run keeps its cluster state on a jump within its package's contig (an alias of it included), as
+  // on a pan (graph features): its regions are graph columns fixed by the run, not by the view.
+  return withSiteRules(state, chrom, start, end, keepGraphRun(state, chrom, {
     chrom, start, end,
     ...clean,
     ...(chrom !== state.chrom ? { footprintGroups: groupsLeavingChrom(state.footprintGroups, state.chrom) } : {}),
     ...extra,
-  } as Partial<BrowserState>);
+  } as Partial<BrowserState>), panOverride);
+}
+
+type Span3 = { chrom: string; start: number; end: number };
+const sameSpan = (a: Span3, b: Span3) => a.chrom === b.chrom && a.start === b.start && a.end === b.end;
+
+/** Where a history entry's view is now: its panel's own view, else the main view; null when that panel is gone (or
+ * has no view of its own any more, e.g. back in Linked navigation). */
+function historyTargetView(state: BrowserState, entry: ViewportHistoryEntry): Span3 | null {
+  if (!entry.panelId) return { chrom: state.chrom, start: state.start, end: state.end };
+  return state.panels.find(p => p.id === entry.panelId)?.viewportOverride ?? null;
+}
+
+/** Back / Forward: the entry's view goes to `to` (a panel through its own navigation, so what follows it follows).
+ * `outwardWasPan`: whether the jump itself (its view before → after) was a pan or zoom, which is what decided whether
+ * it moved the panels locked to the view; the return trip moves the same ones (never decided anew). */
+function applyHistoryMove(get: () => BrowserState, set: (p: Partial<BrowserState> | ((s: BrowserState) => Partial<BrowserState>)) => void,
+  entry: ViewportHistoryEntry, to: Span3, history: Partial<BrowserState>, outwardWasPan = false) {
+  if (entry.panelId) {
+    set(history);
+    // A jump made like a pan (locked panels and the main view moved likewise when it was a pan) goes back the same
+    // way, so those return too, and those it left alone stay.
+    const now = get().panels.find(p => p.id === entry.panelId)?.viewportOverride;
+    if (entry.likePan && now?.chrom === to.chrom) get().setPanelViewport(entry.panelId, to.start, to.end, { lockedMove: outwardWasPan });
+    else get().navigatePanel(entry.panelId, to.chrom, to.start, to.end);
+    return;
+  }
+  set(s => jumpState(s, to.chrom, to.start, to.end, history, outwardWasPan));
+}
+
+/** Whether a jump from `from` to `to` was a pan or zoom: the jump's recorded answer (made when it was made), else
+ * judged from where it went (a bookmark, or a caller that didn't say). */
+function jumpWasPan(entry: ViewportHistoryEntry, to: Span3): boolean {
+  return entry.pan ?? isPanOrZoom(entry, to);
 }
 
 // ============================================================
 // VIEWPORT SLICE — Interface
 // ============================================================
+
+/** A button on the error banner: its label and what it does. */
+export interface ErrorAction {
+  label: string;
+  run: () => void;
+}
 
 export interface ViewportSlice {
   chrom: string;
@@ -123,6 +193,8 @@ export interface ViewportSlice {
   chroms: ChromInfo[];
   loading: boolean;
   error: string | null;
+  /** A button on the error banner (e.g. Retry). Cleared with every setError. Never saved: it holds a function. */
+  errorAction: ErrorAction | null;
   
   // Server config (set from /api/status)
   prefetchMultiplier: number;  // How much to prefetch (e.g., 10 = 10x viewport)
@@ -155,7 +227,8 @@ export interface ViewportSlice {
   setViewport: (chrom: string, start: number, end: number) => void;
   setChroms: (chroms: ChromInfo[]) => void;
   setLoading: (loading: boolean) => void;
-  setError: (error: string | null) => void;
+  /** Show (or clear, with null) the error banner; `action` adds a button to it, such as Retry. */
+  setError: (error: string | null, action?: ErrorAction) => void;
   setPrefetchMultiplier: (multiplier: number) => void;
 
   // Vertical zoom actions
@@ -179,6 +252,15 @@ export interface ViewportSlice {
   canGoBack: () => boolean;
   canGoForward: () => boolean;
   pushViewportHistory: (entry: ViewportHistoryEntry) => void;
+  /**
+   * A jump is about to move a view (a locus box, saved regions, N / P, Differences arrows, Zoom to read, a table's
+   * Go there): its view now goes into navigation history, so Back returns to it. `panelId`: the panel whose own view
+   * the jump moves (its view is recorded when it has one of its own; else the main view's). `likePan`: the jump moves
+   * that panel through setPanelViewport (locked panels and the main view move likewise), and Back / Forward do too.
+   * `to`: where the jump goes, so whether it is a pan or zoom (which panels locked to the view move with it) is
+   * decided now, not from where the view is at Back. Pans and zooms don't call it.
+   */
+  recordJump: (panelId?: string | null, options?: { likePan?: boolean; to?: { chrom: string; start: number; end: number } }) => void;
 
   // CIGAR display actions
   toggleReversed: () => void;
@@ -218,6 +300,7 @@ export function createViewportSlice(rawSet: (partial: Partial<BrowserState> | ((
   chroms: [],
   loading: false,
   error: null,
+  errorAction: null,
   
   prefetchMultiplier: 10,  // Default, updated from server
 
@@ -243,8 +326,11 @@ export function createViewportSlice(rawSet: (partial: Partial<BrowserState> | ((
   setFastaPath: (p: string | null) => {
     // Persist the path so the App can re-load this FASTA on next page load
     // instead of falling back to the hg38 default. Cleared when p is null.
+    // A registry download's URL (the status reports it as the FASTA path) is not a file to re-open: the
+    // registry genome is remembered by id instead (a reload would stream the FASTA without its annotation).
     try {
-      if (p) localStorage.setItem(LAST_FASTA_PATH_STORAGE_KEY, p);
+      if (p && /^[a-z][a-z0-9+.-]*:\/\//i.test(p)) localStorage.removeItem(LAST_FASTA_PATH_STORAGE_KEY);
+      else if (p) localStorage.setItem(LAST_FASTA_PATH_STORAGE_KEY, p);
       else localStorage.removeItem(LAST_FASTA_PATH_STORAGE_KEY);
     } catch {}
     set({ fastaPath: p });
@@ -267,8 +353,10 @@ export function createViewportSlice(rawSet: (partial: Partial<BrowserState> | ((
     // fractional edges (a footprint class's median edges) is widened to cover it.
     if (!Number.isInteger(start)) start = Math.floor(start);
     if (!Number.isInteger(end)) end = Math.ceil(end);
+    // A meta-locus's virtual contig has ends ([0, width)): pans and zooms stop there.
+    [start, end] = clampMetaSpan(chrom, start, end);
     // An SV allele split whose locus stays in view keeps its groups (svSlice.ts).
-    set(state => withSiteRules(state, chrom, start, end, keepSvSplitsInView(state, ((): Partial<BrowserState> => {
+    set(state => withSiteRules(state, chrom, start, end, keepSvSplitsInView(state, keepGraphRun(state, chrom, ((): Partial<BrowserState> => {
     // Enforce minimum viewport width of 3bp to prevent division-by-zero
     // in coordinate transforms, canvas scaling, metaprofile binning, etc.
     if (end - start < 3) {
@@ -321,6 +409,7 @@ export function createViewportSlice(rawSet: (partial: Partial<BrowserState> | ((
         clusterPatterns: EMPTY_OBJ,
         clusterCentroids: EMPTY_OBJ,
         clusterPeakWidths: EMPTY_ARR,
+        clusterMetricCohort: EMPTY_OBJ,
         clusterPeakRegions: EMPTY_ARR,
         dynamicClustering: false,
         // Keep the cluster tree in sync with the (now-cleared) live assignments
@@ -408,6 +497,7 @@ export function createViewportSlice(rawSet: (partial: Partial<BrowserState> | ((
         clusterPatterns: EMPTY_OBJ,
         clusterCentroids: EMPTY_OBJ,
         clusterPeakWidths: EMPTY_ARR,
+        clusterMetricCohort: EMPTY_OBJ,
         clusterPeakRegions: EMPTY_ARR,
         dynamicClustering: false,
         // Keep the cluster tree in sync with the (now-cleared) live assignments
@@ -512,6 +602,7 @@ export function createViewportSlice(rawSet: (partial: Partial<BrowserState> | ((
         clusterPatterns: EMPTY_OBJ,
         clusterCentroids: EMPTY_OBJ,
         clusterPeakWidths: EMPTY_ARR,
+        clusterMetricCohort: EMPTY_OBJ,
         clusterPeakRegions: EMPTY_ARR,
         dynamicClustering: false,
         // Keep the cluster tree in sync with the (now-cleared) live assignments
@@ -572,12 +663,12 @@ export function createViewportSlice(rawSet: (partial: Partial<BrowserState> | ((
       relativeGene: null,
       // Keep: selectedFootprints, footprintGroups (absolute coords, persist across zoom), peakRules (config)
     };
-  })(), chrom, start, end)));
+  })()), chrom, start, end)));
   },
 
   setChroms: (chroms) => set({ chroms }),
   setLoading: (loading) => set({ loading }),
-  setError: (error) => set({ error }),
+  setError: (error, action) => set({ error, errorAction: error ? action ?? null : null }),
   setPrefetchMultiplier: (multiplier) => set({ prefetchMultiplier: multiplier }),
 
   // Vertical zoom actions
@@ -642,6 +733,7 @@ export function createViewportSlice(rawSet: (partial: Partial<BrowserState> | ((
       clusterPatterns: {},
       clusterCentroids: {},
       clusterPeakWidths: [],
+      clusterMetricCohort: {},
       clusterPeakRegions: [],
       dynamicClustering: false,
       clusterProfiles: {},
@@ -721,6 +813,7 @@ export function createViewportSlice(rawSet: (partial: Partial<BrowserState> | ((
       // Clear loading/error
       loading: false,
       error: null,
+      errorAction: null,
 
     });
     // Reset pan state in ephemeral store
@@ -753,8 +846,9 @@ export function createViewportSlice(rawSet: (partial: Partial<BrowserState> | ((
     const state = get();
     const bookmark = state.bookmarks.find(b => b.id === id);
     if (bookmark) {
-      // Push current viewport to history before navigating
-      get().pushViewportHistory({ chrom: state.chrom, start: state.start, end: state.end });
+      // Push current viewport to history before navigating (with the jump's pan answer, for Back)
+      const from = { chrom: state.chrom, start: state.start, end: state.end };
+      get().pushViewportHistory({ ...from, pan: isPanOrZoom(from, bookmark) });
       // Navigate to bookmark
       set(s => jumpState(s, bookmark.chrom, bookmark.start, bookmark.end, {}));
     }
@@ -769,97 +863,85 @@ export function createViewportSlice(rawSet: (partial: Partial<BrowserState> | ((
     set({ bookmarks: newBookmarks });
   },
 
-  // Navigation history actions
+  // Navigation history actions. Each entry is a jump: the view it left (main, or one panel's own), and once Back has
+  // undone it, where it went (`to`, for Forward). historyIndex -1: every jump is current (at the head); k: entries k
+  // and later were undone by Back.
   pushViewportHistory: (entry: ViewportHistoryEntry) => {
     const state = get();
-    // Don't push if it's the same as current location
-    const lastEntry = state.viewportHistory[state.viewportHistory.length - 1];
-    if (lastEntry &&
-        lastEntry.chrom === entry.chrom &&
-        lastEntry.start === entry.start &&
-        lastEntry.end === entry.end) {
-      // Already recorded (e.g. Forward reached it): moving on from it puts us back at the head.
-      if (state.historyIndex !== -1) set({ historyIndex: -1 });
+    const record: ViewportHistoryEntry = { chrom: entry.chrom, start: entry.start, end: entry.end,
+      ...(entry.panelId ? { panelId: entry.panelId, ...(entry.likePan ? { likePan: true } : {}) } : {}),
+      ...(entry.pan !== undefined ? { pan: entry.pan } : {}), ...(entry.meta !== undefined ? { meta: entry.meta } : {}) };
+    // Back went somewhere earlier: a new jump drops the undone ones (as a web browser does).
+    let history = state.historyIndex >= 0 ? state.viewportHistory.slice(0, state.historyIndex) : state.viewportHistory;
+    const last = history[history.length - 1];
+    // Leaving the same place again (a repeated Go to, or one that didn't move): one entry.
+    if (last && (last.panelId ?? null) === (record.panelId ?? null) && sameSpan(last, record) && !!last.likePan === !!record.likePan) {
+      // (The newer jump from there is the one Back undoes: its pan answer.)
+      const merged = (record.pan !== undefined && last.pan !== record.pan) || (record.meta !== undefined && last.meta !== record.meta)
+        ? [...history.slice(0, -1), { ...last, ...(record.pan !== undefined ? { pan: record.pan } : {}), ...(record.meta !== undefined ? { meta: record.meta } : {}) }]
+        : history;
+      if (merged !== state.viewportHistory || state.historyIndex !== -1) set({ viewportHistory: merged, historyIndex: -1 });
       return;
     }
+    history = [...history, record].slice(-50);
+    set({ viewportHistory: history, historyIndex: -1 });
+  },
 
-    // If we're in the middle of history (went back), truncate forward history
-    let history = state.viewportHistory;
-    if (state.historyIndex >= 0 && state.historyIndex < history.length - 1) {
-      history = history.slice(0, state.historyIndex + 1);
+  recordJump: (panelId, options) => {
+    const state = get();
+    const panel = panelId ? state.panels.find(p => p.id === panelId) : undefined;
+    const own = panel?.viewportOverride;
+    const to = options?.to;
+    if (own) {
+      // A pan-like jump keeps its contig (setPanelViewport), so its pan answer is judged on that contig.
+      const pan = to ? isPanOrZoom(own, { chrom: options?.likePan ? own.chrom : to.chrom, start: to.start, end: to.end }) : undefined;
+      get().pushViewportHistory({ chrom: own.chrom, start: own.start, end: own.end, panelId: panel!.id,
+        ...(options?.likePan ? { likePan: true } : {}), ...(pan !== undefined ? { pan } : {}) });
+    } else {
+      const from = { chrom: state.chrom, start: state.start, end: state.end };
+      get().pushViewportHistory({ ...from, ...(to ? { pan: isPanOrZoom(from, to) } : {}) });
     }
-
-    // Add new entry and limit to 50 entries
-    const newHistory = [...history, entry].slice(-50);
-    set({
-      viewportHistory: newHistory,
-      historyIndex: -1,  // Reset to head
-    });
   },
 
   goBack: () => {
     const state = get();
-    const { viewportHistory, historyIndex, chrom, start, end } = state;
-
-    // Calculate actual index (historyIndex -1 means we're at the head, looking at current view)
-    const currentIdx = historyIndex === -1 ? viewportHistory.length : historyIndex;
-
-    if (currentIdx <= 0) return;  // Can't go back further
-
-    // If at head, first push current location so we can go forward to it
-    if (historyIndex === -1 && viewportHistory.length > 0) {
-      // Check if current position is different from last in history
-      const lastEntry = viewportHistory[viewportHistory.length - 1];
-      if (lastEntry.chrom !== chrom || lastEntry.start !== start || lastEntry.end !== end) {
-        // Push current to history and navigate — single atomic set()
-        const newHistory = [...viewportHistory, { chrom, start, end }].slice(-50);
-        const targetIdx = newHistory.length - 2;
-        const target = newHistory[targetIdx];
-        set(s => jumpState(s, target.chrom, target.start, target.end, {
-          viewportHistory: newHistory,
-          historyIndex: targetIdx,
-        }));
-        return;
-      }
-    }
-
-    // Navigate to previous entry
-    const targetIdx = currentIdx - 1;
-    const target = viewportHistory[targetIdx];
-    if (target) {
-      set(s => jumpState(s, target.chrom, target.start, target.end, { historyIndex: targetIdx }));
+    const { viewportHistory } = state;
+    const head = state.historyIndex === -1 ? viewportHistory.length : state.historyIndex;
+    for (let i = head - 1; i >= 0; i--) {
+      const entry = viewportHistory[i];
+      const now = historyTargetView(state, entry);
+      // A closed panel, or a view already where the jump left from (nothing to undo): the one before.
+      if (!now || sameSpan(now, entry)) continue;
+      const history = viewportHistory.map((e, j) => (j === i ? { ...e, to: { chrom: now.chrom, start: now.start, end: now.end } } : e));
+      applyHistoryMove(get, set, entry, entry, { viewportHistory: history, historyIndex: i }, jumpWasPan(entry, now));
+      return;
     }
   },
 
   goForward: () => {
     const state = get();
     const { viewportHistory, historyIndex } = state;
-
-    if (historyIndex === -1 || historyIndex >= viewportHistory.length - 1) {
-      return;  // Already at head
-    }
-
-    const targetIdx = historyIndex + 1;
-    const target = viewportHistory[targetIdx];
-    if (target) {
-      // Stay on the entry (even the last one): the view now is that entry, so
-      // the next Back goes to the one before it. Resetting to the head (-1)
-      // made Back 'go' to the last entry, the view itself.
-      set(s => jumpState(s, target.chrom, target.start, target.end, { historyIndex: targetIdx }));
+    if (historyIndex === -1) return;  // at the head
+    for (let i = historyIndex; i < viewportHistory.length; i++) {
+      const entry = viewportHistory[i];
+      const now = historyTargetView(state, entry);
+      if (!entry.to || !now) continue;
+      const next = i + 1 >= viewportHistory.length ? -1 : i + 1;
+      applyHistoryMove(get, set, entry, entry.to, { historyIndex: next }, jumpWasPan(entry, entry.to));
+      return;
     }
   },
 
   canGoBack: () => {
     const state = get();
-    const { viewportHistory, historyIndex } = state;
-    const currentIdx = historyIndex === -1 ? viewportHistory.length : historyIndex;
-    return currentIdx > 0;
+    const head = state.historyIndex === -1 ? state.viewportHistory.length : state.historyIndex;
+    return state.viewportHistory.slice(0, head).some(e => { const now = historyTargetView(state, e); return !!now && !sameSpan(now, e); });
   },
 
   canGoForward: () => {
     const state = get();
-    const { viewportHistory, historyIndex } = state;
-    return historyIndex !== -1 && historyIndex < viewportHistory.length - 1;
+    if (state.historyIndex === -1) return false;
+    return state.viewportHistory.slice(state.historyIndex).some(e => !!e.to && !!historyTargetView(state, e));
   },
 
   // CIGAR display actions

@@ -181,3 +181,24 @@ def test_session_read_route_returns_the_json_and_rejects_other_files(client, tmp
     other = tmp_path / "notes.txt"
     other.write_text("x")
     assert client.post("/api/session/read", params={"path": str(other)}).json()["success"] is False
+
+
+def test_meta_locus_bed_is_checked_and_relinked(tmp_path):
+    """3.1.0 audit: the meta-locus pool's BED (frontend.metaLocus.bed_path) joins the missing-file preflight,
+    fingerprints and relinking like any other input."""
+    new_root = tmp_path / "moved"
+    for rel in ("runs/a.bam", "runs/b.bam", "ref/genome.fa", "ref/genes.gtf", "beds/sites.bed"):
+        _write(new_root / rel)
+    session = _session("/nonexistent/old")
+    session["frontend"]["metaLocus"] = {"bed_path": "/nonexistent/old/beds/sites.bed", "name": "Sites", "seed": 1}
+    refs = {ref["path"]: ref for ref in session_file_refs(session)}
+    assert refs["/nonexistent/old/beds/sites.bed"]["kind"] == "meta-locus"
+    assert check_session_files(session)["missing"] == 5
+    after = check_session_files(session, anchor={"old": "/nonexistent/old/runs/a.bam",
+                                                  "new": str(new_root / "runs/a.bam")})
+    assert after["missing"] == 0
+    relinked = apply_path_mapping(session, after["mapping"])
+    assert relinked["frontend"]["metaLocus"]["bed_path"] == str(new_root / "beds/sites.bed")
+    # an existing BED is fingerprinted with the rest
+    from services.session_files import session_file_fingerprints
+    assert str(new_root / "beds/sites.bed") in session_file_fingerprints(relinked)

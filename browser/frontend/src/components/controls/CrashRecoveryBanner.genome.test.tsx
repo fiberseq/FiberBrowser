@@ -70,6 +70,26 @@ describe('restoring a session whose genome the server already has', () => {
   });
 });
 
+describe('a server started with its own reference (--fasta) keeps it (genome-restore precedence, 3.1.0 RC)', () => {
+  it('the saved sacCer3 is not loaded over --fasta dm6, and the page says so in one line', async () => {
+    const { useReferenceNoticeStore } = await import('../../stores/referenceNoticeStore');
+    useReferenceNoticeStore.getState().setNotice(null);
+    useBrowserStore.setState({ currentGenome: 'dm6', fastaPath: '/data/dm6.fa', hasFasta: true } as any);
+    mocked(getStatus).mockResolvedValue({ has_fasta: true, current_genome: 'dm6', fasta_path: '/data/dm6.fa', startup_reference: true });
+    await restoreSnapshot(saved({ currentGenome: 'sacCer3', fastaPath: null } as any));
+    expect(loadGenome).not.toHaveBeenCalled();
+    expect(loadFasta).not.toHaveBeenCalled();
+    expect(useBrowserStore.getState().currentGenome).toBe('dm6');
+    expect(useReferenceNoticeStore.getState().notice).toBe('The saved reference (sacCer3) was not restored: this server was started with dm6.');
+  });
+
+  it('a reference the user loaded in the app (not --fasta) is replaced by the restored one, as before', async () => {
+    mocked(getStatus).mockResolvedValue({ has_fasta: true, current_genome: 'dm6', fasta_path: '/data/dm6.fa', startup_reference: false });
+    await restoreSnapshot(saved({ currentGenome: 'sacCer3', fastaPath: null } as any));
+    expect(loadGenome).toHaveBeenCalledWith('sacCer3');
+  });
+});
+
 describe('genome declarations come back with the session (Codex MED, fb62)', () => {
   it('puts the saved declarations back before the datasets\' own references and analyses', async () => {
     mocked(getStatus).mockResolvedValue({ has_fasta: true, current_genome: 'hg38', fasta_path: USER_FASTA });

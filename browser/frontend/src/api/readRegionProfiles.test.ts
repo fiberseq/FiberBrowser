@@ -34,6 +34,18 @@ it('counts a read once in a bin its calls share and covers a call past its inter
   expect(nuc[270]).toBe(0.5); // read c's call past its intervals is covered by it: 1 of 2 reads, not 1 of 1
 });
 
+it('keeps a profile independent of the other requested sources (coverage spans every layer and FIRE interval)', () => {
+  const reads = [
+    { id: 'a', intervals: [[0, 4000, 4000]] as [number, number, number][],
+      layers: { nuc: { intervals: [[2100, 2250, 150]] as [number, number, number][] } } },
+    { id: 'b', intervals: [[1000, 2000, 1000]] as [number, number, number][],
+      layers: { msp: { intervals: [[2000, 2600, 600]] as [number, number, number][] } } },
+  ];
+  const nucOnly = readRegionProfiles(reads, 4000, ['nuc']).layers!.nuc;
+  expect(readRegionProfiles(reads, 4000, ['nuc', 'fire']).layers!.nuc).toEqual(nucOnly);
+  expect(nucOnly[270]).toBe(0.5); // bin 2160-2168: read b covers it through its MSP
+});
+
 it('uses the server rounding rule for exact half-millionths', () => {
   const reads = Array.from({ length: 128 }, (_, i) => ({ id: String(i),
     intervals: [[0, 1000, 1000]] as [number, number, number][],

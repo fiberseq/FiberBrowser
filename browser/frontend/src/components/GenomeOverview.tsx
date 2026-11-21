@@ -89,7 +89,7 @@ export function GenomeOverview() {
     setIsLoading(true);
 
     logFrontendDiagnostic(`[GenomeOverview] Fetching coverage: ${chrom}:0-${chromInfo.size}, ${bins} bins, datasets=${datasetKey}`);
-    getCoverage(chrom, 0, chromInfo.size, bins, undefined, { signal: controller.signal }, showDuplicateReads, showQcFailReads, hideUncalledReads)
+    getCoverage(chrom, 0, chromInfo.size, bins, undefined, { signal: controller.signal }, showDuplicateReads, undefined, showQcFailReads, hideUncalledReads)
       .then(result => {
         if (controller.signal.aborted) return;
         logFrontendDiagnostic(`[GenomeOverview] Coverage received: max=${result.max}, nonzero=${result.coverage.filter((v: number) => v > 0).length}/${result.coverage.length} bins`);

@@ -1,6 +1,12 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
+import { PlotSetYScaleControl, usePlotSetYScale } from '../../charts/PlotSetYScaleControl';
+import type { PlotSetMember } from '../../../utils/plotSetYScale';
+import {
+  baselineNote, clusterAxisLabel, overviewBaseline, clusterChannelUnit, clusterEnrichmentSupported,
+  clusterRefLine, clusterShownValues, coveredExtent, ENRICHMENT_OFF_REGULARITY, useClusterYScale, type ChannelBaseline, type ShownValues,
+} from './clusterYScale';
 import { OverlayProfileChart } from '../../charts/OverlayProfileChart';
-import { getLayerColor, getLayerLabel } from '../../../utils/layerColors';
+import { channelColor as getLayerColor, channelLabel as getLayerLabel } from '../../../utils/clusterViewChannels';
 import { ProfileChart } from './ClusterCharts';
 import { AnalysisButton } from '../shared';
 import { useBrowserStore } from '../../../stores/browserStore';
@@ -8,6 +14,8 @@ import { seedHistoryBaseline } from '../../../stores/historySlice';
 import { UNASSIGNED_CLUSTER_ID, getClusterColor, getClusterLabel } from '../../tracks/ReadTrack';
 import { GripVertical, Split } from '../../ui/Icons';
 import type { MergedClusterInfo } from '../../../stores/clusterMergeLog';
+import { useLayerColorVersion } from '../../../features/layerColours/state';
+import { fullSetLegend } from '../../../utils/plotSetLegend';
 
 export type ClusterSummary = {
   cluster: number;
@@ -42,6 +50,8 @@ type OverviewTabContentProps = {
   mergeSelectedClusters: (datasetIds?: string[]) => number;
   combinedProfiles: Record<number, Record<string, number[]>>;
   enabledMetaProfiles: Record<string, boolean>;
+  /** Several chosen channels (Cluster views): one small profile each, stacked, each on its own scale. */
+  stackedChannels?: readonly string[] | null;
   proportions: ClusterProportions | null;
   chartWidth: number;
   containerWidth: number;
@@ -69,6 +79,7 @@ export function OverviewTabContent({
   mergeSelectedClusters,
   combinedProfiles,
   enabledMetaProfiles,
+  stackedChannels = null,
   proportions,
   chartWidth,
   containerWidth,
@@ -80,6 +91,8 @@ export function OverviewTabContent({
   mergedInto,
   onSplitBack,
 }: OverviewTabContentProps) {
+  // Re-render when the user's layer colours change (Labels → Layer colours).
+  useLayerColorVersion();
   const [dragCluster, setDragCluster] = useState<number | null>(null);
   const [dragOverCluster, setDragOverCluster] = useState<number | null>(null);
   const firstDsId = datasetIds[0];
@@ -104,6 +117,62 @@ export function OverviewTabContent({
     const remainingVisible = allClusterIds.some(cluster => currentVisible.has(cluster) && !selectedUnion.has(cluster));
     return selectedVisible && remainingVisible;
   });
+
+  // Y scaling of the cluster cards (Own y per card / Shared y; raw / enrichment). The cards average each channel
+  // across datasets, so the baselines are the across-dataset averages and the shared scope is always all.
+  const { yScale, setYScale, datasetProfiles } = useClusterYScale(datasetIds);
+  const overviewKeys = useMemo(() => (stackedChannels && stackedChannels.length > 1
+    ? [...stackedChannels]
+    : Object.entries(enabledMetaProfiles).filter(([, v]) => v).map(([k]) => k)), [stackedChannels, enabledMetaProfiles]);
+  const stacked = !!(stackedChannels && stackedChannels.length > 1);
+  const baselines = useMemo(() => {
+    const out: Record<string, ChannelBaseline> = {};
+    if (yScale.value !== 'enrichment') return out;
+    for (const k of overviewKeys) {
+      // The datasets' metaprofiles, averaged; a channel they lack (the on-demand patch shares) pools the cards'
+      // own profiles (combined across datasets, as drawn) by their reads.
+      out[k] = overviewBaseline(k, datasetIds.map(sk => datasetProfiles[sk]),
+        clusterData.map(cd => ({ data: combinedProfiles[cd.cluster]?.[k] ?? [], reads: cd.totalCount })));
+    }
+    return out;
+  }, [yScale.value, overviewKeys, datasetIds, datasetProfiles, clusterData, combinedProfiles]);
+  const shownByCluster = useMemo(() => {
+    const out: Record<number, Record<string, ShownValues>> = {};
+    const none: ChannelBaseline = { region: null, datasetMean: null, pooledFromClusters: false };
+    for (const { cluster } of clusterData) {
+      const profile = combinedProfiles[cluster];
+      if (!profile) continue;
+      out[cluster] = {};
+      for (const k of overviewKeys) {
+        const data = profile[k] ?? [];
+        if (data.length) out[cluster][k] = clusterShownValues(k, data, yScale, baselines[k] ?? none, coveredExtent(profile));
+      }
+    }
+    return out;
+  }, [clusterData, combinedProfiles, overviewKeys, yScale, baselines]);
+  const members = useMemo<PlotSetMember[]>(() => clusterData.flatMap(({ cluster, totalCount }) => {
+    const shown = shownByCluster[cluster];
+    if (!shown) return [];
+    const unitOf = (k: string) => (clusterEnrichmentSupported(k) && yScale.value === 'enrichment' ? `enrichment:${yScale.form}` : clusterChannelUnit(k));
+    if (stacked) {
+      return overviewKeys.filter(k => shown[k]).map(k => ({ id: `${cluster}:${k}`, dataset: '*', channel: k, unit: unitOf(k), series: [{ values: shown[k].values, reads: totalCount }] }));
+    }
+    const keys = overviewKeys.filter(k => shown[k]);
+    return keys.length ? [{ id: `${cluster}`, dataset: '*', channel: 'overview', unit: 'overview', series: keys.map(k => ({ values: shown[k].values, reads: totalCount })) }] : [];
+  }), [clusterData, shownByCluster, overviewKeys, stacked, yScale.value, yScale.form]);
+  const domains = usePlotSetYScale(members, yScale);
+  const yNote = baselineNote(Object.values(shownByCluster).flatMap(byKey => Object.values(byKey)), yScale);
+  const allRegularity = overviewKeys.length > 0 && overviewKeys.every(k => !clusterEnrichmentSupported(k));
+  // Shared y: the range is written on the first card of each range only (every card shares it); Own y: on every card.
+  const maxShownFor = (() => {
+    const seen = new Set<string>();
+    return (id: string, channel: string) => {
+      if (yScale.mode === 'perPlot') return true;
+      if (seen.has(channel)) return false;
+      seen.add(channel);
+      return true;
+    };
+  })();
 
   const handleMergeSelected = () => {
     mergeSelectedClusters(datasetIds);
@@ -243,6 +312,21 @@ export function OverviewTabContent({
           </AnalysisButton>
         </div>
       )}
+      {clusterData.length > 0 && overviewKeys.length > 0 && (
+        <div className="mb-1">
+          <PlotSetYScaleControl
+            value={yScale}
+            onChange={setYScale}
+            testId="cluster-overview-yscale"
+            rawLabel="Fraction"
+            enrichment={allRegularity ? ENRICHMENT_OFF_REGULARITY : true}
+            scope={multiDs ? 'Each card averages its channels across datasets, so one range covers every dataset' : false}
+            shareChannels={stacked}
+            smallReads
+            note={yNote}
+          />
+        </div>
+      )}
       {clusterData.map(({ cluster, color, counts, totalCount }) => {
         const isSelected = selectedUnion.has(cluster);
         const isFocused = !visibleClusterIds || visibleClusterIds.has(cluster);
@@ -342,6 +426,10 @@ export function OverviewTabContent({
               >
                 {totalCount}
               </span>
+              {yScale.mode === 'shared' && yScale.smallReads > 0 && totalCount < yScale.smallReads && (
+                <span className="text-[10px] text-ink-muted flex-shrink-0" data-testid={`cluster-few-reads-${cluster}`}
+                  title={`Fewer than ${yScale.smallReads} reads: drawn, but it doesn't set the shared range (Options)`}>few reads</span>
+              )}
               {multiDs && (
                 <span className="text-[11px] text-gray-400 flex-shrink-0">
                   ({counts.join('/')})
@@ -372,20 +460,65 @@ export function OverviewTabContent({
               const activeKeys = Object.entries(enabledMetaProfiles)
                 .filter(([, v]) => v)
                 .map(([k]) => k);
+              const shown = shownByCluster[cluster] ?? {};
               const series = activeKeys
-                .map(k => ({ data: profile[k] ?? [], color: getLayerColor(k), label: getLayerLabel(k) }))
+                .map(k => ({ data: shown[k]?.values ?? [], color: getLayerColor(k), label: getLayerLabel(k) }))
                 .filter(s => s.data.length > 0);
+              // Every card draws the set's full legend (every channel on show, in order), so the plots line up
+              // across clusters; a channel this cluster has no data for stays in it, hollow.
+              const legendItems = activeKeys.length > 1
+                ? fullSetLegend(activeKeys.map(k => ({ key: k, label: getLayerLabel(k), color: getLayerColor(k) })),
+                  k => (shown[k]?.values.length ?? 0) > 0, label => `no ${label} in this cluster`)
+                : undefined;
+              const enrichedKeys = activeKeys.filter(k => shown[k]?.enriched);
+              const overviewLabel = enrichedKeys.length ? clusterAxisLabel(enrichedKeys[0], yScale, 'Fraction') : 'Fraction';
               const fallback = profile.nuc ?? profile.footprint ?? Object.values(profile)[0];
+              if (stackedChannels && stackedChannels.length > 1) {
+                return (
+                  <div className="mt-0.5 space-y-px" data-testid={`cluster-stacked-profiles-${cluster}`}>
+                    {stackedChannels.map(k => {
+                      const data = shown[k]?.values ?? [];
+                      const id = `${cluster}:${k}`;
+                      const label = clusterAxisLabel(k, yScale, getLayerLabel(k));
+                      return (
+                        <div key={k} className="flex items-center gap-1" data-testid="cluster-stacked-profile" data-channel={k}>
+                          <span className="w-14 shrink-0 truncate text-[10px] text-gray-500 dark:text-gray-400" title={getLayerLabel(k)}>{getLayerLabel(k)}</span>
+                          {data.length > 0 ? (
+                            <OverlayProfileChart
+                              series={[{ data, color: getLayerColor(k), label: getLayerLabel(k) }]}
+                              width={Math.max(120, chartWidth - 60)}
+                              height={Math.max(18, Math.round(profileHeight * 0.6))}
+                              showLegend={false}
+                              isReversed={isReversed}
+                              noAxes
+                              yDomain={yScale.mode === 'shared' ? domains.byId[id] : undefined}
+                              refLine={clusterRefLine(k, yScale)}
+                              cornerMax={maxShownFor(id, yScale.shareChannels ? clusterChannelUnit(k) : k)}
+                              valueLabel={label}
+                              filename={`cluster_${cluster}_${k}`}
+                            />
+                          ) : <span className="text-[10px] text-gray-400" title={`no ${getLayerLabel(k)} in this cluster`}>—</span>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              }
               return (
-                <div className="mt-0.5">
-                  {series.length > 0 ? (
+                <div className="mt-0.5" data-testid="cluster-overview-profile" data-cluster={cluster}>
+                  {series.length > 0 || legendItems ? (
                     <OverlayProfileChart
                       series={series}
+                      legendItems={legendItems}
                       width={chartWidth}
                       height={profileHeight}
-                      showLegend={series.length > 1}
+                      showLegend={(legendItems?.length ?? series.length) > 1}
                       isReversed={isReversed}
                       noAxes
+                      yDomain={yScale.mode === 'shared' ? domains.byId[`${cluster}`] : undefined}
+                      refLine={enrichedKeys.length ? clusterRefLine(enrichedKeys[0], yScale) : undefined}
+                      cornerMax={maxShownFor(`${cluster}`, 'overview')}
+                      valueLabel={overviewLabel}
                       filename={`cluster_${cluster}_overview`}
                     />
                   ) : fallback ? (

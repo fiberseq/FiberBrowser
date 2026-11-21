@@ -16,8 +16,10 @@ describe('EmptyViewTips', () => {
     expect(text).toMatch(/Right-click a read for its actions/);
     expect(text).toMatch(/Shift\+click selects a read, (Cmd|Ctrl)\+click a footprint/);
     expect(text).not.toMatch(/always|mode/i);
-    // A plain scroll scrolls the rows (Cmd/Ctrl+scroll sizes them); it never zoomed.
-    expect(text).not.toMatch(/scroll or/);
+    // Plain scroll moves through rows; modified scroll has the same meaning in every panel.
+    expect(text).toMatch(/(Cmd|Ctrl)\+scroll zooms the genomic region around the pointer/);
+    expect(text).toContain('Shift+scroll sizes read rows in all panels together');
+    expect(text).toContain('plain scroll moves through rows');
     expect(text).toMatch(/Drag to pan; \+ \/ − \(or ↑ \/ ↓\) to zoom/);
     act(() => root.unmount());
   });

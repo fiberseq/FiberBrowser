@@ -1,0 +1,428 @@
+"""Hub completion: paged queries, D12 aliases, D10 portability and record states. No servers."""
+import base64
+import hashlib
+import io
+import json
+import shutil
+import zipfile
+from types import SimpleNamespace as NS
+
+import pytest
+
+from scan_fixtures import tiny_bam, write_scan_dir
+from test_scan_hub import _state, _dataset
+from services.hub.paging import query_hits, regions_for_scope
+from services.scan.registry import open_scan, new_generation
+from services.scan.session import export_scans, restore_scans
+
+
+@pytest.fixture
+def scanned(tmp_path):
+    bam = tiny_bam(tmp_path / 'sample.bam')
+    path = write_scan_dir(tmp_path / 'scan', bam, hits=[(10, 20, 'fp:class:chrT:15:a', 'a'),
+        (100, 100, 'fp:class:chrT:100:b', 'b'), (900, 920, 'fp:class:chrT:910:c', 'c')], values=[
+        ('fp:class:chrT:15:a', 10, 20, 'dataset_1::pooled', 'channel', 'prevalence', .2, 20),
+        ('fp:class:chrT:100:b', 100, 100, 'dataset_1::pooled', 'channel', 'prevalence', .8, 20),
+        ('fp:class:chrT:910:c', 900, 920, 'all', 'all', 'q', .01, 20)])
+    state = _state([_dataset('sample', bam)])
+    scan = open_scan(state, path, source='cache')
+    return state, scan
+
+
+def test_page_filter_sort_and_stable_ties(scanned):
+    state, scan = scanned
+    q = dict(scope={'kind': 'genome'}, limit=1, sort={'key': 'prevalence', 'dir': 'desc'})
+    first = query_hits(state, q)
+    assert first['total'] == 3 and first['hasMore']
+    assert first['rows'][0]['hit']['label'] == 'b'
+    second = query_hits(state, dict(q, offset=1))
+    assert second['rows'][0]['hit']['label'] == 'a'
+    assert query_hits(state, dict(q, minPrevalence=.5))['total'] == 1
+    assert query_hits(state, dict(q, maxQ=.05))['rows'][0]['hit']['label'] == 'c'
+    assert query_hits(state, dict(q, hiddenSets=[scan.sets(state)[0]['setId']]))['total'] == 0
+    assert query_hits(state, dict(q, typeFilter='other'))['total'] == 0
+    with pytest.raises(ValueError):
+        query_hits(state, dict(q, sort={'key': 'invalid'}))
+
+
+def test_all_scopes_and_boundaries(scanned, tmp_path, monkeypatch):
+    state, scan = scanned
+    bed = tmp_path / 'regions.bed'
+    bed.write_text('chrT\t99\t101\nchrT\t100\t102\n')
+    scopes = [dict(kind='view', chrom='chrT', start=100, end=101), dict(kind='bed', bed=str(bed)),
+              dict(kind='anchors', anchors=[['chrT', 100]], flank=0), dict(kind='scan', scanId=scan.scan_id)]
+    for scope, expected in zip(scopes, [1, 1, 1, 3]):
+        assert query_hits(state, dict(scope=scope))['total'] == expected
+    assert query_hits(state, dict(scope=dict(kind='view', chrom='chrT', start=99, end=100)))['total'] == 0
+    monkeypatch.setattr('services.files_endpoint.search_gene_payload', lambda _s, _g: dict(found=True, chrom='chrT', tss=100))
+    assert query_hits(state, dict(scope=dict(kind='genes', genes=['GENE_A'], flank=0)))['total'] == 1
+    assert query_hits(state, dict(scope=dict(kind='view', chrom='T', start=100, end=101)))['total'] == 1
+    assert query_hits(state, dict(scope=dict(kind='regions', regions=[['chrT', 0, 21]])))['total'] == 1
+
+
+def test_large_scan_is_paged_after_global_sort(tmp_path):
+    bam = tiny_bam(tmp_path / 'large.bam', length=2_000_000)
+    count = 100_005
+    path = write_scan_dir(tmp_path / 'large-scan', bam, length=2_000_000,
+        hits=[(i*10, i*10+2, f'fp:class:chrT:{i*10+1}:{i:08x}', f'{i:06d}') for i in range(count)])
+    state = _state([_dataset('sample', bam)], chroms=[('chrT', 2_000_000)])
+    open_scan(state, path)
+    request = dict(scope={'kind': 'genome'}, sort={'key': 'label', 'dir': 'desc'}, limit=100)
+    first = query_hits(state, request)
+    assert first['total'] == count
+    assert len(first['rows']) == 100
+    assert first['rows'][0]['hit']['label'] == '100004'
+    index = state._hub_index
+    second = query_hits(state, dict(request, offset=100))
+    assert state._hub_index is index
+    assert second['rows'][0]['hit']['label'] == '099904'
+    assert not {r['hit']['hitId'] for r in first['rows']} & {r['hit']['hitId'] for r in second['rows']}
+    index.close()
+
+
+def test_provider_filter_sort_identity_aliases():
+    from services.hub.variation_identity import normalize_hit, variation_id
+    state = _state()
+    h = dict(hitId='old', setId='browser:variation', typeId='var.snp', chrom='chrT', start=10, end=11,
+             scores={'custom': 5, 'strength': 0}, values={'ds:a': {'prevalence': {'v': .8}}, 'ds:b': {'prevalence': {'v': .3}}},
+             detail={'kind': 'snv', 'alleleId': 'exact-allele'})
+    normalized = normalize_hit(state, h)
+    assert normalized['hitId'].startswith('var:') and normalized['idAliases'] == ['old']
+    assert ':snv:allele-' in normalized['hitId']
+    geometry = normalize_hit(state, dict(h, detail={'kind': 'snv'}))
+    assert ':snv:geometry-' in geometry['hitId'] and geometry['hitId'] != normalized['hitId']
+    assert variation_id('12345678', 'chrT', 10, 10, 'I', geometry={'length': 4}).startswith('var:12345678:chrT:10-10:insertion:')
+    providers = [dict(setId='browser:variation', source=dict(hits=[h]))]
+    req = dict(scope=dict(kind='view', chrom='chrT', start=0, end=20), providers=providers,
+               scoreFilters=[dict(name='custom', op='>=', value=4)], compare=['ds:a', 'ds:b'], sort=dict(key='delta', dir='desc'))
+    assert query_hits(state, req)['total'] == 1
+    assert query_hits(state, dict(req, minStrength=0))['total'] == 1
+    assert query_hits(state, dict(req, scope=dict(kind='genome')))['total'] == 0
+
+
+def test_embedded_scan_survives_cache_deletion_with_same_set_identity(scanned):
+    state, scan = scanned
+    sid = scan.sets(state)[0]['setId']
+    frontend = dict(featureHub=dict(scans=[dict(path=str(scan.path), scanId=scan.scan_id, source='cache')]))
+    saved, bundles = export_scans(state, frontend)
+    assert saved['featureHub']['scans'][0]['embedding'] == 'embedded'
+    assert 'embedding' not in frontend['featureHub']['scans'][0]
+    original = str(scan.path)
+    scan.tables.close()
+    shutil.rmtree(scan.path)
+    new_generation(state)
+    restored, problems = restore_scans(state, dict(frontend=saved, hub_scans=bundles))
+    assert restored == [scan.scan_id] and not problems
+    assert saved['featureHub']['scans'][0]['path'] != original
+    from services.scan.registry import list_scans
+    assert list_scans(state)[0].sets(state)[0]['setId'] == sid
+    assert query_hits(state, dict(scope=dict(kind='genome')))['total'] == 3
+    # A re-export and restore keeps identities stable again.
+    saved2, bundles2 = export_scans(state, saved)
+    new_generation(state)
+    assert restore_scans(state, dict(frontend=saved2, hub_scans=bundles2))[1] == []
+    assert list_scans(state)[0].sets(state)[0]['setId'] == sid
+
+
+def test_large_or_external_scans_remain_references(scanned, monkeypatch):
+    state, scan = scanned
+    from services.scan import session
+    monkeypatch.setattr(session, 'EMBED_LIMIT', 1)
+    saved, bundles = export_scans(state, dict(featureHub=dict(scans=[dict(path=str(scan.path), scanId=scan.scan_id)])))
+    assert not bundles
+    assert saved['featureHub']['scans'][0]['embedding'] == 'reference'
+    assert 're-scan' in saved['featureHub']['scans'][0]['rescanPrompt']
+    scan.source = 'opened'
+    saved, bundles = export_scans(state, dict(featureHub=dict(scans=[dict(path=str(scan.path), scanId=scan.scan_id)])))
+    assert not bundles and 'embedding' not in saved['featureHub']['scans'][0]
+
+
+@pytest.mark.parametrize('name', ['../escape', '/escape', 'nested/../../escape', 'bad\\escape'])
+def test_session_rejects_unsafe_scan_archives(name):
+    data = io.BytesIO()
+    with zipfile.ZipFile(data, 'w') as z:
+        z.writestr('manifest.json', '{}')
+        z.writestr(name, 'unsafe')
+    raw = data.getvalue()
+    state = _state()
+    restored, problems = restore_scans(state, dict(hub_scans=[dict(archive=base64.b64encode(raw).decode(), sha256=hashlib.sha256(raw).hexdigest())]))
+    assert not restored and 'Unsafe' in problems[0]['error']
+
+
+def test_read_only_scan_no_states(scanned):
+    from services.scan.states import hub_feature_states
+    state, scan = scanned
+    state.datasets.clear()
+    scan.bind(state)
+    assert scan.sets(state)[0]['datasets'] == []
+    assert query_hits(state, dict(scope=dict(kind='genome')))['total'] == 3
+    with pytest.raises(ValueError, match='No loaded dataset'):
+        hub_feature_states(state, scan.sets(state)[0]['setId'], dict(id='fp:class:chrT:15:a'))
+
+
+def test_provider_record_states_and_generic_dispatch():
+    from services.hub.provider_states import browser_feature_states, record_states
+    from services.feature_states import feature_states
+    from services.lift.cohort import _encode_record
+    key1 = _encode_record(['molecule', 'synthetic', 'first'])
+    key2 = _encode_record(['molecule', 'synthetic', 'second'])
+    # Same molecule/name, different records; split rows of one record share the state.
+    reads = [dict(id='row-a', analysis_id='lift-cohort:v1 ["molecule","synthetic","first",0,"primary"]',
+                  reference_start=0, reference_end=100, layers={'msp': {'intervals': [[0, 100]]}}),
+             dict(id='row-b', analysis_id='lift-cohort:v1 ["molecule","synthetic","second",0,"primary"]',
+                  reference_start=0, reference_end=100, layers={'msp': {'intervals': []}})]
+    state = NS(datasets={'sample': NS()}, build_working_set=lambda *a, **k: NS(reads=reads))
+    hit = dict(setId='browser:peaks:p', hitId='p', typeId='peaks.peak', chrom='chrT', start=10, end=20,
+               anchor=15, datasets=['sample'], stateSpec={'kind': 'open'})
+    got = feature_states(state, [dict(kind='peaks-peak', source=hit['setId'], id='p', hub_hit=hit)])
+    assert got['by_dataset']['sample'] == {key1: '1', key2: '0'}
+
+
+def test_peak_open_states_share_one_working_set_per_run():
+    """Inside a hub run, peak-open hits read one working set per dataset (each read projected once); the called
+    states equal the per-hit working sets."""
+    from services.hub.provider_states import browser_feature_states, shared_windows
+    # absolute reads: (id, start, end, MSPs); a working set returns them with MSPs relative to its window start
+    raw = [('r0', 0, 3000, [(100, 400), (1500, 1700), (2190, 2300)]), ('r1', 50, 2500, [(1000, 1300), (2000, 2080)]),
+           ('r2', 900, 3000, [(1580, 1650), (2050, 2200)]), ('r3', 1400, 1900, []),
+           ('r4', 2000, 2500, [(2140, 2170), (2100, 2150)])]   # unsorted, overlapping: scanned
+    calls = []
+
+    def build(ds, chrom, lo, hi, **kw):
+        calls.append((ds, lo, hi))
+        reads = []
+        for i, a, b, m in raw:
+            if a < hi and b > lo:
+                ivs = [[max(0, s - lo), min(hi - lo, e - lo)] for s, e in m if e > lo and s < hi]
+                # as the viewport projection: a layer with nothing in the window is dropped
+                reads.append(dict(id=i, analysis_id=i, reference_start=a, reference_end=b,
+                                  layers={'msp': {'intervals': ivs}} if ivs else {}))
+        return NS(reads=reads)
+    state = NS(datasets={'sample': NS(data_type='bam')}, build_working_set=build, max_working_reads=0)
+    hits = [dict(setId='browser:peaks:p', hitId=f'p{a}', chrom='chrT', start=a, end=a + 60, anchor=a + 30,
+                 datasets=['sample'], stateSpec={'kind': 'open'}) for a in (300, 1100, 1590, 2100)]
+
+    def states():
+        return [{k: v for k, v in browser_feature_states(state, h['setId'], dict(id=h['hitId'], hub_hit=h))[0].items()
+                 if v != '.'} for h in hits]
+    alone = states()
+    assert len(calls) == len(hits)
+    calls.clear()
+    with shared_windows(state, hits):
+        shared = states()
+    assert shared == alone and len(calls) == 1
+    assert alone[2] == {('sample', 'r0'): '1', ('sample', 'r2'): '1'}      # r1, r3: no MSP near the peak
+    assert alone[3] == {('sample', 'r0'): '0', ('sample', 'r1'): '0', ('sample', 'r2'): '1', ('sample', 'r4'): '1'}
+    # a capped server keeps the per-hit working sets (a wider window would sample differently)
+    state.max_working_reads = 100
+    calls.clear()
+    with shared_windows(state, hits):
+        assert states() == alone
+    assert len(calls) == len(hits)
+
+
+def test_sv_graph_and_difference_state_adapters(monkeypatch):
+    from services.hub.provider_states import browser_feature_states
+    base = dict(id='synthetic', reference_start=0, reference_end=1000)
+    reads = [dict(base, id='carrier', sv=[dict(t='I', ref=200, len=40)], hp='H1'),
+             dict(base, id='reference', sv=[], hp='H2')]
+    state = NS(datasets={'sample': NS(id='sample', data_type='bam')}, build_working_set=lambda *a, **kw: NS(reads=reads))
+    hit = dict(setId='browser:test', hitId='hit', chrom='chrT', start=200, end=200, anchor=200, datasets=['sample'])
+    def run(spec):
+        return browser_feature_states(state, hit['setId'], dict(id='hit', hub_hit=dict(hit, stateSpec=spec)))[0]
+    assert run(dict(kind='sv', t='I', length=40)) == {('sample', 'carrier'): '1', ('sample', 'reference'): '0'}
+    assert run(dict(kind='graph', paths={'a': dict(datasets=['sample'], hap='H1', state='1'),
+                                       'b': dict(datasets=['sample'], hap='H2', state='0')})) == {
+        ('sample', 'carrier'): '1', ('sample', 'reference'): '0'}
+    monkeypatch.setattr('services.differences.workspace.inspect', lambda *a, **kw: dict(
+        targets=[dict(calls_by_molecule={'a': dict(call=dict(assignment='target', level='confirmed')),
+                                        'b': dict(call=dict(assignment='reference'))})],
+        membership=dict(rows={'sample': {'carrier': 'a', 'reference': 'b'}})))
+    assert run(dict(kind='difference', target={'target_id': 'frozen'})) == {('sample', 'carrier'): '1', ('sample', 'reference'): '0'}
+
+
+def test_snp_state_adapter_reads_alleles_with_quality(tmp_path):
+    import pysam
+    from services.hub.provider_states import browser_feature_states
+    bam_path = tmp_path / 'snps.bam'
+    header = dict(HD=dict(VN='1.6', SO='coordinate'), SQ=[dict(SN='chrT', LN=1000)])
+    with pysam.AlignmentFile(str(bam_path), 'wb', header=header) as bam:
+        for i, base in enumerate('ACA'):
+            r = pysam.AlignedSegment()
+            r.query_name = f'synthetic-{i}'
+            r.reference_id, r.reference_start, r.flag, r.mapping_quality = 0, 100, 0, 60
+            r.query_sequence, r.cigarstring, r.query_qualities = base*100, '100M', pysam.qualitystring_to_array(('!' if i == 2 else 'I')*100)
+            bam.write(r)
+    pysam.index(str(bam_path))
+    state = _state([_dataset('sample', str(bam_path))], chroms=[('chrT', 1000)])
+    hit = dict(setId='browser:snp', hitId='hit', chrom='chrT', start=150, end=151, datasets=['sample'],
+               stateSpec=dict(kind='snp', variantKind='snv', alleles=['A', 'C'], alt='C'))
+    got = browser_feature_states(state, hit['setId'], dict(id='hit', hub_hit=hit))[0]
+    assert got == {('sample', 'synthetic-0'): '0', ('sample', 'synthetic-1'): '1', ('sample', 'synthetic-2'): '.'}
+
+
+def test_snp_state_adapter_skips_records_the_loader_drops_and_bigbed_datasets(tmp_path):
+    """A secondary, duplicate or QC-fail record of a read never folds its primary's allele to '.', and a bigBed
+    dataset named by the hit has no records to read (no crash)."""
+    import pysam
+    from services.hub.provider_states import browser_feature_states
+    bam_path = tmp_path / 'snps.bam'
+    header = dict(HD=dict(VN='1.6', SO='coordinate'), SQ=[dict(SN='chrT', LN=1000)])
+    with pysam.AlignmentFile(str(bam_path), 'wb', header=header) as bam:
+        for name, base, flag in [('synthetic-0', 'C', 0), ('synthetic-0', 'A', 256), ('synthetic-0', 'A', 1024),
+                                 ('synthetic-0', 'A', 512), ('synthetic-1', 'A', 0)]:
+            r = pysam.AlignedSegment()
+            r.query_name = name
+            r.reference_id, r.reference_start, r.flag, r.mapping_quality = 0, 100, flag, 60
+            r.query_sequence, r.cigarstring, r.query_qualities = base*100, '100M', pysam.qualitystring_to_array('I'*100)
+            bam.write(r)
+    pysam.index(str(bam_path))
+    bigbed = tmp_path / 'var.bb'
+    bigbed.write_bytes(b'not a bam')
+    state = _state([_dataset('sample', str(bam_path)), _dataset('layers', str(bigbed), data_type='bigbed')],
+                   chroms=[('chrT', 1000)])
+    hit = dict(setId='browser:snp', hitId='hit', chrom='chrT', start=150, end=151, datasets=['sample', 'layers'],
+               stateSpec=dict(kind='snp', variantKind='snv', alleles=['A', 'C'], alt='C'))
+    got = browser_feature_states(state, hit['setId'], dict(id='hit', hub_hit=hit))[0]
+    assert got == {('sample', 'synthetic-0'): '1', ('sample', 'synthetic-1'): '0'}
+
+
+def test_scan_archive_limit_is_cumulative(scanned, monkeypatch, tmp_path):
+    state, scan = scanned
+    other_path = tmp_path / 'other'
+    shutil.copytree(scan.path, other_path)
+    manifest = json.loads((other_path / 'manifest.json').read_text())
+    manifest['scan_id'] = 'second'
+    (other_path / 'manifest.json').write_text(json.dumps(manifest))
+    other = open_scan(state, other_path, source='cache')
+    refs = [dict(path=str(s.path), scanId=s.scan_id) for s in (scan, other)]
+    single, bundles = export_scans(state, dict(featureHub=dict(scans=refs[:1])))
+    from services.scan import session
+    monkeypatch.setattr(session, 'EMBED_LIMIT', bundles[0]['size'] + 1)
+    saved, bundles = export_scans(state, dict(featureHub=dict(scans=refs)))
+    assert len(bundles) == 1
+    assert [r['embedding'] for r in saved['featureHub']['scans']] == ['embedded', 'reference']
+
+
+def test_variation_geometry_identity_ignores_layout_and_keeps_aliases():
+    from services.hub.variation_identity import normalize_hit
+    state = _state()
+    base = dict(setId='browser:test', hitId='old-sv', typeId='var.sv', chrom='chrT', start=100, end=100, scores={})
+    sv = normalize_hit(state, dict(base, detail=dict(kind='insertion', length=50)))
+    graph = normalize_hit(state, dict(base, hitId='old-graph', typeId='graph.bubble', detail=dict(kind='insertion',
+        locusKey='layout-specific', revisions={'graph': 'new'}, alleles=[dict(bp=50, carriers=['path'])])))
+    assert sv['hitId'] == graph['hitId']
+    assert sv['idAliases'] == ['old-sv'] and graph['idAliases'] == ['old-graph']
+
+
+def test_lifted_legacy_class_states_are_per_record(monkeypatch):
+    from services import consensus_workflow as cw
+    from services.feature_states import feature_states
+    from services.lift.cohort import _encode_record
+    state = NS(datasets={'sample': NS(data_type='bam_livelift')})
+    jobs, _ = cw._session(state)
+    jobs['run'] = dict(status='complete', result=dict(manifest=dict(region=dict(chrom='chrT', start=0, end=1000))),
+                       index={'sample': dict(by_name={'synthetic': ['first', 'second']}, per_unit={})})
+    reads = [dict(id='synthetic', analysis_id='lift-cohort:v1 ["molecule","synthetic","first",0,"primary"]', member=True),
+             dict(id='synthetic', analysis_id='lift-cohort:v1 ["molecule","synthetic","second",0,"primary"]', member=False)]
+    state.build_working_set = lambda *a, **kw: NS(reads=reads)
+    monkeypatch.setattr('services.consensus_occupancy.class_occupancy', lambda _s, _ds, _c, rows, _g:
+        ({0: {'synthetic'} if rows[0]['member'] else set()}, {0: {'synthetic'}}))
+    got = feature_states(state, [dict(kind='fp-class', source='run', id='class', dataset_id='sample')])
+    assert got['by_dataset']['sample'] == {_encode_record(['molecule', 'synthetic', 'first']): '1',
+                                          _encode_record(['molecule', 'synthetic', 'second']): '0'}
+
+
+def test_lifted_nfr_states_keep_source_record_identities(monkeypatch):
+    from lab.services.nfr_features import nfr_states
+    from services.scan.states import _Keyer
+    ds = NS(data_type='bam_livelift', paths=['/data/synthetic.bam'], live_lift=None)
+    state = NS(datasets={'sample': ds})
+    result = dict(nfrs=[dict(id='N1', start=10, end=20)], parameters={}, datasets=[dict(dataset_id='sample')], molecules={
+        'a': dict(dataset='sample', read_name='synthetic', record_sha256='first', nfr={'N1': dict(status='callable', gaps=[[10, 20]])}),
+        'b': dict(dataset='sample', read_name='synthetic', record_sha256='second', nfr={'N1': dict(status='callable', gaps=[])})})
+    monkeypatch.setattr('lab.services.accessibility_workflow._complete', lambda *a: dict(result=result))
+    got = nfr_states(state, 'run', dict(kind='nfr', id='N1'))[0]
+    keyer = _Keyer(state, 'sample', {0: ds.paths[0]})
+    assert got == {('sample', keyer.key(0, 'synthetic', 'first:0')): '1',
+                   ('sample', keyer.key(0, 'synthetic', 'second:0')): '0'}
+
+
+def test_native_graph_columns_bind_without_replacing_alternate_nodes(monkeypatch):
+    import asyncio
+    from services.scan.graph_hits import add_graph_aliases
+    from services.graph_panel import service
+    reg = NS(id='graph', maps=[dict(target='target', source='alt')], binding=lambda key: dict(path=dict(contig='chrT')))
+    monkeypatch.setattr(service, 'registry', lambda: NS(list=lambda: [dict(id='graph')], get=lambda _key: reg))
+    async def ready():
+        return NS(available=True)
+    monkeypatch.setattr(service, 'ensure_ready', ready)
+    monkeypatch.setattr('services.scan.graph_hits.package_bindings', lambda *a: {
+        'alt': dict(datasets=['sample'], hap='H1', contigs={'sample': 'source'}),
+        'target': dict(datasets=[], contigs={})})
+    hit = dict(graph=dict(registration='graph', paths={'alt': dict(status='carried')}, columns=[['alternate', 0, 5]]),
+               stateSpec=dict(kind='graph', paths={'alt': dict(state='1')}))
+    asyncio.run(add_graph_aliases(NS(), [hit], 'chrT'))
+    assert hit['graph']['columns'] == [['alternate', 0, 5]]
+    assert hit['graph']['paths']['alt']['datasets'] == ['sample']
+    assert hit['values']['ds:sample:H1']['prevalence']['v'] == 1
+    assert hit['stateSpec']['paths']['alt']['hap'] == 'H1'
+
+
+def test_reopening_session_cache_retains_browser_scan_origin(scanned):
+    import asyncio
+    from routers.scan import open_scan as open_route
+    state, scan = scanned
+    old_set = scan.sets(state)[0]['setId']
+    result = asyncio.run(open_route(dict(path=str(scan.path), source='cache'), state=state))
+    assert result['source'] == 'cache'
+    assert result['sets'][0]['setId'] == old_set
+
+
+def test_paged_lifted_insertion_gets_target_path_absence(monkeypatch):
+    import asyncio
+    from routers.hub import hub_hits_query
+    from services.graph_panel import service
+    from services.graph_panel.columns import Occ
+    from services.scan import graph_hits
+
+    # As in the lifted e2e: the scan row retains its MAT coordinates, while
+    # the target placement is a zero-width insertion junction on chrT.
+    hit = dict(hitId='inside', chrom='chrT_MATERNAL', start=100, end=105,
+               frame=dict(kind='source', contig='chrT_MATERNAL', datasetId='lifted'),
+               source=dict(chrom='chrT_MATERNAL', start=100, end=105),
+               target=dict(chrom='chrT', start=50, end=50, insertion=True),
+               lift=dict(status='unmapped', junction=[50, 50]))
+    native = dict(hitId='native', chrom='chrT', start=50, end=55)
+    result = dict(rows=[dict(source='scan', setId='set', hit=hit),
+                        dict(source='native-scan', setId='native-set', hit=native)], total=2)
+    monkeypatch.setattr('services.hub.paging.query_hits', lambda *_: result)
+    reg = NS(id='graph', maps=[dict(target='ref', source='mat')],
+             binding=lambda key: dict(path=dict(contig='chrT'), size=1000))
+    monkeypatch.setattr(service, 'registry', lambda: NS(list=lambda: [dict(id='graph')], get=lambda _: reg))
+
+    async def ready():
+        return NS(available=True)
+    monkeypatch.setattr(service, 'ensure_ready', ready)
+    monkeypatch.setattr(graph_hits, 'package_bindings', lambda *_: {
+        'ref': dict(label='GRCh38', datasets=['native'], contigs={'native': 'chrT'}),
+        'mat': dict(label='MAT', datasets=['lifted'], contigs={'lifted': 'chrT_MATERNAL'}, hap='MAT')})
+    # Complete target response walks around the insertion; MAT carries its node.
+    tile = dict(complete=True, paths=[dict(binding='ref', complete=True, coverage=[dict(kind='covered')])])
+
+    async def fetch(*_):
+        return {None: {0: tile}, 'mat': {0: tile}}
+    monkeypatch.setattr(graph_hits, '_fetch', fetch)
+    monkeypatch.setattr(graph_hits, 'merged_occurrences', lambda *_: {
+        'ref': {'r': Occ('r', 'reference', 1000, False, (0, 1000), [(0, 1000)])},
+        'mat': {'i': Occ('i', 'insertion', 5, False, (100, 105), [(0, 5)])}})
+
+    page = asyncio.run(hub_hits_query(dict(scope=dict(kind='view', chrom='chrT', start=0, end=100)), state=NS()))
+    inside = page['rows'][0]['hit']
+    assert inside['chrom'] == 'chrT_MATERNAL' and inside['target']['start'] == inside['target']['end'] == 50
+    assert inside['lift']['status'] == 'unmapped'
+    assert inside['graph']['columns'] == [['insertion', 0, 5]]
+    assert inside['graph']['paths']['ref'] == dict(status='absent', carried=0, total=5, label='GRCh38', datasets=['native'])
+    assert inside['graph']['paths']['mat']['status'] == 'carried'
+    assert inside['graph']['paths']['mat']['hap'] == 'MAT'
+    assert native['graph']['binding'] == 'ref'

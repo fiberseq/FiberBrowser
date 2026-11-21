@@ -214,7 +214,8 @@ def test_requirements_come_from_core_and_the_pack_manifests(tmp_path, monkeypatc
 
 def test_this_builds_pack_declares_what_it_needs():
     labels = [f["label"] for r in runtime.required_features() for f in r.get("features") or []]
-    assert labels[:2] == [f["label"] for f in runtime.CORE_REQUIREMENTS["features"]]
+    core = [f["label"] for f in runtime.CORE_REQUIREMENTS["features"]]
+    assert labels[:len(core)] == core
 
 
 def test_packaged_means_frozen_or_a_build_file(tmp_path, monkeypatch):

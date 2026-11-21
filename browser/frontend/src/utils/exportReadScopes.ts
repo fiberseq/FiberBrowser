@@ -6,6 +6,7 @@
  * panel navigated elsewhere has its reads at its own region).
  */
 import type { BrowserState } from '../stores/browserStore';
+import { foldedInShownGraph } from '../stores/graphMembership';
 import { orderAssignmentReadIds } from './clusterExport';
 import { clusterOfScope, idsForScope, scopeOptions, type ReadStatsScope } from './readStatsScope';
 
@@ -38,8 +39,9 @@ export function onScreenStateKeys(state: ScopeState): string[] {
   const datasetPanels = state.panels.filter(p => p.contentType === 'dataset' && p.datasetId);
   const maximized = datasetPanels.find(p => p.id === state.fullViewPanelId);
   const onScreen = maximized
-    ? [maximized]
-    : datasetPanels.filter(p => !p.collapsed && !state.collapsedRows?.has(p.layoutRow ?? 0));
+    ? [maximized, ...datasetPanels.filter(p => p.collapsed && foldedInShownGraph(p, state.panels)?.id === maximized.id)]
+    : datasetPanels.filter(p => (!p.collapsed || foldedInShownGraph(p, state.panels)) && !state.collapsedRows?.has(p.layoutRow ?? 0));
+  // (A member folded into a shown graph is on screen: its reads are in the host's sub-band.)
   return [...new Set(onScreen.map(p => p.stateKey ?? p.datasetId!))];
 }
 
@@ -50,7 +52,9 @@ function datasetOf(state: ScopeState, stateKey: string): string {
 
 /** Where a panel's reads are: its locus (its own, else the main one) and its own reference, if any. */
 function regionOf(state: ScopeState, stateKey: string): { chrom: string; start: number; end: number; genome?: string } {
-  const panel = state.panels.find(p => p.contentType === 'dataset' && (p.stateKey ?? p.datasetId) === stateKey);
+  const own = state.panels.find(p => p.contentType === 'dataset' && (p.stateKey ?? p.datasetId) === stateKey);
+  // A folded member's reads are in its host's window.
+  const panel = own?.collapsed ? foldedInShownGraph(own, state.panels) ?? own : own;
   const v = panel?.viewportOverride;
   const locus = v ? { chrom: v.chrom, start: v.start, end: v.end } : { chrom: state.chrom, start: state.start, end: state.end };
   return panel?.genome ? { ...locus, genome: panel.genome } : locus;

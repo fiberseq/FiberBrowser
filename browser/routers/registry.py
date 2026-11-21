@@ -16,6 +16,7 @@ from routers.external_tracks import router as external_tracks_router
 from routers.features import router as features_router
 from routers.fiberhmm_layers import router as fiberhmm_layers_router
 from routers.files import router as files_router
+from routers.meta_locus import router as meta_locus_router
 from routers.filtering import router as filtering_router
 from routers.footprint import router as footprint_router
 from routers.footprint_rules import router as footprint_rules_router
@@ -39,6 +40,7 @@ from routers.remote import router as remote_router
 from routers.render import router as render_router
 from routers.sandbox import router as sandbox_router
 from routers.session_links import router as session_links_router
+from routers.sequence_search import router as sequence_search_router
 from routers.sessions import router as sessions_router
 from routers.sv import router as sv_router
 from routers.variants import router as variants_router
@@ -46,6 +48,12 @@ from routers.tracks import router as tracks_router
 from routers.utility import router as utility_router
 from routers.version import router as version_router
 from routers.workspaces import router as workspaces_router
+from routers.lift import router as lift_router
+from routers.differences import router as differences_router
+from routers.graph_panel import router as graph_panel_router
+from routers.scan import router as scan_router
+from routers.nuc import router as nuc_router
+from routers.hub import router as hub_router
 
 API_ROUTERS = (
     jupyter_router,
@@ -64,11 +72,13 @@ API_ROUTERS = (
     regions_router,
     read_auxiliary_router,
     insertions_router,
+    sequence_search_router,
     clustering_router,
     clustering_visualization_router,
     filtering_router,
     tracks_router,
     files_router,
+    meta_locus_router,
     footprint_router,
     footprint_rules_router,
     natural_language_router,
@@ -91,6 +101,12 @@ API_ROUTERS = (
     lab_router,
     remote_router,
     session_links_router,
+    lift_router,
+    differences_router,
+    graph_panel_router,
+    scan_router,
+    nuc_router,
+    hub_router,
 )
 
 

@@ -8,6 +8,13 @@ app build or a new session (browser storage is per origin, so 8756 and 8757 neve
     entry uses the server's defaults.
 ``custom_motifs``
     ``[{"name", "counts": {"A": [...], ...}}]``: the user's own matrices, scanned next to JASPAR's.
+``layer_colors``
+    ``{layer: "#rrggbb"}``: the user's default layer colours (Labels → Layer colours → Save as my default colours);
+    a session's own colours win over them.
+``recent_genomes_max``
+    How many recent genomes are listed (default 8). Nothing switches the reference on its own: a pinned or recent
+    genome that fits the data better is offered in the mismatch banner. (An old ``recent_genomes_autoswitch`` is
+    ignored and dropped.)
 ``show_preview_features``
     Settings → Show preview features (a boolean; absent: off). Not an analysis choice, but an app preference that must
     hold on every port and build the same way.
@@ -16,7 +23,7 @@ A plugin pack adds maps of its own (``PackAPI.preference_map``): ``{key: value}`
 ``pinned_motifs``.
 
 Kept apart from ``browser_settings.json`` (the hand-edited machine configuration). ``FIBERBROWSER_PREFERENCES`` points
-at another file. Writes merge per genome / species and replace the file atomically; an unreadable file reads as empty
+at another file. On a lab server each member has their own file (``preferences_path``). Writes merge per genome / species and replace the file atomically; an unreadable file reads as empty
 and is replaced on the next write.
 """
 from __future__ import annotations
@@ -35,9 +42,36 @@ MAX_KEYS = 200
 _lock = threading.Lock()
 
 
-def preferences_path() -> Path:
+def shared_preferences_path() -> Path:
     override = os.environ.get('FIBERBROWSER_PREFERENCES')
     return Path(override).expanduser() if override else Path.home() / '.fiberhmm' / 'analysis_preferences.json'
+
+
+def _lab_member() -> str | None:
+    """The signed-in member of a lab-server request, else None (the local user, and the server's own work)."""
+    try:
+        from services.runtime import current_lab_user, get_lab_mode
+        user = current_lab_user() if get_lab_mode() else None
+    except Exception:
+        return None
+    if user is None:
+        return None
+    name = getattr(user, 'name', None) or str(user)
+    return str(name) if name else None
+
+
+def preferences_path() -> Path:
+    """The preferences file of this request. On a lab server each member has their own
+    (``lab_preferences/<hash of the member>.json`` beside the shared file), so one member's colours, pins or settings
+    never replace another's; until a member first saves, they read the shared file."""
+    shared = shared_preferences_path()
+    member = _lab_member()
+    if member is None:
+        return shared
+    import hashlib
+    # Keyed by the shared file too: two servers with their own preference files never share a member's file.
+    digest = hashlib.sha256(f'{shared.resolve()}\0{member}'.encode('utf-8')).hexdigest()[:24]
+    return shared.parent / 'lab_preferences' / f'{digest}.json'
 
 
 def unique_names(value: Any, limit: int) -> list[str]:
@@ -67,15 +101,35 @@ def _pinned(value: Any) -> list[str] | None:
     return unique_names(value, MAX_PINNED) if isinstance(value, list) else None
 
 
+def _hex_color(value: Any) -> str | None:
+    """A layer colour (``layer_colors``): ``#rrggbb`` lower case; ``#rgb`` widened; anything else dropped."""
+    if not isinstance(value, str):
+        return None
+    v = value.strip().lower()
+    if len(v) == 4 and v.startswith('#') and all(c in '0123456789abcdef' for c in v[1:]):
+        v = '#' + ''.join(c * 2 for c in v[1:])
+    return v if len(v) == 7 and v.startswith('#') and all(c in '0123456789abcdef' for c in v[1:]) else None
+
+
+# Layer aliases (utils/layerColors.ts, services/figure/layer_colours.ALIASES): one stored key per layer.
+_LAYER_ALIASES = {'msp': 'fire', 'mod': 'm6a', 'footprint': 'nuc'}
+
+
+def _map_key(field: str, key: str) -> str:
+    return _LAYER_ALIASES.get(key, key) if field == 'layer_colors' else key
+
+
 def _maps() -> dict[str, Callable[[Any], Any]]:
     """Every per-key map: the packs', then core's (a pack never replaces a core map)."""
     from plugins.packs import preference_maps
-    return {**preference_maps(), 'pinned_motifs': _pinned}
+    return {**preference_maps(), 'pinned_motifs': _pinned, 'layer_colors': _hex_color}
 
 
 # Single values: field -> clean(raw) (None: not a valid value, dropped).
 SCALARS: dict[str, Callable[[Any], Any]] = {
     'show_preview_features': lambda v: v if isinstance(v, bool) else None,
+    # Recent genomes (services/recent_genomes.py): how many are listed.
+    'recent_genomes_max': lambda v: v if isinstance(v, int) and not isinstance(v, bool) and 1 <= v <= 50 else None,
 }
 
 
@@ -113,7 +167,7 @@ def normalize(value: Any) -> dict[str, Any]:
             k = _key(key)
             value = clean(raw) if k else None
             if value is not None:
-                out[field][k] = value
+                out[field][_map_key(field, k)] = value
     if isinstance(v.get('custom_motifs'), list):
         out['custom_motifs'] = _custom(v['custom_motifs'])
     for field, clean in SCALARS.items():
@@ -124,8 +178,11 @@ def normalize(value: Any) -> dict[str, Any]:
 
 
 def _read_file() -> dict[str, Any]:
+    path = preferences_path()
+    if not path.exists():
+        path = shared_preferences_path()  # a lab member who never saved: the shared file
     try:
-        raw = json.loads(preferences_path().read_text())
+        raw = json.loads(path.read_text())
     except (OSError, ValueError):
         return {}
     return raw if isinstance(raw, dict) else {}
@@ -174,6 +231,7 @@ def update_preferences(patch: Any) -> dict[str, Any]:
                 raise ValueError(f'{field} must be an object keyed by genome or species')
             for raw_key, raw in list(changes.items())[:MAX_KEYS]:
                 k = _key(raw_key)
+                k = _map_key(field, k) if k else k
                 if not k or (only_missing and k in prefs[field]):
                     continue
                 if raw is None:

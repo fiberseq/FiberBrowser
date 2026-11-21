@@ -23,6 +23,26 @@ type DerivedLayerRecord = {
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 /**
+ * A reopened native dataset's declared molecule provenance (shared-molecule groups and the joint dedup policy):
+ * reopening from its files alone comes back with none, so joint analyses would count shared molecules twice.
+ * A live-lift dataset keeps them in its lift settings (reopened with them). Returns the server's dataset after
+ * the change (or the one given, when there is nothing to restore); throws when the server refuses.
+ */
+export async function restoreMoleculeProvenance<D extends { id: string }>(saved: SerializedDataset, dataset: D): Promise<D> {
+  if (saved.live_lift) return dataset;
+  const groups = saved.molecule_groups ?? [];
+  const policy = saved.joint_dedup ?? 'off';
+  // Nothing to change when the dataset already declares the saved provenance (none saved: it must declare none,
+  // so a saved empty/off setting clears groups or dedup an already-open dataset carries).
+  const have = dataset as { molecule_groups?: [string, string][]; joint_dedup?: string };
+  if (JSON.stringify(have.molecule_groups ?? []) === JSON.stringify(groups) && (have.joint_dedup ?? 'off') === policy) return dataset;
+  const { updateMoleculeProvenance } = await import('../features/liveLift/api');
+  const res = await updateMoleculeProvenance(dataset.id, groups, policy);
+  if (!res.success || !res.dataset) throw new Error(res.error ?? 'its molecule provenance could not be restored');
+  return res.dataset as unknown as D;
+}
+
+/**
  * Layers the dataset had attached that its files don't bring back on their
  * own: footprint-class layers of a class run (re-attached by activating that
  * run) and `.fiberlayers` bundles loaded from elsewhere (loaded again).
@@ -170,9 +190,20 @@ export async function reconcileClosedDatasets(
     const ds = pending.shift()!;
     if (isOpen(ds.id)) continue;
     try {
-      const res = await addDataset(ds.paths.length > 1 ? ds.paths : ds.paths[0], ds.label);
+      const res = ds.live_lift
+        // A live-lift dataset comes back through its own route (its map and settings), never as a plain BAM.
+        ? await (await import('../features/liveLift/api')).addLiveLiftDataset({
+          paths: ds.paths, manifest: ds.live_lift.manifest, haplotypes: ds.live_lift.haplotypes,
+          settings: ds.live_lift.settings, label: ds.label })
+        : await addDataset(ds.paths.length > 1 ? ds.paths : ds.paths[0], ds.label);
       if (res.success && res.dataset) {
-        store.getState().addDataset(res.dataset);
+        let opened = res.dataset;
+        try {
+          opened = await restoreMoleculeProvenance(ds, opened);
+        } catch (error) {
+          errors.push(`${ds.label}: ${errorText(error)}`);
+        }
+        store.getState().addDataset(opened);
         reopened.push({ id: res.dataset.id, dataset: ds });
         if (res.dataset.id !== ds.id) {
           const renamed = store.getState().remapHistoryDatasetIds({ [ds.id]: res.dataset.id });

@@ -84,7 +84,7 @@ export function searchRegionCatalog(
       id: `category:${genome}:${category.id}`,
       kind: 'category',
       label: path,
-      detail: `${list.length} region${list.length === 1 ? '' : 's'} · go to the first; N / P step through`,
+      detail: `${list.length} region${list.length === 1 ? '' : 's'} · go to the first; N / Shift+N step through`,
       score: regionScore(score - 15),
       reference,
       run: (runCtx: SearchContext) => {

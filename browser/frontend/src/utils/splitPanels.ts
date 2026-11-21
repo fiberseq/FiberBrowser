@@ -13,10 +13,11 @@
  * panels keep their read names (a frozen rule).
  */
 import { getFeatureStates } from '../api/features';
+import { withoutGraphMembership } from '../stores/graphMembership';
 import { getClusterColor } from '../components/tracks/read-track/constants';
 import { useBrowserStore } from '../stores/browserStore';
 import { seedHistoryBaseline } from '../stores/historySlice';
-import { useSplitPanelStore, type SplitSource } from '../stores/splitPanelStore';
+import { serializeSplitReads, useSplitPanelStore, type SplitSource } from '../stores/splitPanelStore';
 import { generatePanelId } from '../stores/utils';
 import { openSplitFrom } from '../stores/splitSources';
 import { inComparisonGroup } from './panelNavigation';
@@ -126,6 +127,7 @@ export async function loadSplitGrouping(source: SplitSource): Promise<SplitGroup
   const panel = s.panels.find(p => p.id === source.panelId);
   const key = panel ? panel.stateKey ?? panel.datasetId ?? panel.id : '';
   const assignments = s.clusterAssignments[key] ?? {};
+  const evidence = s.svCarrierEvidence[key] ?? {};
   const names = s.clusterGroupLabels[key] ?? {};
   const byId = new Map<number, string[]>();
   for (const [read, id] of Object.entries(assignments)) { const list = byId.get(id) ?? []; list.push(read); byId.set(id, list); }
@@ -134,7 +136,9 @@ export async function loadSplitGrouping(source: SplitSource): Promise<SplitGroup
     title: source.title, rule: { kind: 'frozen' },
     groups: [...byId.entries()].sort((a, b) => a[0] - b[0]).map(([id, reads]) => {
       const label = names[id] ?? `Cluster ${id}`;
+      const svEvidenceLevels = Object.fromEntries(reads.filter(read => evidence[read]).map(read => [read, evidence[read]]));
       return { key: String(id), label, count: reads.length, colour: getClusterColor(id),
+        ...(Object.keys(svEvidenceLevels).length ? { ruleExtras: { svEvidenceLevels } } : {}),
         kind: /not informative/i.test(label) ? 'na' as const : 'group' as const, ids: { [ds]: reads } };
     }),
   };
@@ -188,8 +192,10 @@ export function splitPanelCount(rows: SplitRow[], sources: PanelConfig[]): numbe
 
 /** The rule fields a row of one group keeps (its group's ruleExtras). */
 function ruleExtrasOf(grouping: SplitGrouping, groupKeys: string[]): Partial<ReadSubsetRule> {
-  if (groupKeys.length !== 1) return {};
-  return grouping.groups.find(g => g.key === groupKeys[0])?.ruleExtras ?? {};
+  const extras = groupKeys.length === 1 ? grouping.groups.find(g => g.key === groupKeys[0])?.ruleExtras ?? {} : {};
+  const levels = Object.assign({}, ...grouping.groups.filter(g => groupKeys.includes(g.key))
+    .map(g => g.ruleExtras?.svEvidenceLevels ?? {}));
+  return Object.keys(levels).length ? { ...extras, svEvidenceLevels: levels } : extras;
 }
 
 function idsFor(grouping: SplitGrouping, datasetId: string, groupKeys: string[]): string[] {
@@ -230,7 +236,7 @@ export function openSplitPanels(grouping: SplitGrouping, rows: SplitRow[], sourc
       const stateKey = `${ds}:${groupId}:${i}`;
       const label = grouping.title && row.kind === 'group' && !grouping.labelsComplete ? `${grouping.title} · ${row.label}` : row.label;
       list.push({
-        ...source,
+        ...withoutGraphMembership(source),
         id, stateKey, collapsed: false, layoutColumn: undefined, heightFraction: undefined,
         subTracks: source.subTracks.map(t => ({ ...t })),
         // As a strand split's copy: out of the source's link and comparison groups (a comparison's copy keeps its locus).
@@ -348,14 +354,7 @@ export function setSplitSessionFallback(value: unknown): void {
 
 /** The names to save with a session: every resolved split panel's. */
 export function splitSessionReads(): Record<string, string[]> {
-  const panels = useBrowserStore.getState().panels.filter(p => p.readSubset);
-  const reads = useSplitPanelStore.getState().reads;
-  const out: Record<string, string[]> = {};
-  for (const p of panels) {
-    const r = reads[panelKey(p)];
-    if (r && (r.state === 'ready' || r.state === 'frozen')) out[panelKey(p)] = [...r.ids];
-  }
-  return out;
+  return serializeSplitReads(useBrowserStore.getState().panels);
 }
 
 /** A rule's identity (panels of one rule resolve together): not which dataset and groups it shows. */
@@ -377,7 +376,7 @@ const inFlight = new Set<string>();
 /** Resolve every split panel whose reads are not known yet (one request per rule and session). */
 export async function resolveSplitPanels(): Promise<void> {
   const generation = useSplitPanelStore.getState().generation;
-  const panels = useBrowserStore.getState().panels.filter(p => p.readSubset);
+  const panels = useBrowserStore.getState().panels.filter(p => p.readSubset && !p.readSubset.rule.liftHap);
   const store = useSplitPanelStore.getState();
   const todo = panels.filter(p => !store.reads[panelKey(p)]);
   const signatures = new Map<string, ReadSubsetRule>();

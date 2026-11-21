@@ -18,9 +18,11 @@ import { UI_SCALE_SETTINGS } from '../components/controls/sidebar/view/UiScaleSe
 import { PERFORMANCE_SETTINGS } from '../components/controls/sidebar/view/PerformanceSettings';
 import { PANEL_LAUNCHER_SETTINGS } from '../components/controls/sidebar/view/PanelLauncherSettings';
 import { PREVIEW_SETTINGS } from '../components/controls/sidebar/view/PreviewFeaturesSettings';
+import { EXPERIMENTAL_SETTINGS } from '../components/controls/sidebar/view/ExperimentalSettings';
 import { LEGACY_LAYER_SETTINGS } from '../components/controls/sidebar/view/LegacyLayerInferenceSettings';
 import { LAYER_CACHE_SETTINGS } from '../components/controls/sidebar/view/LayerCacheSettings';
 import { NAVIGATION_SETTINGS } from '../components/controls/sidebar/view/NavigationSettings';
+import { GRAPH_MODE_SETTINGS } from '../components/controls/sidebar/view/GraphModeSettings';
 import { PEAK_SETTINGS } from '../components/controls/sidebar/analysis/PeakDetectionSettings';
 import { APP_SETTINGS } from '../components/controls/sidebar/analysis/AppSettings';
 import { REPRODUCIBILITY_SETTINGS } from '../components/controls/sidebar/analysis/ReproducibilitySettings';
@@ -28,6 +30,7 @@ import { LOAD_PATH_SETTINGS } from '../components/controls/sidebar/file/LoadLoca
 import { REMOTE_URL_SETTINGS } from '../components/controls/sidebar/file/RemoteUrlSettings';
 import { SESSION_SETTINGS } from '../components/controls/sidebar/file/SessionPersistenceControls';
 import { REFERENCE_PAIR_SETTINGS } from '../components/controls/sidebar/genome/ReferencePairs';
+import { RECENT_GENOME_SETTINGS } from '../components/controls/sidebar/genome/RecentGenomes';
 import { CATALOG_DATASET_SETTINGS } from '../components/controls/sidebar/catalog/CatalogDatasetGroups';
 import { CATALOG_TRACK_SETTINGS } from '../components/controls/sidebar/catalog/CatalogReferenceTracks';
 import { TOOLBAR_SETTINGS, WINDOW_SETTINGS } from './chromeSettings';
@@ -38,9 +41,10 @@ const GROUPS: ReadonlyArray<Record<string, SettingDef>> = [
   LOAD_PATH_SETTINGS, REMOTE_URL_SETTINGS, CATALOG_DATASET_SETTINGS, CATALOG_TRACK_SETTINGS, SESSION_SETTINGS,
   // Reference & Tracks
   REFERENCE_PAIR_SETTINGS,
+  RECENT_GENOME_SETTINGS,
   // Reads & Display
-  UI_SCALE_SETTINGS, PERFORMANCE_SETTINGS, PANEL_LAUNCHER_SETTINGS, PREVIEW_SETTINGS, READ_LIMIT_SETTINGS, READ_SEPARATOR_SETTINGS, DISPLAY_TOGGLE_SETTINGS,
-  LEGACY_LAYER_SETTINGS, LAYER_CACHE_SETTINGS, NAVIGATION_SETTINGS,
+  UI_SCALE_SETTINGS, PERFORMANCE_SETTINGS, PANEL_LAUNCHER_SETTINGS, PREVIEW_SETTINGS, EXPERIMENTAL_SETTINGS, READ_LIMIT_SETTINGS, READ_SEPARATOR_SETTINGS, DISPLAY_TOGGLE_SETTINGS,
+  LEGACY_LAYER_SETTINGS, LAYER_CACHE_SETTINGS, NAVIGATION_SETTINGS, GRAPH_MODE_SETTINGS,
   GAP_FILTER_SETTINGS, FOOTPRINT_FILTER_SETTINGS, SIGNAL_FILTER_SETTINGS, SV_SETTINGS, CIGAR_SETTINGS,
   // Analysis & Reproducibility
   REPRODUCIBILITY_SETTINGS, PEAK_SETTINGS, APP_SETTINGS,

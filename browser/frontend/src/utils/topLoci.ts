@@ -1,9 +1,11 @@
 import { getTopCoveredWindows, type FindReadsReason, type TopWindow } from '../api/coverage';
+import { readPolicyParams } from './readPolicyParams';
+import { signalFilterParams } from './signalFilters';
 
 /**
  * Stepping through the best-covered loci, deepest first. Each click goes to
- * the next one (wrapping round); the ranking is fetched once per dataset and
- * zoom (widths within 10% share it).
+ * the next one (wrapping round); the ranking is fetched once per dataset,
+ * zoom (widths within 10% share it) and read rules (read policy, signal filters).
  *
  * A search always ends: with a locus, or with the server's reason why there
  * is none (e.g. no reads of the dataset map to the loaded genome), when the
@@ -23,7 +25,11 @@ interface RankingRequest {
 const lists = new Map<string, RankingRequest>();
 const cursors = new Map<string, number>();
 
-const keyFor = (span: number, datasetId?: string, fit = false) => `${datasetId ?? '*'}|${Math.round(Math.log(Math.max(1, span)) / Math.log(1.1))}${fit ? '|fit' : ''}`;
+/** The read rules the ranking depends on, as the request sends them: the duplicate / QC-fail toggles, the
+ *  effective signal filters and "All reads, including uncalled". A change of any of them is another ranking. */
+const readRulesKey = () => signalFilterParams(readPolicyParams(new URLSearchParams())).toString();
+const keyFor = (span: number, datasetId?: string, fit = false) =>
+  `${datasetId ?? '*'}|${Math.round(Math.log(Math.max(1, span)) / Math.log(1.1))}${fit ? '|fit' : ''}|${readRulesKey()}`;
 
 export interface TopLocusStep { window: TopWindow; index: number; total: number }
 export type TopLocusMissReason = FindReadsReason | 'cancelled' | 'error';

@@ -34,7 +34,10 @@ class DataCache:
                       strand: Optional[str] = None, region: Optional[tuple] = None) -> dict:
         """The /api/reads/compact payload the browser gets for this dataset and view."""
         from services.read_endpoint import compact_reads_payload_for_request
+        from services.lift.capability import require
 
+        # Figure read tracks paint extent hulls: refused for live-lift datasets (§3.10).
+        require(self.state.get_dataset(dataset_id) if hasattr(self.state, "get_dataset") else None, "figure")
         fe = self.spec.fe
         cap = max_reads if max_reads is not None else int(fe.get("allReadsDisplayCap") or 2000)
         layers = sorted(set(layer_names or []))

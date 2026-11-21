@@ -73,6 +73,19 @@ export function mainViewForPanel(panel: PanelConfig, next: Span): Span | null | 
   return undefined;
 }
 
+/** Panel-to-panel links for panels that each keep a view of their own ("Each panel navigates"): a panel's move
+ * takes its linked panels along, each to its own mapped view. */
+export interface PanelLink {
+  followers: (panel: PanelConfig, next: Span, panels: PanelConfig[]) => { panelId: string; span: Span }[];
+}
+const panelLinks: PanelLink[] = [];
+export function registerPanelLink(link: PanelLink): void {
+  panelLinks.push(link);
+}
+export function panelFollowers(panel: PanelConfig, next: Span, panels: PanelConfig[]): { panelId: string; span: Span }[] {
+  return panelLinks.flatMap(link => link.followers(panel, next, panels));
+}
+
 export function hasViewLinks(): boolean {
   return viewLinks.length > 0;
 }

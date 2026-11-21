@@ -23,7 +23,7 @@ import { waitForViewIdle } from '../../../utils/viewIdle';
  *   there, and amplicons an earlier version filed there are removed);
  * - a reference key that names another reference now (a FASTA of the same
  *   file name from another folder) has its catalog read again;
- * - N / P step to the next / previous region of the catalog the Regions panel
+ * - N / Shift+N step to the next / previous region of the catalog the Regions panel
  *   shows (utils/regionNavigation.stepGenome), as its ‹ › buttons do.
  */
 export function RegionsHost() {
@@ -125,17 +125,17 @@ export function RegionsHost() {
     })();
   }, [datasets, chroms.length, assignments, main, scans, publicMode]);
 
-  // N / P: next / previous region of the current category (not while typing).
+  // N / Shift+N: next / previous region of the current category (not while typing). P toggles Plots.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
-      if (e.key !== 'n' && e.key !== 'p' && e.key !== 'N' && e.key !== 'P') return;
+      if (e.key !== 'n' && e.key !== 'N') return;
       const target = e.target as HTMLElement | null;
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable)) return;
       if (document.querySelector('[role="dialog"][aria-modal="true"]')) return;
       e.preventDefault();
       // Nothing to step through: the key does nothing (the Regions panel says why).
-      stepRegion(e.key.toLowerCase() === 'n' ? 1 : -1);
+      stepRegion(e.shiftKey ? -1 : 1);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);

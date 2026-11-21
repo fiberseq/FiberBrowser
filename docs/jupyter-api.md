@@ -93,7 +93,7 @@ alias. `known_panel_types()` lists the ids:
 |-----------------|----|--------------|
 | Clusters | `cluster-detail` | `clusters`, `cluster` |
 | Rules | `cluster-features` | `rules`, `analysis-rules` |
-| Co-accessibility | `co-accessibility` | `coacc` |
+| Co-accessibility (opens Plots on a co-accessibility plot since 3.1) | `co-accessibility` | `coacc` |
 | Footprints | `footprint-analysis` | `footprints` |
 | Peak Detection | `peak-detection` | `peaks` |
 | Transcription | `transcription-state` | `transcription` |

@@ -1,3 +1,4 @@
+import '../../../features/testSetup';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { expect, it, vi } from 'vitest';
@@ -35,5 +36,23 @@ it('records card reverse, rename and remove as separate undoable edits', () => {
   act(() => node.querySelector<HTMLButtonElement>('[data-testid="matched-group-remove"]')!.click());
   act(() => s.undo());
   expect(useBrowserStore.getState().peaksByRule.g[0].match?.reversed).toBe(true);
+  act(() => root.unmount());
+});
+
+it('opens a read-derived rule signal in Plots (a metaprofile of its source); track rules have no link', async () => {
+  const { useWorkspaceStore } = await import('../../../features/plots/workspace');
+  useWorkspaceStore.setState({ view: 'browser' });
+  const rule = { ...DEFAULT_PEAK_RULES[0], source: 'accessibility' };
+  const node = document.createElement('div'), root = createRoot(node);
+  const render = (r: typeof rule) => act(() => root.render(<PeakRuleCard rule={r} signal={[0.1, 0.5, 0.2, 0.4]}
+    index={0} isExpanded peakCount={1} viewStart={0} viewEnd={1000} scanning={false} peaksLocked={false} sourceGroups={[]}
+    onUpdate={vi.fn()} onRemove={vi.fn()} onToggleEnabled={vi.fn()}
+    onToggleExpand={vi.fn()} onRescan={vi.fn()} onDragStart={vi.fn()} onDragOver={vi.fn()} onDragEnd={vi.fn()} />));
+  render(rule);
+  act(() => node.querySelector<HTMLButtonElement>('[data-testid="peak-rule-open-in-plots"]')!.click());
+  expect(useWorkspaceStore.getState().view).toBe('plots');
+  expect(useBrowserStore.getState().plotsWorkspace.current).toMatchObject({ type: 'metaprofile', source: 'fire', where: 'view' });
+  render({ ...rule, source: 'track:0' });
+  expect(node.querySelector('[data-testid="peak-rule-open-in-plots"]')).toBeNull();
   act(() => root.unmount());
 });

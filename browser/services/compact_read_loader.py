@@ -14,6 +14,7 @@ from services.sv_events import (
     SV_MIN_LEN_DEFAULT,
     deletion_spans,
     extract_sv_events,
+    sv_extraction_floor,
     split_compact_read_at_deletions,
 )
 from services.circular_genome import (
@@ -30,6 +31,35 @@ from utils.validation import is_url
 _bigbed_format_cache: dict[str, bool] = {}
 BAM_DIAGNOSTICS_ENV = "FIBERBROWSER_BAM_DIAGNOSTICS"
 BIGBED_DIAGNOSTICS_ENV = "FIBERBROWSER_BIGBED_DIAGNOSTICS"
+
+
+def _lift_columns(read_data):
+    """Keep large source evidence groups in row-format-2 integer columns.
+
+    Composition can reuse their arrays directly, without validating and
+    converting the same Python coordinates again. Small groups stay lists.
+    """
+    import numpy as np
+    from services.read_columns import read_only, wrap
+
+    groups = [(read_data, key) for key in ('intervals', 'fire', 'methyl_m6a', 'methyl_m5c',
+                                          'possible_deam_ct', 'possible_deam_ga')]
+    groups.extend((layer, 'intervals') for layer in (read_data.get('layers') or {}).values()
+                  if isinstance(layer, dict))
+    for group, key in groups:
+        values = group.get(key)
+        if not isinstance(values, list) or len(values) < 16:
+            continue
+        try:
+            array = np.asarray(values)
+        except (ValueError, OverflowError):
+            continue
+        if array.dtype != np.int64 or array.ndim not in (1, 2):
+            continue
+        column = wrap(read_only(array))
+        group[key] = column
+        if group is read_data and read_data.get('methyl') is values:
+            read_data['methyl'] = column
 
 
 
@@ -49,8 +79,10 @@ def _read_ma_tags(read, ma_molecular):
     ``ft convert-tags``) writes the same spec under ``Ma``/``Aq``/``An``, always in
     molecular frame (a reverse read carries the same offsets as a forward one).
     """
-    from services.bam_tags import MA_ALL_MOLECULAR
-    if read.has_tag("MA"):
+    from services.bam_tags import MA_ALL_MOLECULAR, ma_tag_is_spec
+    # A rejected MA (bam_tags.ma_tag_is_spec) beside a valid Ma: the read is called by Ma
+    # (read_has_footprint_calls), so Ma is what it draws.
+    if read.has_tag("MA") and (not read.has_tag("Ma") or ma_tag_is_spec(str(read.get_tag("MA")))):
         # The file's per-group frame (bam_tags.MAGroupFrame).
         return (read.get_tag("MA"), read.get_tag("AQ") if read.has_tag("AQ") else None,
                 read.get_tag("AN") if read.has_tag("AN") else None, ma_molecular)
@@ -60,12 +92,28 @@ def _read_ma_tags(read, ma_molecular):
     return None
 
 
+def _attach_record_fields(read_data, read):
+    """Per-record fields every compact read carries when its record has them:
+    the DAF strand from ``st:Z`` and an ``st``/SEQ disagreement
+    (``services.read_strand.record_strand_fields``), and a repaired graph
+    lift's provenance ``lift: {from: Yp, mapq: Yq}`` (``services.graph_lift``)."""
+    from services.graph_lift import read_lift_provenance
+    from services.read_strand import record_strand_fields
+    read_data.update(record_strand_fields(read))
+    lift = read_lift_provenance(read)
+    if lift is not None:
+        read_data["lift"] = lift
+
+
 _MA_FOOTPRINT_TYPES = ('nuc', 'tf', 'fp_v2')   # as dense_bam_loader.MA_FOOTPRINT_LAYERS
 
 
 def ma_footprint_count(ma_str) -> int:
     """Footprints (nucleosome and TF annotations) a whole MA tag carries, for
     ``min_footprints`` on reads with no legacy ns/nl tags."""
+    from services.bam_tags import ma_tag_is_spec
+    if not ma_tag_is_spec(str(ma_str or '')):
+        return 0
     count = 0
     for part in str(ma_str or '').split(';')[1:]:
         head, sep, body = part.partition(':')
@@ -155,8 +203,8 @@ def ma_footprint_query_spans(ma_tags, *, read_length: int, is_reverse: bool,
     """A read's MA footprint calls (nuc, tf, fp_v2) as SEQ-frame query
     ``(name, start, end)``, over the whole read, with the section and frame
     rules of ``parse_ma_aq_tags_into_layers``."""
-    from services.bam_tags import CONSENSUS_MOLECULAR_COORDINATES, ma_group_frame
-    if ma_tags is None or not ma_tags[0] or not isinstance(ma_tags[0], str):
+    from services.bam_tags import CONSENSUS_MOLECULAR_COORDINATES, ma_group_frame, ma_intervals, ma_tag_is_spec
+    if ma_tags is None or not ma_tags[0] or not isinstance(ma_tags[0], str) or not ma_tag_is_spec(ma_tags[0]):
         return []
     spans = []
     spec_by_name: Dict[str, str] = {}
@@ -178,15 +226,7 @@ def ma_footprint_query_spans(ma_tags, *, read_length: int, is_reverse: bool,
         molecular = (ma_group_frame(ma_tags[3]).is_molecular(name, type_sig[strand_idx])
                      or contract.get("coordinates") == CONSENSUS_MOLECULAR_COORDINATES)
         flip = bool(molecular and is_reverse and read_length)
-        for iv in body.split(","):
-            iv = iv.strip()
-            if not iv or "-" not in iv:
-                continue
-            try:
-                s_str, l_str = iv.split("-", 1)
-                q_start, q_end = int(s_str) - 1, int(s_str) - 1 + int(l_str)
-            except ValueError:
-                continue
+        for q_start, q_end, _length, _annotation in ma_intervals(body)[1]:
             if flip:
                 q_start, q_end = read_length - q_end, read_length - q_start
             spans.append((name, q_start, q_end))
@@ -1567,12 +1607,18 @@ def build_compact_reads_from_bam(
     sv_min_len=SV_MIN_LEN_DEFAULT,
     include_sv_seq=False,
     fetch_regions=None,
+    include_supplementary=False,
+    include_lift_meta=False,
+    lift_counts=None,
+    load_budget=None,
+    sample_bounds=None,
+    sv_reference=None,
 ):
     """Build compact interval reads from a BAM file.
 
-    Every read carries ``sv`` (services/sv_events.py: deletions, insertions and
-    clips of at least ``sv_min_len``, its SA segments; absolute coordinates),
-    and its calls are split at those deletions. ``include_sv_seq`` adds the
+    Every read carries ``sv`` evidence (services/sv_events.py: deletions,
+    insertions and clips at the shared evidence floor, plus SA segments;
+    absolute coordinates). Calls are split at deletions >= ``sv_min_len``. ``include_sv_seq`` adds the
     first bases of each insertion.
 
     ``short_terminal_footprint_bp``: drop a footprint call at either end of a
@@ -1589,7 +1635,21 @@ def build_compact_reads_from_bam(
     with their head part (if also in view) into one read.  Reads with a
     wrapped part carry ``alignment_spans``: their parts' alignment extents,
     projected to the window's coordinates (``reference_start``/``end`` stay
-    the record's own, for consensus identity)."""
+    the record's own, for consensus identity).
+
+    Live lift (services/lift) decodes source records with:
+    ``include_supplementary``: also supplementary records. A hard-clipped one
+    follows the per-record annotation-scope rule
+    (``scope_hard_clipped_supplementary``): tags on its stored SEQ decode as
+    they are, whole-molecule tags decode on the record with its clips restored
+    as unknown bases, and an undecidable record is skipped and counted in
+    ``lift_counts['hard_clipped_supplementary']``;
+    ``include_lift_meta``: internal per-read fields for lifting
+    (``lift_meta_fields``); also turns the shared SignalWindow off;
+    ``load_budget``: an object whose ``examine()`` is asked before each record
+    (False stops the load) and whose ``account(read)`` sees each decoded read;
+    ``sample_bounds``: ``(ref_start, ref_end) -> [(start, end), ...]``, the
+    extents a sampled record is counted at (the target frame's)."""
     options = dict(
         include_methylation=include_methylation,
         ml_threshold=ml_threshold,
@@ -1612,6 +1672,12 @@ def build_compact_reads_from_bam(
         sv_min_len=sv_min_len,
         include_sv_seq=include_sv_seq,
         fetch_regions=fetch_regions,
+        include_supplementary=include_supplementary,
+        include_lift_meta=include_lift_meta,
+        lift_counts=lift_counts,
+        load_budget=load_budget,
+        sample_bounds=sample_bounds,
+        sv_reference=sv_reference,
     )
     wrap_length = _bam_wrap_length_for(bam_path, chrom, bool(circular), bam_handle_getter, chrom_map, contig_links)
     if wrap_length and fetch_regions is not None:
@@ -1701,7 +1767,8 @@ def _clip_part_before(read: dict, frame_end: int) -> Optional[dict]:
         layer_key=None, include_layer_qualities=True)
     if clipped is None:
         return None
-    for key in ("duplicate", "alignment_spans", "sv"):
+    for key in ("duplicate", "alignment_spans", "sv", "sv_evidence", "aligned_blocks", "sv_segments",
+                "sequence_span", "sv_alignments", "supplementary"):
         if key in read:
             clipped[key] = read[key]
     if read.get("cigar"):
@@ -1809,15 +1876,27 @@ def _build_compact_reads_from_bam_region(
     sv_min_len=SV_MIN_LEN_DEFAULT,
     include_sv_seq=False,
     fetch_regions=None,
+    include_supplementary=False,
+    include_lift_meta=False,
+    lift_counts=None,
+    load_budget=None,
+    sample_bounds=None,
+    sv_reference=None,
 ):
     """Compact reads of the records overlapping one linear BAM region.
 
     ``contig_links``: this file's plasmid links in the caller's workspace
     (``services.plasmid_reconcile.contig_links``)."""
     import time as time_module
+    if sv_reference is not None:
+        # One reference session per load: indel normalisation reuses the
+        # resolved FASTA handle and the bases it already fetched.
+        from services.sv_alleles import reference_session
+        sv_reference = reference_session(sv_reference)
     import traceback
 
     from services.bam_tags import (
+        seq_span_to_molecular,
         bam_ma_group_frame,
         read_legacy_tags_are_molecular,
         bam_consensus_contracts,
@@ -1851,6 +1930,16 @@ def _build_compact_reads_from_bam_region(
 
     def _wants_layer(*names: str) -> bool:
         return wants_layer(include_layers, requested_layer_set, *names)
+
+    # Nucleosome outputs computed for these records (services/nuc): layers of their rows, as MA groups read.
+    from services.nuc.layers import injector as _nuc_injector
+    from services.nuc.scalars import (NUC_MA_GROUPS as _NUC_GROUP_NAMES, SCALAR_GROUPS,
+                                      drop_stale_nuc_groups as _drop_stale_nuc_groups,
+                                      scalar_groups_to_fields as _scalar_groups_to_fields)
+    _SCALAR_GROUP_NAMES = frozenset(SCALAR_GROUPS)
+    nuc_inject = _nuc_injector(bam_path, region_start, region_end, include_layers=include_layers,
+                               requested_layers=requested_layer_set, include_qualities=include_layer_qualities,
+                               include_lift_meta=include_lift_meta)
 
     profile_bam = os.environ.get("FIBERBROWSER_PROFILE_BAM") == "1"
     diagnose_bam = profile_bam or bam_diagnostics_enabled()
@@ -1892,6 +1981,11 @@ def _build_compact_reads_from_bam_region(
 
     reads_without_tags = 0
     reads_with_tags = 0
+    # Record iterators hold their file's reader lock (services/file_handles.py)
+    # until closed. An early break or an exception must close them here, in this
+    # thread: left to the garbage collector, another thread would try to release
+    # the lock, fail, and leave the file locked for every later reader.
+    open_iterators = []
 
     try:
         phase_t0 = _profile_start()
@@ -1938,50 +2032,120 @@ def _build_compact_reads_from_bam_region(
         from services.background_work import checkpoint
         from services.read_sampling import active_sampler
         sampler = active_sampler()
-        if sampler is not None and sampler.level <= 0:
+        if sampler is not None and sampler.level <= 0 and sampler.only_ids is None:
             sampler = None
         records_seen = 0
         from services.signal_windows import SignalWindow
+        # A lifted source load (supplementaries, budget stops) never feeds the
+        # shared per-window signal counts.
         signal_window = (SignalWindow(bam_path, actual_chrom, region_start, region_end,
             regions=fetch_regions, source={"header": signal_provenance, "references": tuple(references)})
-            if partition is None or partition == (0, 1) else None)
+            if (partition is None or partition == (0, 1)) and not (include_lift_meta or include_supplementary)
+            else None)
         from services.read_edge_cache import iter_edge_records
-        for read in iter_edge_records(bam, actual_chrom, region_start, region_end, fetch_regions):
+        # An unrepaired graph lift (ft pg-lift) turned supplementaries into
+        # extra primaries: hide those that carry evidence of it
+        # (services.graph_lift; per record, so every view agrees).
+        from services.graph_lift import lift_hidden_predicate
+        lift_hidden = lift_hidden_predicate(bam.header)
+        from services.sv_molecules import molecule_alignments
+        def eligible_segment(record):
+            if record.is_unmapped or record.is_secondary or (lift_hidden is not None and lift_hidden(record)):
+                return None
+            evidence = record_signal(record, signal_provenance)
+            # One uncalled-read rule (bam_tags.read_has_footprint_calls), decided on the primary: a molecule
+            # whose primary the caller skipped is hidden whole (its supplementaries with it).
+            if signal_window is not None and not record.is_supplementary:
+                # The hidden-read counts by reason (uncalled; fewer calls than Min footprints).
+                called, fp_calls = footprint_call_summary(record, legacy_frame)
+                signal_window.append(record, evidence, called=called, footprint_calls=fp_calls)
+            else:
+                called = record.is_supplementary or (read_has_footprint_calls(record) if hide_uncalled else True)
+            # A QC-fail read shown by choice (FiberHMM chimeras carry no calls by design) is kept.
+            return (signal_keeps(evidence) and (include_duplicates or not getattr(record, 'is_duplicate', False))
+                    and (include_qcfail or not getattr(record, 'is_qcfail', False))
+                    and (called or not hide_uncalled or getattr(record, 'is_qcfail', False)))
+        selected_molecules = 0
+        def keep_molecule(name):
+            nonlocal selected_molecules
+            if partition is not None:
+                from services.read_sampling import name_hash
+                if name_hash(name) % partition[1] != partition[0]:
+                    return False
+            if sampler is not None:
+                if not sampler.keep(name):
+                    return False
+                if sampler.max_records is not None and selected_molecules >= sampler.max_records:
+                    return False
+            selected_molecules += 1
+            return True
+        def skipped_molecule(name, start, end):
+            if sampler is None:
+                return
+            if partition is not None:
+                from services.read_sampling import name_hash
+                if name_hash(name) % partition[1] != partition[0]:
+                    return  # each worker counts only its own sampling decisions
+            sampler.skip(start, end)
+        records = iter_edge_records(bam, actual_chrom, region_start, region_end, fetch_regions)
+        open_iterators.append(records)
+        # Lift composition needs each source record's own calls and molecular
+        # frame. Native SV loading instead collects the complete molecule bundle.
+        record_scoped = include_lift_meta or include_supplementary
+        records = (((record, None, ordinal) for ordinal, record in enumerate(records, 1))
+                   if record_scoped else molecule_alignments(
+                       records, eligible_segment, keep=keep_molecule,
+                       on_skipped=skipped_molecule, with_source_order=True))
+        open_iterators.append(records)
+        for read, molecule_records, source_order in records:
             records_seen += 1
             if not records_seen & 255:
                 checkpoint()  # a background job whose client went away stops here
+            if load_budget is not None and sampler is None and not load_budget.examine():
+                break
             if profile_bam:
                 profile_counts["records_seen"] += 1
-            if read.is_unmapped or read.is_secondary or read.is_supplementary:
+            if (read.is_unmapped or read.is_secondary
+                    or (record_scoped and read.is_supplementary and not include_supplementary)):
                 if profile_bam:
                     profile_counts["records_unmapped"] += 1
                 continue
-            if partition is not None:
+            if record_scoped and read.is_supplementary:
+                read = scope_hard_clipped_supplementary(read, lift_counts)
+                if read is None:
+                    continue
+            if lift_hidden is not None and lift_hidden(read):
+                continue
+            if record_scoped and partition is not None:
                 from services.read_sampling import name_hash
                 if name_hash(read.query_name) % partition[1] != partition[0]:
                     continue
             signal_evidence = record_signal(read, signal_provenance)
-            # One uncalled-read rule (bam_tags.read_has_footprint_calls) for the
-            # filter, the sampler's totals and the hidden-read counts.
-            if signal_window is not None:
-                # The hidden-read counts by reason (uncalled; fewer calls than Min footprints).
-                called, fp_calls = footprint_call_summary(read, legacy_frame)
-                signal_window.append(read, signal_evidence, called=called, footprint_calls=fp_calls)
-            else:
-                called = read_has_footprint_calls(read) if hide_uncalled else True
             if not signal_keeps(signal_evidence):
                 continue
+            # "Hide reads without footprint calls" (the molecule path decided it in eligible_segment).
+            called = (not hide_uncalled or read.is_supplementary or not record_scoped
+                      or read_has_footprint_calls(read))
             # A sampled display load (services/read_sampling.py): decided on the
             # name after signal eligibility; a skipped read leaves its extent.
             if sampler is not None:
+                # Counted once per molecule: a supplementary shares its primary's name (and fate).
                 counted = ((include_duplicates or not read.is_duplicate) and (include_qcfail or not getattr(read, "is_qcfail", False))
-                           and (called or not hide_uncalled or getattr(read, "is_qcfail", False)))
-                if not sampler.keep(read.query_name):
+                           and (called or getattr(read, "is_qcfail", False)) and (not record_scoped or not read.is_supplementary))
+                extents = (sample_bounds(read.reference_start, read.reference_end) if sample_bounds is not None
+                           else ((read.reference_start, read.reference_end),))
+                if record_scoped and not sampler.keep(read.query_name):
                     if counted:
-                        sampler.skip(read.reference_start, read.reference_end)
+                        for extent in extents:
+                            sampler.skip(*extent)
                     continue
                 if counted:
-                    sampler.kept(read.reference_start, read.reference_end)
+                    for extent in extents:
+                        sampler.kept(*extent)
+            # With explicit live-lift sampling the budget bounds records we
+            # decode, not the cheap skipped records whose extents we counted.
+            if load_budget is not None and sampler is not None and not load_budget.examine():
+                break
             if getattr(read, "is_qcfail", False) and not include_qcfail:
                 if profile_bam:
                     if getattr(read, "is_duplicate", False) and not include_duplicates:
@@ -2008,6 +2172,32 @@ def _build_compact_reads_from_bam_region(
             if spanning_only and (ref_start > region_start or ref_end < region_end):
                 if profile_bam:
                     profile_counts["records_nonspanning"] += 1
+                continue
+            lift_call_meta = record_call_meta(read) if include_lift_meta else None
+
+            # Annotation tags on recovered hard-clipped segments may still use
+            # whole-molecule coordinates. The per-layer frame cannot be proven
+            # from truncated SEQ: keep SV evidence without displaced chromatin.
+            if not record_scoped and read.is_supplementary and any(op == 5 for op, _n in read.cigartuples or []):
+                if min_fp_quality > 0 or min_footprints > 0:
+                    continue
+                a, b = max(ref_start, region_start), min(ref_end, region_end)
+                if b > a:
+                    read_data = {'id': read.query_name, 'intervals': [[a - region_start, b - region_start, 0]],
+                                 'no_calls': True,
+                                 **_bam_projection_identity(read, projection_library_id, projection_occurrences)}
+                    if is_duplicate:
+                        read_data['duplicate'] = True
+                    _attach_record_fields(read_data, read)
+                    _attach_sv_events(read_data, read, region_start, sv_min_len, include_sv_seq,
+                                      molecule_records=molecule_records, reference=sv_reference)
+                    if include_cigar:
+                        read_data['cigar'] = extract_cigar_events(read, region_start, region_end)
+                    if partition is not None:
+                        read_data['_fiberbrowser_source_order'] = source_order
+                    reads.append(read_data)
+                    if stream is not None:
+                        stream.append(read_data)
                 continue
 
             phase_t0 = _profile_start()
@@ -2096,6 +2286,7 @@ def _build_compact_reads_from_bam_region(
                     read_data.update(qcfail_metadata(read))
                     if is_duplicate:
                         read_data["duplicate"] = True
+                    _attach_record_fields(read_data, read)
                     if include_layers and ma_tags is not None:
                         phase_t0 = _profile_start()
                         try:
@@ -2127,6 +2318,7 @@ def _build_compact_reads_from_bam_region(
                                 family_contracts=family_contracts,
                                 skip_query_spans=terminal_drop or None,
                                 skip_span_layers=_MA_FOOTPRINT_TYPES,
+                                call_meta=lift_call_meta,
                             )
                             if ma_layers:
                                 read_data["layers"] = ma_layers
@@ -2168,21 +2360,39 @@ def _build_compact_reads_from_bam_region(
                             read_data["methyl"] = [e[0] for e in deam_events]
                         _profile_add("mark_parse", phase_t0)
                     if include_cigar:
+                        if include_lift_meta:
+                            read_data["_fiberbrowser_sequence"] = read.query_sequence
+                            read_data["_fiberbrowser_md"] = read.get_tag("MD") if read.has_tag("MD") else None
+                            read_data["_fiberbrowser_sequence_lead"] = lift_call_meta[1]
                         phase_t0 = _profile_start()
                         cigar_events = extract_cigar_events(read, region_start, region_end)
                         if cigar_events:
                             read_data["cigar"] = cigar_events
                         _profile_add("cigar_parse", phase_t0)
                     phase_t0 = _profile_start()
-                    _attach_sv_events(read_data, read, region_start, sv_min_len, include_sv_seq)
+                    if include_lift_meta:
+                        read_data.update(lift_meta_fields(
+                            read, CigarCoordMapper(read.cigartuples, ref_start), lift_call_meta,
+                            interval_calls=[None] * len(read_data["intervals"])))
+                    _attach_sv_events(read_data, read, region_start, sv_min_len, include_sv_seq,
+                                      molecule_records=molecule_records, reference=sv_reference)
                     from services.read_binary import binary_read_context
                     if binary_read_context.get():
                         read_data["_fiberbrowser_terminal_gaps"] = []
                     _profile_add("sv_events", phase_t0)
                     if partition is not None:
-                        read_data['_fiberbrowser_source_order'] = records_seen
+                        read_data['_fiberbrowser_source_order'] = source_order
+                    if include_layers and (requested_layers is None or _NUC_GROUP_NAMES.intersection(requested_layers)):
+                        # The record's own nucleosome groups, only when FiberHMM reads them as current.
+                        _drop_stale_nuc_groups(read_data, read, bam_path=bam_path)
+                    if read_data.get("layers") and _SCALAR_GROUP_NAMES.intersection(read_data["layers"]):
+                        _scalar_groups_to_fields(read_data)
+                    if nuc_inject is not None:
+                        nuc_inject(read_data)
                     apply_msp_quality_source(read_data, msp_scores_are_fire, read)
                     reads.append(read_data)
+                    if load_budget is not None:
+                        load_budget.account(read_data)
                     if stream is not None:
                         stream.append(read_data)
                 continue
@@ -2289,6 +2499,7 @@ def _build_compact_reads_from_bam_region(
             ma_layers = {}
             ma_layer_names = set()
             ma_skipped_in_region = []
+            ma_skipped_spans = [] if include_lift_meta else None
             if include_layers and ma_tags is not None:
                 phase_t0 = _profile_start()
                 ma_layers = parse_ma_aq_tags_into_layers(
@@ -2307,7 +2518,9 @@ def _build_compact_reads_from_bam_region(
                     skip_query_spans=terminal_drop or None,
                     skip_span_layers=_MA_FOOTPRINT_TYPES,
                     skipped_in_region=ma_skipped_in_region,
+                    skipped_spans=ma_skipped_spans,
                     present_names=ma_layer_names,
+                    call_meta=lift_call_meta,
                 )
                 _profile_add("ma_layer_parse", phase_t0)
 
@@ -2316,6 +2529,7 @@ def _build_compact_reads_from_bam_region(
             # calls are only left out of what is drawn and analysed.
             all_footprints = footprints
             dropped_extent = None
+            dropped_footprints = []
             if terminal_drop:
                 footprints = []
                 for fp in all_footprints:
@@ -2323,6 +2537,7 @@ def _build_compact_reads_from_bam_region(
                             and (int(fp_starts_query[fp[4]]), int(fp_starts_query[fp[4]]) + int(fp_lengths[fp[4]]))
                             in terminal_drop):
                         dropped_extent = _extent_union(dropped_extent, (fp[0], fp[1]))
+                        dropped_footprints.append(fp)
                     else:
                         footprints.append(fp)
 
@@ -2337,6 +2552,11 @@ def _build_compact_reads_from_bam_region(
             has_explicit_ma_layers = (
                 bool(ma_layers) or bool(ma_skipped_in_region)
             ) and requested_layer_set is not None
+            # A supplementary-only local alignment may carry whole-molecule
+            # annotation tags whose calls all lie on another segment. Preserve
+            # its local evidence as a neutral row when no quality gate rejects it.
+            evidence_only_segment = bool(read.is_supplementary) and min_footprints <= 0 and min_fp_quality <= 0
+            has_explicit_ma_layers = has_explicit_ma_layers or evidence_only_segment
             # A read whose only ns/nl footprints were read-end stubs stays (as an
             # empty row) wherever its body would have reached.
             stubs_only = bool(terminal_drop) and not footprints and bool(all_footprints)
@@ -2352,6 +2572,12 @@ def _build_compact_reads_from_bam_region(
             call_extent = None
             if hide_terminal_gaps and (footprints or stubs_only) and ma_tags is not None:
                 try:
+                    if include_lift_meta and ma_spans is None:
+                        # Retain the query spans call_extent already needs, so
+                        # live lift can reuse them for per-record MA presence.
+                        ma_spans = ma_footprint_query_spans(
+                            ma_tags, read_length=read_length, is_reverse=read.is_reverse,
+                            family_contracts=family_contracts)
                     call_extent = ma_footprint_call_extent(
                         ma_tags, coord_mapper, ref_start, ref_end,
                         read_length=read_length, is_reverse=read.is_reverse,
@@ -2447,6 +2673,7 @@ def _build_compact_reads_from_bam_region(
                 )
             if is_duplicate:
                 read_data["duplicate"] = True
+            _attach_record_fields(read_data, read)
 
             read_data.update(qcfail_metadata(read))
             if fp_quality_list:
@@ -2485,6 +2712,10 @@ def _build_compact_reads_from_bam_region(
                 _profile_add("mark_parse", phase_t0)
 
             if include_cigar:
+                if include_lift_meta:
+                    read_data["_fiberbrowser_sequence"] = read.query_sequence
+                    read_data["_fiberbrowser_md"] = read.get_tag("MD") if read.has_tag("MD") else None
+                    read_data["_fiberbrowser_sequence_lead"] = lift_call_meta[1]
                 phase_t0 = _profile_start()
                 cigar_events = extract_cigar_events(read, region_start, region_end)
                 if cigar_events:
@@ -2493,6 +2724,7 @@ def _build_compact_reads_from_bam_region(
 
             fire_intervals = []
             fire_sizes = []
+            fire_calls = [] if include_lift_meta else None
             has_explicit_msp = fire_starts is not None and len(fire_starts) > 0
             fire_qualities_available = fire_quals is not None
             if _wants_layer("fire", "msp") and fire_starts is not None and fire_lengths is not None:
@@ -2524,9 +2756,14 @@ def _build_compact_reads_from_bam_region(
                         int(clip_end - region_start),
                         quality,
                     ])
+                    if fire_calls is not None:
+                        fire_calls.append([f"as:{fire_index}",
+                                           *seq_span_to_molecular(fs_int, fs_int + fl_int, *lift_call_meta)])
                     # Color/quality semantics belong to the call, independent
                     # of whether this load was a viewport or a wider cache fill.
-                    fire_sizes.append(int(fe_ref - fs_ref))
+                    # Its size is the molecular length (al), as MA layers give theirs:
+                    # the same on every alignment of the molecule (a lifted record too).
+                    fire_sizes.append(fl_int)
                 if fire_intervals:
                     read_data["fire"] = fire_intervals
                 _profile_add("fire_overlay", phase_t0)
@@ -2575,6 +2812,10 @@ def _build_compact_reads_from_bam_region(
                 # legacy inference, just as when cropping a containing cache.
                 layers = {name: layer for name, layer in legacy_layers.items() if name not in ma_layer_names}
                 layers.update(ma_layers)
+                if (fire_calls and "msp" in layers and "msp" not in ma_layers
+                        and len(layers["msp"]["intervals"]) == len(fire_calls)):
+                    # The MSP layer built from as/al: one call per FIRE interval.
+                    layers["msp"]["_fiberbrowser_calls"] = [list(call) for call in fire_calls]
 
                 if infer_legacy_layers and wants_msp_layer and not has_explicit_msp and "msp" not in layers and "msp" not in ma_layer_names:
                     msp_intervals = generate_msp_from_nuc_gaps(intervals, min_nuc_size=legacy_nuc_min_size)
@@ -2590,12 +2831,52 @@ def _build_compact_reads_from_bam_region(
                 _profile_add("layer_build", phase_t0)
 
             phase_t0 = _profile_start()
-            _attach_sv_events(read_data, read, region_start, sv_min_len, include_sv_seq, mapper=coord_mapper)
+            if include_lift_meta:
+                read_data.update(lift_meta_fields(
+                    read, coord_mapper, lift_call_meta,
+                    interval_calls=_footprint_interval_calls(
+                        intervals, footprints, region_start, region_end, fp_starts_query, fp_lengths, lift_call_meta),
+                    fire_calls=fire_calls,
+                    edge_qualities=_footprint_edge_qualities(footprints, lq_qualities, rq_qualities),
+                    legacy={"ma_names": sorted(ma_layer_names), "explicit_msp": has_explicit_msp,
+                            "fire_qualities_available": fire_qualities_available}))
+                # Live lift applies the per-record footprint rules (no footprint, the terminal-gap
+                # filter, the hidden terminal gaps' call extent) to each lifted record itself: the whole
+                # record's kept footprints, its call extent and dropped read-end calls (absolute
+                # reference), and what parses its MA footprint calls when a lifted record holds only
+                # some of them.
+                read_data["_fiberbrowser_call_bounds"] = {
+                    "fp": sorted([int(fp[0]), int(fp[1])] for fp in footprints),
+                    "fp_extent": ([min(int(fp[0]) for fp in footprints), max(int(fp[1]) for fp in footprints)]
+                                  if footprints else None),
+                    "extent": [int(call_extent[0]), int(call_extent[1])] if call_extent is not None else None,
+                    "dropped": sorted([int(fp[0]), int(fp[1])] for fp in dropped_footprints),
+                    # Requested MA calls left out as read-end calls (they still keep a record: explicit MA).
+                    "ma_skipped": sorted(ma_skipped_spans or ()),
+                    "ma": ((ma_tags, read_length, bool(read.is_reverse), family_contracts, lift_call_meta[1])
+                           if ma_tags is not None else None),
+                    "_ma_query": ma_spans,
+                }
+            _attach_sv_events(read_data, read, region_start, sv_min_len, include_sv_seq, mapper=coord_mapper,
+                              molecule_records=molecule_records, reference=sv_reference)
             _profile_add("sv_events", phase_t0)
             if partition is not None:
-                read_data['_fiberbrowser_source_order'] = records_seen
+                read_data['_fiberbrowser_source_order'] = source_order
+            if include_layers and (requested_layers is None or _NUC_GROUP_NAMES.intersection(requested_layers)):
+                # The record's own nucleosome groups (an annotated BAM), only when FiberHMM reads them as current
+                # for its calls: a stale or unsupported group is neither a layer nor scalars.
+                _drop_stale_nuc_groups(read_data, read, bam_path=bam_path)
+            if read_data.get("layers") and _SCALAR_GROUP_NAMES.intersection(read_data["layers"]):
+                # A scan's per-molecule scalar group (nucmol, nfrmol): values on the row, never a drawn layer.
+                _scalar_groups_to_fields(read_data)
+            if nuc_inject is not None:
+                nuc_inject(read_data)
+            if include_lift_meta:
+                _lift_columns(read_data)
             apply_msp_quality_source(read_data, msp_scores_are_fire, read)
             reads.append(read_data)
+            if load_budget is not None:
+                load_budget.account(read_data)
             if stream is not None:
                 stream.append(read_data)
 
@@ -2603,6 +2884,10 @@ def _build_compact_reads_from_bam_region(
             signal_window.finish()
 
     except Exception as exc:
+        from services.bam_tags import FramePolicyError
+        from services.sv_molecules import MoleculeBudgetError
+        if isinstance(exc, (FramePolicyError, MoleculeBudgetError)):
+            raise
         from services.packed_reads import bounded_analysis
         if stream is not None or fetch_regions is not None or bounded_analysis.get():
             raise
@@ -2625,6 +2910,11 @@ def _build_compact_reads_from_bam_region(
                 f"({redact(str(exc)) or type(exc).__name__}): the network or the server may be down. "
                 "Check it, then reload the region."
             ) from None
+    finally:
+        for iterator in reversed(open_iterators):
+            close = getattr(iterator, "close", None)
+            if close is not None:
+                close()
 
     if diagnose_bam and (reads_with_tags == 0 or reads_without_tags > 0):
         log_bam_diagnostic(f"BAM compact reads for {chrom}:{region_start}-{region_end}:")
@@ -2651,18 +2941,393 @@ def _build_compact_reads_from_bam_region(
     return reads.finish() if isinstance(reads, PackedReadBuilder) else reads
 
 
-def _attach_sv_events(read_data, read, region_start, sv_min_len, include_sv_seq=False, mapper=None):
+# Tags whose offsets a hard clip would put out of frame (see supplementary_decodable).
+_ANNOTATION_TAGS = ("MA", "Ma", "ns", "as", "MM", "Mm")
+
+
+def supplementary_decodable(read) -> bool:
+    """Whether a supplementary record can be decoded on its own: soft-clipped,
+    or carrying no annotation tags. The loader flips molecular-frame tags by
+    SEQ length, which a hard clip shortens (FiberHMM's lift scopes annotations
+    per record instead; live lift hides these and counts them)."""
+    if not any(op == 5 for op, _length in (read.cigartuples or ())):
+        return True
+    return not any(read.has_tag(tag) for tag in _ANNOTATION_TAGS)
+
+
+def _hard_clip_lengths(read) -> tuple:
+    cigar = read.cigartuples or ()
+    left = int(cigar[0][1]) if cigar and cigar[0][0] == 5 else 0
+    right = int(cigar[-1][1]) if len(cigar) > 1 and cigar[-1][0] == 5 else 0
+    return left, right
+
+
+def annotation_scope(read, partial: int, total: int) -> Optional[str]:
+    """``'partial'`` (the record's stored SEQ), ``'whole'`` (the molecule),
+    ``'none'`` (no footprint tags) or None (undecidable) for a hard-clipped
+    record's footprint tags. Vendored from FiberHMM's lift
+    (``fiberhmm.io.graph_lift.annotation_scope``), so the browser decides each
+    record exactly as ``fiberhmm-lift`` does.
+
+    MA's (else Ma's) read length decides; legacy tags follow it. A record with
+    legacy tags only: partial when every interval fits its stored SEQ, whole
+    when one does not but all fit the molecule."""
+    for tag in ("MA", "Ma"):
+        if read.has_tag(tag):
+            try:
+                length = int(str(read.get_tag(tag)).split(";", 1)[0])
+            except ValueError:
+                return None
+            return "partial" if length == partial else "whole" if length == total else None
+    ends = []
+    for start_tag, size_tag in (("ns", "nl"), ("as", "al")):
+        if read.has_tag(start_tag) and read.has_tag(size_tag):
+            ends += [int(s) + int(n) for s, n in zip(read.get_tag(start_tag), read.get_tag(size_tag))]
+        elif read.has_tag(start_tag) or read.has_tag(size_tag):
+            return None
+    if not ends:
+        return "none"
+    if max(ends) <= partial:
+        return "partial"
+    return "whole" if max(ends) <= total else None
+
+
+_MOD_TAG_NAMES = ("MM", "ML", "Mm", "Ml", "MN", "Mn")
+_COMPLEMENT = str.maketrans("ACGTN", "TGCAN")
+
+
+def _mods_fit_stored_seq(read) -> bool:
+    """Whether the record's MM/ML describe its stored SEQ: MN (when present)
+    equals the stored length, and every MM group's skip counts fit the bases
+    the stored SEQ has (FiberHMM's "valid on the stored SEQ")."""
+    seq = read.query_sequence or ""
+    for tag in ("MN", "Mn"):
+        if read.has_tag(tag):
+            try:
+                return int(read.get_tag(tag)) == len(seq)
+            except (TypeError, ValueError):
+                return False
+    mm = read.get_tag("MM") if read.has_tag("MM") else read.get_tag("Mm") if read.has_tag("Mm") else ""
+    molecule = seq[::-1].translate(_COMPLEMENT) if read.is_reverse else seq
+    for group in str(mm).split(";"):
+        fields = group.split(",")
+        head = fields[0]
+        if len(head) < 2:
+            continue
+        base, strand = head[0].upper(), head[1]
+        # htslib counts the named base in the read's original orientation for
+        # either strand ('-' says only which strand carries the modification).
+        available = len(molecule) if base == "N" else molecule.upper().count(base)
+        try:
+            needed = sum(int(v) + 1 for v in fields[1:] if v != "")
+        except ValueError:
+            return False
+        if needed > available:
+            return False
+    return True
+
+
+def scope_hard_clipped_supplementary(read, counts: Optional[dict] = None):
+    """A supplementary record ready for record-scoped (live-lift) decoding, or
+    None when it must be hidden (counted in ``counts['hard_clipped_supplementary']``).
+
+    Soft-clipped records pass unchanged. A hard-clipped one follows
+    :func:`annotation_scope`: ``partial``/``none`` decode as they are (the
+    loader's frame handling is the stored SEQ's, and call metadata adds the
+    leading clip); ``whole`` tags describe the molecule, so they decode on a
+    copy whose hard clips become soft clips of unknown bases (``N``), which is
+    exactly the soft-clipped record's layout. Modification calls are kept only
+    when they describe the stored SEQ (no ``N`` counts as a modifiable base, so
+    they stay valid after padding); otherwise they are dropped and counted in
+    ``counts['hard_clip_mods_dropped']``. ``counts['hard_clipped_scoped']``
+    tallies the scopes of the records kept."""
+    left, right = _hard_clip_lengths(read)
+    if not (left or right):
+        return read
+    seq = read.query_sequence or ""
+    partial = len(seq) or int(read.query_length or 0)
+    total = left + partial + right
+    scope = annotation_scope(read, partial, total)
+    if scope is None or (scope == "whole" and not seq):
+        if counts is not None:
+            counts["hard_clipped_supplementary"] = counts.get("hard_clipped_supplementary", 0) + 1
+        return None
+    has_mods = read.has_tag("MM") or read.has_tag("Mm")
+    drop_mods = has_mods and not _mods_fit_stored_seq(read)
+    if counts is not None:
+        scoped = counts.setdefault("hard_clipped_scoped", {"partial": 0, "whole": 0, "none": 0})
+        scoped[scope] = scoped.get(scope, 0) + 1
+    if scope != "whole" and not drop_mods:
+        return read
+    import array as _array
+    import pysam
+    copy = pysam.AlignedSegment.fromstring(read.to_string(), read.header)
+    if drop_mods:
+        for tag in _MOD_TAG_NAMES:
+            if copy.has_tag(tag):
+                copy.set_tag(tag, None)
+        if counts is not None:
+            counts["hard_clip_mods_dropped"] = counts.get("hard_clip_mods_dropped", 0) + 1
+    if scope == "whole":
+        quals = copy.query_qualities
+        cigar = list(copy.cigartuples)
+        if left:
+            cigar[0] = (4, left)
+        if right:
+            cigar[-1] = (4, right)
+        copy.cigartuples = cigar
+        copy.query_sequence = "N" * left + seq + "N" * right
+        if quals is not None:
+            copy.query_qualities = _array.array("B", [0] * left + list(quals) + [0] * right)
+        for tag in ("MN", "Mn"):
+            if copy.has_tag(tag):
+                copy.set_tag(tag, len(copy.query_sequence), value_type="i")
+        for tag in ("MM", "Mm"):
+            if copy.has_tag(tag):
+                # The pad at the molecule's 5' end: the SEQ's right one on a reverse record.
+                copy.set_tag(tag, _pad_any_base_mm(str(copy.get_tag(tag)), right if read.is_reverse else left),
+                             value_type="Z")
+    return copy
+
+
+def _pad_any_base_mm(mm: str, pad5: int) -> str:
+    """MM after padding the stored SEQ with ``N``: groups of base ``N`` (any
+    base) count the pad too, so their first skip count moves past the
+    ``pad5`` bases at the molecule's 5' end, and an implicit ('.') group
+    becomes explicit ('?'): the padded bases were never assessed. Groups of a
+    named base never see an ``N`` and stay as they are."""
+    out = []
+    for group in mm.split(";"):
+        if not group:
+            continue
+        fields = group.split(",")
+        head = fields[0]
+        if head[:1].upper() == "N":
+            mode = head[-1] if head[-1] in "?." else ""
+            head = (head[:-1] if mode else head) + "?"
+            calls = fields[1:]
+            if calls and calls[0] != "":
+                calls[0] = str(int(calls[0]) + pad5)
+            fields = [head, *calls]
+        out.append(",".join(fields))
+    return "".join(g + ";" for g in out)
+
+
+def record_call_meta(read) -> tuple:
+    """``(read_length, lead_hard_clip, is_reverse)``: what turns SEQ-frame query
+    spans into molecular spans (``bam_tags.seq_span_to_molecular``)."""
+    cigar = read.cigartuples or ()
+    lead = int(cigar[0][1]) if cigar and cigar[0][0] == 5 else 0
+    try:
+        length = int(read.infer_read_length() or 0)
+    except Exception:
+        length = 0
+    return (length or int(read.query_length or 0) + lead, lead, bool(read.is_reverse))
+
+
+def lift_meta_fields(read, coord_mapper, call_meta, *, interval_calls=None, fire_calls=None,
+                     edge_qualities=None, legacy=None) -> dict:
+    """Internal fields live lift (services/lift) needs from a decoded record,
+    never sent to a client (``_fiberbrowser_`` prefix):
+
+    ``_fiberbrowser_aligned_runs``: ``[ref_start, mol_start, len]`` per aligned
+    CIGAR run (M/=/X), absolute reference; ``mol_start`` is the molecular index
+    of the run's first reference base (on a reverse record the run goes down
+    the molecule from there);
+    ``_fiberbrowser_calls``: ``{'intervals': [...], 'fire': [...]}`` parallel to
+    those lists (layers carry their own ``_fiberbrowser_calls``): per call
+    ``[call_id, mol_start, mol_end]`` (``None`` for gaps and neutral rows), with
+    ``call_id`` ``'<group>:<tag index>'`` stable for the record;
+    ``_fiberbrowser_primary``: ``{is_supplementary, sa}``;
+    ``_fiberbrowser_lift_record``: ``{contig, reverse, length}``;
+    ``_fiberbrowser_edge_qualities``: ``{call_id: [lq, rq]}`` of ns/nl calls;
+    ``_fiberbrowser_legacy``: what legacy layer inference after lifting needs.
+    Only with include_cigar the loader also retains ``_fiberbrowser_sequence``,
+    ``_fiberbrowser_md`` and ``_fiberbrowser_sequence_lead`` (leading hard-clip
+    length), so live lift can compare view bases with the target FASTA."""
+    length, lead, reverse = call_meta
+    import numpy as np
+    from services.read_columns import owned
+    # These blocks survive until composition: one compact column avoids a
+    # tracked Python list for every CIGAR block and repeated scalar conversion.
+    q0 = np.asarray(coord_mapper._aligned_starts, dtype=np.int64)
+    q1 = np.asarray(coord_mapper._aligned_ends, dtype=np.int64)
+    offsets = np.asarray(coord_mapper._aligned_offsets, dtype=np.int64)
+    mol = length - 1 - (q0 + lead) if reverse else q0 + lead
+    runs = owned(np.column_stack((q0 + offsets, mol, q1 - q0)))
+    sa = read.get_tag("SA") if read.has_tag("SA") else None
+    fields = {
+        "_fiberbrowser_aligned_runs": runs,
+        "_fiberbrowser_calls": {"intervals": interval_calls, "fire": fire_calls},
+        "_fiberbrowser_primary": {"is_supplementary": bool(read.is_supplementary), "sa": sa},
+        "_fiberbrowser_lift_record": {"contig": read.reference_name, "reverse": reverse, "length": int(length)},
+    }
+    if edge_qualities:
+        fields["_fiberbrowser_edge_qualities"] = edge_qualities
+    if legacy is not None:
+        fields["_fiberbrowser_legacy"] = legacy
+    return fields
+
+
+def _footprint_interval_calls(intervals, footprints, region_start, region_end, starts, lengths, call_meta):
+    """Per-interval ``[call_id, mol_start, mol_end]`` of the ns/nl footprints
+    ``build_intervals_from_footprints`` drew (gaps and a neutral row: None)."""
+    from services.bam_tags import seq_span_to_molecular
+    drawn = [fp for fp in sorted(footprints, key=lambda item: item[0])
+             if fp[1] > region_start and fp[0] < region_end]
+    if sum(1 for iv in intervals if iv[2] >= 0) != len(drawn):
+        return [None] * len(intervals)
+    calls, it = [], iter(drawn)
+    for iv in intervals:
+        if iv[2] < 0:
+            calls.append(None)
+            continue
+        tag = next(it)[4]
+        start = int(starts[tag])
+        calls.append([f"ns:{tag}", *seq_span_to_molecular(start, start + int(lengths[tag]), *call_meta)])
+    return calls
+
+
+def _footprint_edge_qualities(footprints, lq_qualities, rq_qualities):
+    if lq_qualities is None and rq_qualities is None:
+        return None
+    out = {}
+    for fp in footprints:
+        tag = fp[4]
+        out[f"ns:{tag}"] = [
+            int(lq_qualities[tag]) if lq_qualities is not None and tag < len(lq_qualities) else 0,
+            int(rq_qualities[tag]) if rq_qualities is not None and tag < len(rq_qualities) else 0,
+        ]
+    return out
+
+
+# SV evidence of a single-alignment molecule is a function of the SAM record
+# (record_sha256 hashes all of it), the reference and the request's SV
+# settings. Display loads, peak scans and analyses decode the same records
+# again and again; each keeps its result here (pickled, so no load shares
+# mutable lists with another), within a byte budget.
+_SV_MEMO_BUDGET_BYTES = 96 * 1024 * 1024
+_sv_memo = None  # OrderedDict: memo key -> pickled (evidence, events, absolute cuts)
+_sv_memo_bytes = 0
+_sv_memo_lock = None
+
+
+def _sv_memo_init():
+    global _sv_memo, _sv_memo_lock
+    import threading
+    from collections import OrderedDict
+    _sv_memo, _sv_memo_lock = OrderedDict(), threading.Lock()
+
+
+def _sv_memo_get(key):
+    with _sv_memo_lock:
+        blob = _sv_memo.get(key)
+        if blob is not None:
+            _sv_memo.move_to_end(key)
+        return blob
+
+
+def _sv_memo_put(key, blob):
+    global _sv_memo_bytes
+    size = len(blob) + 200
+    if not _SV_MEMO_BUDGET_BYTES or size > _SV_MEMO_BUDGET_BYTES // 64:
+        return
+    with _sv_memo_lock:
+        previous = _sv_memo.pop(key, None)
+        if previous is not None:
+            _sv_memo_bytes -= len(previous) + 200
+        _sv_memo[key] = blob
+        _sv_memo_bytes += size
+        while _sv_memo_bytes > _SV_MEMO_BUDGET_BYTES and _sv_memo:
+            _old_key, old = _sv_memo.popitem(last=False)
+            _sv_memo_bytes -= len(old) + 200
+
+
+def clear_sv_memo():
+    """Forget every remembered record's SV evidence (tests, cache releases)."""
+    global _sv_memo_bytes
+    with _sv_memo_lock:
+        _sv_memo.clear()
+        _sv_memo_bytes = 0
+
+
+def configure_sv_memo(budget_bytes: int) -> None:
+    """The memo's byte budget (services/performance.py sets it per machine mode)."""
+    global _SV_MEMO_BUDGET_BYTES, _sv_memo_bytes
+    with _sv_memo_lock:
+        _SV_MEMO_BUDGET_BYTES = max(0, int(budget_bytes))
+        while _sv_memo_bytes > _SV_MEMO_BUDGET_BYTES and _sv_memo:
+            _old_key, old = _sv_memo.popitem(last=False)
+            _sv_memo_bytes -= len(old) + 200
+
+
+_sv_memo_init()
+
+
+def _attach_sv_events(read_data, read, region_start, sv_min_len, include_sv_seq=False, mapper=None,
+                      molecule_records=None, reference=None):
     """``sv`` on a compact read, and its calls split at the deletions. A record
     the extraction can't read (a test double without a CIGAR string) keeps
     none: SV events never cost a read its row."""
+    import pickle
+    raw_indels = None
+    cuts_absolute = None
+    multi = bool(molecule_records) and len(molecule_records) > 1
+    record = read_data.get("record_sha256")
+    memo_key = None
+    if record and not multi:
+        from services.sv_alleles import reference_key
+        identity = getattr(reference, "identity", None) if reference is not None else (None, None)
+        if identity is None:
+            identity = reference_key(reference)
+        memo_key = (record, identity, int(sv_min_len), bool(include_sv_seq), molecule_records is None)
+        blob = _sv_memo_get(memo_key)
+        if blob is not None:
+            evidence, events, cuts_absolute = pickle.loads(blob)
+            read_data.update(evidence)
+            if events:
+                read_data["sv"] = events
+            cuts = [(a - region_start, b - region_start) for a, b in cuts_absolute]
+            if cuts:
+                split_compact_read_at_deletions(read_data, cuts)
+            return
     try:
-        events = extract_sv_events(read, sv_min_len, include_seq=include_sv_seq, mapper=mapper)
+        from services.sv_events import _cigar_array, alignment_evidence, raw_indel_events
+        cigar = _cigar_array(read)
+        # One CIGAR walk serves the evidence events and the deletion cuts.
+        raw_indels = raw_indel_events(read, cigar)
+        # A record-scoped row (molecule_records None) can meet its molecule's
+        # other alignments later, by name; a lone alignment without SA cannot.
+        query_blocks = molecule_records is None or multi or read.has_tag('SA')
+        evidence = alignment_evidence(read, query_blocks=query_blocks, cigar=cigar)
+        read_data.update(evidence)
+        events = extract_sv_events(read, sv_extraction_floor(sv_min_len), include_seq=include_sv_seq, mapper=mapper,
+                                    reference=reference, raw_indels=raw_indels)
+        if multi:
+            from services.sv_molecules import consolidate_evidence
+            parts = [dict(id=record.query_name, reference_start=int(record.reference_start),
+                          reference_end=int(record.reference_end), **alignment_evidence(record),
+                          sv=extract_sv_events(record, sv_extraction_floor(sv_min_len), include_seq=include_sv_seq,
+                                               reference=reference) or [])
+                     for record in molecule_records]
+            combined = consolidate_evidence(parts)
+            for key in ('sv_alignments', 'sv_segments', 'aligned_blocks', 'alignment_spans'):
+                read_data[key] = combined[key]
+            events = combined['sv']
     except Exception:
         return
-    if not events:
-        return
-    read_data["sv"] = events
-    cuts = [(a - region_start, b - region_start) for a, b in deletion_spans(events)]
+    # Cuts belong to the drawn anchor CIGAR, independently of canonical allele
+    # anchors and of other alignments retained in its evidence bundle.
+    from services.sv_events import read_deletion_cuts
+    cuts_absolute = read_deletion_cuts(read, sv_min_len, mapper=mapper, raw_indels=raw_indels)
+    if memo_key is not None:
+        try:
+            _sv_memo_put(memo_key, pickle.dumps((evidence, events, cuts_absolute), protocol=pickle.HIGHEST_PROTOCOL))
+        except Exception:
+            pass
+    if events:
+        read_data["sv"] = events
+    cuts = [(a - region_start, b - region_start) for a, b in cuts_absolute]
     if cuts:
         split_compact_read_at_deletions(read_data, cuts)
 

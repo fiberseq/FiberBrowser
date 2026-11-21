@@ -4,7 +4,7 @@ import { figureFooterText, figureRegions, figureTitleText, mainReferenceLabel } 
 import { CANVAS_SCALE, getCanvasRenderScale, normalizeCanvasRenderScale, requestCanvasRedraw, setCanvasRenderScale } from './canvasUtils';
 import { beginVectorCapture, endVectorCapture, getCanvasRecording, isVectorUsable, replayRecording } from './vectorCapture';
 import { PdfRenderer, SvgRenderer } from './vectorRenderers';
-import { matchedReadCount, readExportTrackSnapshots, waitForReadTracks } from './readExport';
+import { FULL_VIEW_HIDDEN, matchedReadCount, readExportTrackSnapshots, waitForReadTracks } from './readExport';
 import { activePanelView, shownPanelViews, viewFileStem, visibleDatasetPanels, type PanelScopeState } from './panelScope';
 import { safeFilenamePart } from './analysisExport';
 import { panelGap } from '../theme/uiTheme';
@@ -114,7 +114,8 @@ export function figureCropBox(panels: Box[], area: { width: number; height: numb
  * layout): everything.
  */
 export function figureDrawables<T extends Element>(container: ParentNode, selector: string): T[] {
-  const all = Array.from(container.querySelectorAll<T>(selector));
+  // Panels hidden by full view stay mounted under the maximised one: never in the figure.
+  const all = Array.from(container.querySelectorAll<T>(selector)).filter(el => !el.closest(FULL_VIEW_HIDDEN));
   if (!container.querySelector('[data-panel-id]')) return all;
   return all.filter(el => !!el.closest('[data-panel-id]'));
 }
@@ -327,7 +328,7 @@ export async function exportTrackFigure(options: FigureOptions = {}): Promise<Fi
       rect.width / screenZoom,
       rect.height / screenZoom,
     );
-    const panelEls = Array.from(container.querySelectorAll<HTMLElement>('[data-panel-id]'));
+    const panelEls = Array.from(container.querySelectorAll<HTMLElement>('[data-panel-id]')).filter(el => !el.closest(FULL_VIEW_HIDDEN));
     const drawn = <T extends Element>(selector: string): T[] => figureDrawables<T>(container, selector);
     const canvases = drawn<HTMLCanvasElement>('canvas');
     const images = drawn<HTMLImageElement>('img');

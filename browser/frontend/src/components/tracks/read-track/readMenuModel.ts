@@ -5,6 +5,7 @@
  * Pure: ReadContextMenu draws the items, useReadMenuActions does them.
  */
 import { previewHidden } from '../../../utils/previewFeatures';
+import { SV_CONFLICT_EXPLANATION } from '../../../utils/svConflicts';
 
 export type ReadMenuAction =
   | 'select-read'
@@ -35,6 +36,10 @@ export type ReadMenuAction =
   | 'sv-split-this-panels'
   | 'sv-split-at-cursor-panels'
   | 'sv-highlight-supporting'
+  | 'sv-highlight-confirmed'
+  | 'sv-highlight-putative'
+  | 'sv-highlight-conflicting'
+  | 'sv-highlight-ambiguous'
   | 'sv-copy-inserted'
   | 'sv-clear-split'
   | 'sv-split-panels'
@@ -147,6 +152,8 @@ export interface ReadMenuRunContext {
   /** SV clusters: the one of the read's own event, the one at the cursor (the read menu), or the SV row's. */
   svClusters: Array<{ t: 'D' | 'I' | string; ref: number; len: number } | null | undefined>;
   say: (text: string) => void;
+  /** The read under the pointer (the read menu), when there is one. */
+  read?: import('./types').CompactRead | null;
 }
 
 const registered: ReadMenuContribution[] = [];
@@ -193,7 +200,11 @@ export function svClusterMenu(sv: SvClusterMenuContext): ReadMenuEntry[] {
           ? { disabled: true, title: sv.splitPanelsBlocked } : { title: splitPanelsTitle() }),
       );
     }
-    entries.push(item('sv-highlight-supporting', 'Highlight supporting reads', 'pin'));
+    entries.push(item('sv-highlight-supporting', 'Highlight carriers (confirmed + putative)', 'pin'),
+      item('sv-highlight-confirmed', 'Highlight confirmed only', 'pin'),
+      item('sv-highlight-putative', 'Highlight putative reads', 'pin'),
+      item('sv-highlight-conflicting', 'Highlight conflicting reads (clip aligns elsewhere)', 'pin', { title: SV_CONFLICT_EXPLANATION }),
+      item('sv-highlight-ambiguous', 'Highlight ambiguous reads', 'pin'));
     for (const c of shown()) entries.push(...(c.svClusterItems?.(sv) ?? []));
   }
   if (sv.splitActive) entries.push(item('sv-split-panels', 'Split into panels (carriers, reference…)', 'split', sv.splitPanelsBlocked

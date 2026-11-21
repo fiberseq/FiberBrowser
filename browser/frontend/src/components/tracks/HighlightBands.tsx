@@ -1,5 +1,5 @@
-import { useAnalysisRegionStore } from '../../stores/analysisRegionStore';
-import { useMemo, useRef } from 'react';
+import { useAnalysisRegionStore, type AnalysisOutline } from '../../stores/analysisRegionStore';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { usePanelDisplayStore as useBrowserStore } from '../../hooks/usePanelDisplayStore';
 import type { PanelConfig } from '../../types';
@@ -8,6 +8,8 @@ import { sameChrom } from '../../utils/chromAliases';
 import { panelGenomeKey } from '../../utils/regionNavigation';
 import { usePanOffsetTransform } from '../../hooks/usePanOffsetTransform';
 import { useClassRegionOutlineStore } from '../../stores/classRegionOutlineStore';
+import { useLiveLiftAxis } from '../../features/liveLift/useLiveLiftAxis';
+import type { LiftAxis } from '../../features/liveLift/axis';
 
 /** Opacity of a highlight's wash, on screen (multiplied in) and in figures. */
 export const HIGHLIGHT_WASH_OPACITY = 0.55;
@@ -24,12 +26,17 @@ export function highlightSpans(
   view: { chrom: string; start: number; end: number; genome: string },
   width: number,
   reversed = false,
+  axis?: LiftAxis,
 ): Array<{ highlight: Highlight; x: number; w: number }> {
   const span = view.end - view.start;
   if (!(span > 0) || width <= 0) return [];
   const out: Array<{ highlight: Highlight; x: number; w: number }> = [];
   for (const h of highlights) {
     if (h.genome !== view.genome || !sameChrom(h.chrom, view.chrom) || h.end <= view.start || h.start >= view.end) continue;
+    if (axis?.blocks.length) {
+      for (const s of axis.spans(Math.max(h.start, view.start), Math.min(h.end, view.end))) out.push({ highlight: h, ...s });
+      continue;
+    }
     let x1 = ((Math.max(h.start, view.start) - view.start) / span) * width;
     let x2 = ((Math.min(h.end, view.end) - view.start) / span) * width;
     if (reversed) [x1, x2] = [width - x2, width - x1];
@@ -74,13 +81,58 @@ export function HighlightBands({ panel, width, gutter, labels = false, guides = 
   const genome = panelGenomeKey(panel, { currentGenome, fastaPath });
   const view = vpo ?? { chrom, start, end };
   const inner = Math.max(0, width - gutter);
+  const { axis } = useLiveLiftAxis(view.chrom, view.start, view.end, inner, isReversed);
   const spans = useMemo(
-    () => highlightSpans(highlights, { ...view, genome }, inner, isReversed),
+    () => highlightSpans(highlights, { ...view, genome }, inner, isReversed, axis),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [highlights, view.chrom, view.start, view.end, genome, inner, isReversed],
+    [highlights, view.chrom, view.start, view.end, genome, inner, isReversed, axis],
   );
   // The region Find classes analyses, on the panels of the datasets it analyses (stores/classRegionOutlineStore).
   const extraOutlines = useAnalysisRegionStore(s => s.outlines);
+  const hitTargets = useAnalysisRegionStore(s => s.hitTargets);
+  const [hovered, setHovered] = useState<AnalysisOutline | null>(null);
+  const pointerDown = useRef<{ x: number; y: number } | null>(null);
+  const targetSpans = useMemo(() => Object.values(hitTargets).flat().flatMap(o => {
+    if (!panel.datasetId || !o.datasetIds.includes(panel.datasetId) || o.genomeKey !== genome) return [];
+    return highlightSpans([{ ...o, id: '', genome }], { ...view, genome }, inner, isReversed).map(span => ({ ...span, outline: o }));
+    // Prefer the narrowest hit when regions overlap, with stable ordering for ties.
+  }).sort((a, b) => a.w - b.w), [hitTargets, panel.datasetId, genome, view.chrom, view.start, view.end, inner, isReversed]);
+  useEffect(() => {
+    const layer = ref.current;
+    const track = layer?.parentElement;
+    if (!layer || !track || !targetSpans.length) { setHovered(null); return; }
+    // Listen on the track: an invisible target must not cover reads or intercept empty-space clicks.
+    const at = (e: MouseEvent) => {
+      if (e.target instanceof Element && e.target.closest('button, a, input, select, [role="button"]')) return null;
+      const box = layer.getBoundingClientRect();
+      const x = e.clientX - box.left;
+      if (x < 0 || x >= inner || e.clientY < box.top || e.clientY >= box.bottom) return null;
+      return targetSpans.find(s => x >= s.x && x <= s.x + s.w)?.outline ?? null;
+    };
+    const down = (e: MouseEvent) => { pointerDown.current = { x: e.clientX, y: e.clientY }; };
+    const move = (e: MouseEvent) => setHovered(e.buttons ? null : at(e));
+    const leave = () => setHovered(null);
+    const click = (e: MouseEvent) => {
+      const start = pointerDown.current;
+      pointerDown.current = null;
+      const dragged = start && Math.hypot(e.clientX - start.x, e.clientY - start.y) > 4;
+      if (dragged) return;
+      const hit = at(e);
+      if (!hit?.onSelect || e.button !== 0) return;
+      e.stopPropagation();
+      hit.onSelect(e.shiftKey || e.metaKey || e.ctrlKey);
+    };
+    track.addEventListener('pointerdown', down, true);
+    track.addEventListener('pointermove', move, true);
+    track.addEventListener('pointerleave', leave);
+    track.addEventListener('click', click, true);
+    return () => {
+      track.removeEventListener('pointerdown', down, true);
+      track.removeEventListener('pointermove', move, true);
+      track.removeEventListener('pointerleave', leave);
+      track.removeEventListener('click', click, true);
+    };
+  }, [targetSpans, inner]);
   const outline = useClassRegionOutlineStore(s => s.outline);
   const outlineSpan = useMemo(() => {
     if (!outline || !panel.datasetId || !outline.datasetIds.includes(panel.datasetId)) return null;
@@ -96,22 +148,20 @@ export function HighlightBands({ panel, width, gutter, labels = false, guides = 
     if (!(span > 0) || inner <= 0) return [];
     return rule.splitSnps.flatMap(snp => {
       if (!sameChrom(snp.chrom, view.chrom) || snp.pos < Math.floor(view.start) || snp.pos >= Math.ceil(view.end)) return [];
-      const x = ((snp.pos + 0.5 - view.start) / span) * inner;  // the base's centre
-      return [{ snp, x: isReversed ? inner - x : x }];
+      return [{ snp, x: axis.toX(snp.pos + .5) }];
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [guides, rule, view.chrom, view.start, view.end, genome, inner, isReversed]);
+  }, [guides, rule, view.chrom, view.start, view.end, genome, inner, isReversed, axis]);
   // Without highlights here the box stays (empty), so the pan transform is attached from the start.
   return (
     <div
       ref={ref}
-      aria-hidden="true"
       className="pointer-events-none absolute inset-y-0 z-[5] overflow-hidden"
       style={{ left: gutter, width: inner }}
       data-testid="highlight-bands"
     >
       {spans.map(({ highlight, x, w }) => (
-        <div key={highlight.id} className="contents">
+        <div key={`${highlight.id}:${x}`} className="contents">
           <div
             className="absolute inset-y-0"
             style={{ left: x, width: w, backgroundColor: highlight.color, opacity: HIGHLIGHT_WASH_OPACITY, mixBlendMode: 'multiply' }}
@@ -135,12 +185,26 @@ export function HighlightBands({ panel, width, gutter, labels = false, guides = 
         const span = highlightSpans([{ ...o, id: `${kind}-${i}`, genome }], { ...view, genome }, inner, isReversed)[0];
         if (!span) return [];
         return <div key={`${kind}-${i}`} data-testid={`${kind}-region-outline`} data-region={`${o.chrom}:${o.start}-${o.end}`}
-          className={`absolute inset-y-0 border-dashed ${labels ? 'border-2' : 'border-x-2'}`}
-          style={{ left: span.x, width: span.w, borderColor: o.color }}>
+          className={`absolute inset-y-0 border-dashed ${labels ? 'border-2' : 'border-x-2'} ${o.onSelect ? 'pointer-events-auto cursor-pointer' : ''}`}
+          style={{ left: span.x, width: span.w, borderColor: o.color, opacity: o.selected === false ? 0.55 : 1 }}
+          role={o.onSelect ? 'button' : undefined} tabIndex={o.onSelect ? 0 : undefined}
+          aria-label={o.onSelect ? `Select ${o.label} in Feature hub` : undefined}
+          title={o.onSelect ? `${o.label}. Click to select in Feature hub; Shift-click to add or remove.` : undefined}
+          onPointerDown={o.onSelect ? e => e.stopPropagation() : undefined}
+          onMouseDown={o.onSelect ? e => e.stopPropagation() : undefined}
+          onClick={o.onSelect ? e => { e.stopPropagation(); o.onSelect!(e.shiftKey || e.metaKey || e.ctrlKey); } : undefined}
+          onKeyDown={o.onSelect ? e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); o.onSelect!(e.shiftKey || e.metaKey || e.ctrlKey); } } : undefined}>
           {labels && span.w > 24 && <span className="absolute right-0.5 top-0 truncate rounded-sm bg-white/80 dark:bg-gray-900/80 px-0.5 text-[9px] font-semibold leading-3"
             style={{ maxWidth: span.w - 4, color: o.color }}>{o.label}</span>}
         </div>;
       }))}
+      {targetSpans.filter(s => s.outline === hovered).slice(0, 1).map(({ outline: o, x, w }) => (
+        <div key="hover" data-testid="hub-region-hover" className={`absolute inset-y-0 border-dashed ${labels ? 'border-2' : 'border-x-2'}`}
+          style={{ left: x, width: w, borderColor: o.color, opacity: 0.3 }}>
+          {labels && w > 24 && <span className="absolute right-0.5 top-0 truncate bg-white/80 px-0.5 text-[9px]"
+            style={{ maxWidth: w - 4, color: o.color }}>{o.label}</span>}
+        </div>
+      ))}
       {guideSpans.map(({ snp, x }) => (
         // On screen dashed; in figures (data-figure-overlay) a solid line of the same width and opacity.
         <div key={`snp-guide-${snp.id}`} className="absolute inset-y-0" data-testid="split-snp-guide" data-snp={snp.id}

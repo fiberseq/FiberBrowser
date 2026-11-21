@@ -66,7 +66,29 @@ def _info() -> dict:
                     "check_at_startup_default": app_settings.default_check_at_startup(),
                     "check_at_startup_set": app_settings.check_at_startup_is_set()},
         "auth": github_auth.auth_status() if config["private"] else None,
+        "downloads": _downloads_info(),
     }
+
+
+def _downloads_info() -> dict:
+    """The download size warning (services/http_download.py): the threshold in force, the default, and
+    whether FIBERBROWSER_DOWNLOAD_WARN_BYTES sets it for this run."""
+    import os
+    from services import app_settings, http_download
+    return {"warn_bytes": http_download.warn_bytes(), "default": http_download.DEFAULT_WARN_BYTES,
+            "saved": app_settings.load()["downloads"]["warn_bytes"],
+            "env": bool(os.environ.get(http_download.WARN_BYTES_ENV, "").strip())}
+
+
+@router.post("/api/app/downloads")
+async def set_download_settings(request: dict):
+    """``{"warn_bytes": n}``: the download size warning in bytes (0: off; null: the default, 4 GB)."""
+    from services import app_settings
+    try:
+        await asyncio.to_thread(app_settings.update, "downloads", request if isinstance(request, dict) else {})
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return await asyncio.to_thread(_info)
 
 
 @router.get("/api/app/info")

@@ -1,3 +1,6 @@
+import { isMetaChrom, metaHiddenTrack } from '../../features/metaLocus/metaChrom';
+import { LinearWheelSurface } from './LinearWheelSurface';
+import { ReferenceAxisSurface } from '../../features/differences/ReferenceAxisSurface';
 import { logicalOffset } from '../../utils/scaledCoordinates';
 import { HighlightBands } from './HighlightBands';
 import { useCallback, useMemo, useRef } from 'react';
@@ -51,6 +54,9 @@ import { feedHasCoverage, feedHasSv, useTrackFeedStore } from '../../stores/trac
 import { SvTrack } from './SvTrack';
 import { trackRenderers, type PluginTrackArgs } from './trackRenderers';
 import { CoverageTrack } from './CoverageTrack';
+import { DifferenceLanes } from '../../features/differences/DifferenceLanes';
+import { useLiveLiftStore } from '../../features/liveLift/store';
+import { liveLiftViewKey } from '../../features/liveLift/persistence';
 
 
 /** How a panel's tracks are laid out where it sits (see TrackContainer). */
@@ -72,6 +78,8 @@ export function useSubTrackDispatch({ onScanPeaks, scanning }: UseSubTrackDispat
   const { useContentVisibility } = useBrowserPerformanceProfile();
   const peakRowHeight = useBrowserStore(s => Math.max(FIRE_HEIGHT, 16 + s.peakRules.filter(r => r.enabled).length * 18));
   const datasets = useBrowserStore(s => s.datasets);
+  const liftEnabled = useLiveLiftStore(s => s.enabled);
+  const liveLiftExpansions = useBrowserStore(s => s.liveLiftExpansions);
   const showConsensusTrack = useConsensusViewStore(s => s.showTrack);
   const orthogonalTracks = useBrowserStore(s => s.orthogonalTracks);
   const compositeTracks = useBrowserStore(s => s.compositeTracks);
@@ -263,6 +271,14 @@ export function useSubTrackDispatch({ onScanPeaks, scanning }: UseSubTrackDispat
     document.body.style.userSelect = 'none';
   }, []);
 
+  // A composite row computed from the reads (a metaprofile): kept on the meta-locus.
+  const metaprofileRow = useCallback((type: string) => {
+    if (!type.startsWith('composite-')) return false;
+    const id = type.slice('composite-'.length);
+    const composite = compositeById.get(id);
+    return id === DEFAULT_METAPROFILE_ID || Boolean(composite && hasMetaprofileSource(composite));
+  }, [compositeById]);
+
   const renderSubTrack = useCallback((
     track: SubTrackConfig,
     trackIdx: number,
@@ -282,6 +298,8 @@ export function useSubTrackDispatch({ onScanPeaks, scanning }: UseSubTrackDispat
     const orthoTrack = orthoEntry?.track ?? null;
     const orthoColorIdx = orthoEntry?.order ?? 0;
     const vpo = panel.viewportOverride;
+    // The meta-locus (a virtual contig): rows that need a real genome position are left out quietly.
+    if (isMetaChrom(vpo?.chrom ?? storeChrom) && metaHiddenTrack(track.type, metaprofileRow(track.type))) return null;
 
     // For panels with viewportOverride: create a callback that updates the panel's viewport
     const onViewportChange = vpo ? (newStart: number, newEnd: number) => {
@@ -374,6 +392,7 @@ export function useSubTrackDispatch({ onScanPeaks, scanning }: UseSubTrackDispat
             datasetId={dsId}
             stateKey={panel.stateKey}
             readStrand={panel.strand ?? null}
+            liftHap={panel.liftHap ?? panel.readSubset?.rule.liftHap ?? null}
             gutterWidth={clusterSidebarWidth}
             publishFeed
             genome={panel.genome}
@@ -383,9 +402,11 @@ export function useSubTrackDispatch({ onScanPeaks, scanning }: UseSubTrackDispat
         break;
       // TRACK-KINDS: add cases here (and in calcFixedHeight below); see trackRegistry.ts.
       case 'sv':
-        if (!dsId || !svDisplayEnabled || !feedRowShown(panel, 1)) return null;
+        if (!dsId || (dataset?.data_type !== 'bam_livelift' && (!svDisplayEnabled || !feedRowShown(panel, 1)))) return null;
         trackHeight = rowHeight(track);
-        content = <SvTrack width={trackWidth} height={trackHeight} panel={panel} sidebarWidth={clusterSidebarWidth} />;
+        content = liftEnabled && dataset?.data_type === 'bam_livelift'
+          ? <DifferenceLanes panel={panel} dataset={dataset} width={trackWidth} height={trackHeight} gutter={clusterSidebarWidth} />
+          : <SvTrack width={trackWidth} height={trackHeight} panel={panel} sidebarWidth={clusterSidebarWidth} />;
         break;
       case 'coverage':
         if (!dsId || !showCoverageHistogram || !feedRowShown(panel, 2)) return null;
@@ -538,6 +559,10 @@ export function useSubTrackDispatch({ onScanPeaks, scanning }: UseSubTrackDispat
 
     const isReadsTrack = track.type === 'reads';
     const intrinsicHeight = isReadsTrack ? readHeight : trackHeight;
+    // content-visibility: auto contains paint to the row: the live-lift Differences row's table (and its other
+    // drop-downs) open below the row and would be clipped to it. That row is small, so it never skips rendering.
+    const skipsRendering = !exportInProgress && useContentVisibility
+      && !(track.type === 'sv' && liftEnabled && dataset?.data_type === 'bam_livelift');
     // Every kind but the reads and the ruler resizes (trackRegistry).
     const isResizable = !isReadsTrack && isResizableTrack(track.type);
     const hideTrackTitle = `Minimize ${getTrackLabel(track.type)} in all panels (Option/Alt-click: this panel only)`;
@@ -557,8 +582,11 @@ export function useSubTrackDispatch({ onScanPeaks, scanning }: UseSubTrackDispat
     // Render actual track content; layout-only controls appear as hover chrome.
     // Primer track needs overflow:visible for guide lines that extend into tracks below
     const isPrimer = track.type === 'primer';
+    const projectReference = !['reads', 'axis', 'coverage', 'sv'].includes(track.type);
     return (
-      <div
+      <LinearWheelSurface
+        view={{ chrom: vpo?.chrom ?? storeChrom, start: vpo?.start ?? storeStart, end: vpo?.end ?? storeEnd }}
+        width={trackWidth} gutter={clusterSidebarWidth} panelId={panel.id} genome={panel.genome} onViewportChange={onViewportChange}
         key={track.type}
         className="group/subtrack fb-track-row"
         data-track-type={track.type}
@@ -569,18 +597,18 @@ export function useSubTrackDispatch({ onScanPeaks, scanning }: UseSubTrackDispat
         aria-label={isReadsTrack || track.type === 'axis' ? undefined : `${getTrackLabel(track.type)} track`}
         style={{
           height: isReadsTrack ? (exportFullReadTracks ? undefined : readHeight) : trackHeight,
-          minHeight: isReadsTrack ? readHeight : trackHeight,
+          minHeight: isReadsTrack && !exportFullReadTracks ? 0 : isReadsTrack ? readHeight : trackHeight,
           flex: isReadsTrack && !exportFullReadTracks ? 1 : undefined,
-          flexShrink: 0,
+          flexShrink: isReadsTrack && !exportFullReadTracks ? 1 : 0,
           overflow: isReadsTrack ? (exportFullReadTracks ? 'visible' : 'hidden') : undefined,
           position: 'relative',
-          contentVisibility: exportInProgress || !useContentVisibility ? undefined : 'auto',
-          containIntrinsicSize: exportInProgress || !useContentVisibility ? undefined : `${Math.max(1, Math.round(intrinsicHeight))}px`,
+          contentVisibility: skipsRendering ? 'auto' : undefined,
+          containIntrinsicSize: skipsRendering ? `${Math.max(1, Math.round(intrinsicHeight))}px` : undefined,
           ...(isPrimer ? { overflow: 'visible', zIndex: 10 } : {}),
         }}
       >
-        {content}
-        {/* Highlighted regions (toolbar Highlight) over every row; named on the ruler. */}
+        {projectReference ? <ReferenceAxisSurface width={trackWidth} gutter={clusterSidebarWidth}
+          view={{chrom:vpo?.chrom ?? storeChrom,start:vpo?.start ?? storeStart,end:vpo?.end ?? storeEnd}}>{content}</ReferenceAxisSurface> : content}
         <HighlightBands panel={panel} width={trackWidth} gutter={clusterSidebarWidth} labels={track.type === 'axis'} guides={isReadsTrack} />
         {!exportInProgress && (
           <button
@@ -606,17 +634,19 @@ export function useSubTrackDispatch({ onScanPeaks, scanning }: UseSubTrackDispat
             <div className="h-[3px] w-12 rounded-full bg-blue-500/70 shadow-[0_0_0_2px_rgba(255,255,255,0.85)] dark:bg-blue-400/75 dark:shadow-[0_0_0_2px_rgba(0,0,0,0.45)]" />
           </div>
         )}
-      </div>
+      </LinearWheelSurface>
     );
   }, [peakRowHeight, datasets, showConsensusTrack, orthogonalByIndex, orthogonalByPath, catalogById, compositeById, annotationTrackFor, ownViewAnnotation, clusterSidebarWidth, onScanPeaks, scanning, spanningOnly,
       showPrimerTrack, showCaptureTrack, sequenceShown, microcPanelIds, coaccTrackMode, storeChrom, exportFullReadTracks, exportInProgress, startSubTrackResize, panelHasNoReads,
-      toggleSubTrack, showsMainRegion, svDisplayEnabled, showCoverageHistogram, feedRowShown, pluginRow, useContentVisibility]);
+      toggleSubTrack, showsMainRegion, svDisplayEnabled, showCoverageHistogram, feedRowShown, pluginRow, useContentVisibility, liftEnabled, liveLiftExpansions, storeStart, storeEnd, panels, metaprofileRow]);
 
   const calcFixedHeight = useCallback((panel: PanelConfig, layout?: PanelTrackLayout) => {
     let h = PANEL_HEADER_HEIGHT;
+    const metaView = isMetaChrom(panel.viewportOverride?.chrom ?? storeChrom);
     for (const t of panel.subTracks) {
       if (!t.visible || t.removed) continue;
       if (t.type === 'axis' && layout?.hideAxis) continue;
+      if (metaView && metaHiddenTrack(t.type, metaprofileRow(t.type))) continue;
       switch (t.type) {
         case 'consensus': if (showConsensusTrack && consensusJobId(datasets.find(d=>d.id===panel.datasetId))) h += rowHeight(t); break;
         case 'axis': h += rowHeight(t, AXIS_HEIGHT); break;
@@ -626,7 +656,7 @@ export function useSubTrackDispatch({ onScanPeaks, scanning }: UseSubTrackDispat
         case 'coacc': if (coaccTrackMode) h += rowHeight(t, COACC_HEIGHT); break;
         case 'capture': if (showCaptureTrack) h += rowHeight(t, CAPTURE_HEIGHT); break;
         case 'primer': if (showPrimerTrack) h += rowHeight(t, PRIMER_HEIGHT); break;
-        case 'sv': if (panel.datasetId && svDisplayEnabled && feedRowShown(panel, 1)) h += rowHeight(t); break;
+        case 'sv': if (panel.datasetId && (datasets.find(d => d.id === panel.datasetId)?.data_type === 'bam_livelift' || svDisplayEnabled && feedRowShown(panel, 1))) h += rowHeight(t); break;
         case 'coverage': if (panel.datasetId && showCoverageHistogram && feedRowShown(panel, 2)) h += rowHeight(t); break;
         case 'sequence': if (sequenceShown(panel)) h += rowHeight(t, SEQUENCE_HEIGHT); break;
         case 'gene': h += rowHeight(t, GENE_HEIGHT); break;
@@ -662,7 +692,7 @@ export function useSubTrackDispatch({ onScanPeaks, scanning }: UseSubTrackDispat
       }
     }
     return h;
-  }, [peakRowHeight, orthogonalByIndex, compositeById, annotationTrackFor, ownViewAnnotation, microcPanelIds, coaccTrackMode, storeChrom, showCaptureTrack, showPrimerTrack, sequenceShown, datasets, showConsensusTrack, showsMainRegion, panelHasNoReads, svDisplayEnabled, showCoverageHistogram, feedRowShown, pluginRow]);
+  }, [peakRowHeight, orthogonalByIndex, compositeById, annotationTrackFor, ownViewAnnotation, microcPanelIds, coaccTrackMode, storeChrom, showCaptureTrack, showPrimerTrack, sequenceShown, datasets, showConsensusTrack, showsMainRegion, panelHasNoReads, svDisplayEnabled, showCoverageHistogram, feedRowShown, pluginRow, metaprofileRow]);
 
   return { renderSubTrack, calcFixedHeight };
 }

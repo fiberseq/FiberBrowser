@@ -106,13 +106,31 @@ describe('New DAF-seq run wizard state', () => {
     expect(req.regions).toEqual(['chr2L:1-100']);
     expect(req.output_root).toBe('/out');
     expect(buildRunRequest({ ...state, referenceMode: 'file', referencePath: '' }).reference).toEqual({});
+    // Open the result when it finishes: the request names this page (only it opens the result by itself).
+    expect(buildRunRequest({ ...state, autoOpen: true }).opener).toMatch(/^tab-[0-9a-f]{24}$/);
+    expect(buildRunRequest({ ...state, autoOpen: true }).opener).toBe(buildRunRequest({ ...state, autoOpen: true }).opener);
+    expect(buildRunRequest({ ...state, autoOpen: false })).not.toHaveProperty('opener');
   });
 
   it('lists the options changed from the defaults', () => {
-    expect(changedOptionLabels(DEFAULT_OPTIONS, 'dddb')).toEqual([]);
+    // The MAPQ a new run always passes comes first (owner, 20 Nov 2026), like a re-call's recorded MAPQ.
+    expect(changedOptionLabels(DEFAULT_OPTIONS, 'dddb')).toEqual(['MAPQ 0']);
     const options = { ...DEFAULT_OPTIONS, dedup: 'off' as const, dedup_mode: 'collapse' as const, use_m5c: 'off' as const };
-    expect(changedOptionLabels(options, 'dddb')).toEqual(['duplicates off']);
-    expect(changedOptionLabels(options, 'ddda')).toEqual(['duplicates off', 'CpG-aware recall off']);
+    expect(changedOptionLabels(options, 'dddb')).toEqual(['MAPQ 0', 'duplicates off']);
+    expect(changedOptionLabels(options, 'ddda')).toEqual(['MAPQ 0', 'duplicates off', 'CpG-aware recall off']);
+    expect(changedOptionLabels({ ...DEFAULT_OPTIONS, min_mapq: 20 }, 'hia5')).toEqual(['MAPQ 20']);
+  });
+
+  it('always sends the MAPQ the wizard shows: 0 by default, a changed value as set', () => {
+    const base = { ...initialWizardState(null), enzyme: 'dddb' as const };
+    expect(DEFAULT_OPTIONS.min_mapq).toBe(0);
+    expect(buildRunRequest(base).options.min_mapq).toBe(0);
+    expect(buildRunRequest({ ...base, options: { ...base.options, min_mapq: 20 } }).options.min_mapq).toBe(20);
+    expect(buildRunRequest({ ...base, enzyme: 'hia5', options: { ...base.options, min_mapq: 7 } }).options.min_mapq).toBe(7);
+    // A draft from before the setting existed: 0, sent explicitly.
+    const { min_mapq: _drop, ...old } = base.options;
+    expect(buildRunRequest({ ...base, options: old as typeof base.options }).options.min_mapq).toBe(0);
+    expect(stepErrors({ ...base, options: { ...base.options, min_mapq: 300 } }, 2).join(' ')).toContain('MAPQ');
   });
 });
 
@@ -136,7 +154,7 @@ describe('raw Nanopore (POD5) runs', () => {
     expect(request.options.prob_threshold).toBe(200);  // applies to m6A too
     expect(buildRunRequest({ ...state, enzyme: 'dddb' }).options.dedup).toBe('off');
     expect(buildRunRequest({ ...initialWizardState(null), enzyme: 'dddb' })).not.toHaveProperty('basecall');
-    expect(changedOptionLabels(state.options, 'hia5')).toEqual(['ML threshold 200']);
+    expect(changedOptionLabels(state.options, 'hia5')).toEqual(['MAPQ 0', 'ML threshold 200']);
   });
 
   it('offers Hia5 for reads and POD5 alike and checks the Advanced choices', () => {

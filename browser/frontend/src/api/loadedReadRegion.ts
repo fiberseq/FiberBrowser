@@ -64,7 +64,7 @@ export function canProjectReadRegion(params: URLSearchParams): boolean {
     && Number(params.get('terminal_gap_threshold') || 0) === 0
     && params.get('include_cigar') !== 'true'
     && (params.get('include_metaprofile') !== 'true' || params.get('profile_max_reads') === '0')
-    && !['filter_ids', 'filter_set', 'cluster_focus', 'strand', 'fill_gap_size'].some(key => params.has(key))
+    && !['filter_ids', 'filter_set', 'cluster_focus', 'strand', 'lift_hap', 'fill_gap_size'].some(key => params.has(key))
     && Number(params.get('min_footprints') || 0) === 0
     && Number(params.get('min_fp_quality') || 0) === 0;
 }
@@ -120,6 +120,11 @@ function lazy(record: object, key: string, get: () => unknown): void {
   } });
 }
 
+function reachOf(layer: object): [number, number] | null {
+  const r = (layer as { reach?: unknown }).reach;
+  return Array.isArray(r) && r.length === 2 && Number.isFinite(r[0]) && Number.isFinite(r[1]) ? [r[0], r[1]] : null;
+}
+
 /** Project geometry only; dense marks remain unexpanded until a consumer needs them. */
 export function projectLoadedReads(data: ReadsResponse, offset: number, width: number, regionStart: number): ReadsResponse | undefined {
   if (offset < 0 || width <= 0 || offset + width > data.width) return;
@@ -154,15 +159,23 @@ export function projectLoadedReads(data: ReadsResponse, offset: number, width: n
       }
     }
     next.intervals = primary.map(item => item.interval);
-    if (read.sv?.length) {
+    const evidence = read.sv_evidence ?? read.sv;
+    if (evidence?.length) {
       const start = regionStart + offset, end = start + width;
       // Cluster membership near a clipped breakpoint can change. Such views
       // use a fresh server summary rather than cropping a possibly different cluster.
-      if (read.sv.some(ev => (ev.t === 'D' || ev.t === 'I') && [ev.ref, ev.ref + (ev.t === 'D' ? ev.len : 1)]
+      if (evidence.some(ev => (ev.t === 'D' || ev.t === 'I') && [ev.ref, ev.ref_end ?? ev.ref + (ev.t === 'D' ? ev.len : 1), ev.raw_ref ?? ev.ref, ev.raw_ref_end ?? ev.ref]
         .some(p => Math.abs(p - start) <= Math.max(50, ev.len * 0.1) || Math.abs(p - end) <= Math.max(50, ev.len * 0.1)))) return;
-      const kept = read.sv.filter(ev => ev.t !== 'SA' && ev.ref < end && ev.ref + (ev.t === 'D' ? ev.len : 1) > start);
+      Object.defineProperty(next, 'sv_evidence', { configurable: true, enumerable: true, writable: true, value: evidence });
+      const kept = (read.sv ?? []).filter(ev => {
+        if (ev.t === 'SA') return false;
+        const a = Math.min(ev.ref, ev.raw_ref ?? ev.ref);
+        const b = Math.max(ev.ref_end ?? ev.ref + (ev.t === 'D' ? ev.len : 1),
+          (ev.raw_ref_end ?? ev.raw_ref ?? ev.ref) + 1);
+        return a < end && b > start;
+      });
       Object.defineProperty(next, 'sv', { configurable: true, enumerable: true, writable: true,
-        value: kept.length ? [...kept, ...read.sv.filter(ev => ev.t === 'SA')] : undefined });
+        value: kept.length ? [...kept, ...(read.sv ?? []).filter(ev => ev.t === 'SA')] : undefined });
     }
     if (read.qualities) {
       let index = 0;
@@ -194,6 +207,9 @@ export function projectLoadedReads(data: ReadsResponse, offset: number, width: n
         ...(layer.circular_ids ? { circular_ids: selected(layer.circular_ids) } : {}),
         ...(layer.source_intervals ? { source_intervals: shift(selected(layer.source_intervals)) } : {}),
         ...(layer.family_intervals ? { family_intervals: shift(selected(layer.family_intervals)) } : {}),
+        // nucreg's window-grid reach is view-relative like the intervals: shifted with them (not clipped: a reach
+        // beyond the view still says where windows reach).
+        ...(reachOf(layer) ? { reach: [reachOf(layer)![0] - offset, reachOf(layer)![1] - offset] as [number, number] } : {}),
       }]];
     })));
     reads.push(next);

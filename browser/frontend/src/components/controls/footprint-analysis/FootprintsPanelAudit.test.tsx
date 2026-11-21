@@ -107,3 +107,36 @@ describe('M21: the size histogram fits its card', () => {
     expect(canvas.style.width).toBe('420px');
   });
 });
+
+describe('Sizes: several footprints share a y scale on request', () => {
+  it('own y by default; Shared y gives every histogram the tallest one\'s top', async () => {
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
+    localStorage.removeItem('footprints:sizes-yscale');
+    const result = { overlap_stats: { d: { per_footprint: [
+      { overlap_count: 100, size_histogram: { bins: [10, 15, 20], counts: [10, 40, 30] } },
+      { overlap_count: 100, size_histogram: { bins: [10, 15, 20], counts: [5, 8, 6] } },
+    ] } } } as any;
+    const fps = [{ chrom: 'chr1', absStart: 100, absEnd: 120, size: 20, layer: null }, { chrom: 'chr1', absStart: 300, absEnd: 320, size: 15, layer: null }] as any;
+    await act(async () => root.render(<SizesTab result={result} selectedFootprints={fps} targetDatasets={[dataset]} chartWidth={600}
+      footprintGroups={[]} addFootprintGroup={() => {}} updateFootprintGroup={() => {}} removeFootprintGroup={() => {}} hideCartList />));
+    const tops = () => [...container.querySelectorAll<HTMLElement>('[data-testid="footprint-size-histogram"]')].map(el => [Number(el.dataset.yMax), el.dataset.yFixed]);
+    expect(container.querySelector('[data-testid="footprint-sizes-yscale"]')).not.toBeNull();
+    const own = tops();
+    expect(own[0][0]).toBeGreaterThan(own[1][0]);
+    expect(own.every(([, fixed]) => fixed === 'false')).toBe(true);
+    const shared = [...container.querySelectorAll<HTMLButtonElement>('[data-testid="footprint-sizes-yscale"] button')].find(b => b.textContent === 'Shared y')!;
+    await act(async () => shared.click());
+    const now = tops();
+    expect(now[0][0]).toBe(own[0][0]);
+    expect(now[1][0]).toBe(own[0][0]);
+    expect(now.every(([, fixed]) => fixed === 'true')).toBe(true);
+  });
+
+  it('a single footprint has no y-scale control', async () => {
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
+    const result = { overlap_stats: { d: { per_footprint: [{ overlap_count: 10, size_histogram: { bins: [10, 15], counts: [3, 4] } }] } } } as any;
+    await act(async () => root.render(<SizesTab result={result} selectedFootprints={[{ chrom: 'chr1', absStart: 1, absEnd: 20, size: 19, layer: null } as any]}
+      targetDatasets={[dataset]} chartWidth={600} footprintGroups={[]} addFootprintGroup={() => {}} updateFootprintGroup={() => {}} removeFootprintGroup={() => {}} hideCartList />));
+    expect(container.querySelector('[data-testid="footprint-sizes-yscale"]')).toBeNull();
+  });
+});

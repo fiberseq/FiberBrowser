@@ -407,6 +407,9 @@ export function MatrixCanvas({
         // empty bordered square the size of a matrix.
         style={{ width: maxSize, height: maxSize, display: error && !loading && !hasRenderedMatrix ? 'none' : undefined }}
       />
+      {scaling === 'log' && normalization === 'correlation' && (
+        <div className="text-[10px] text-ink-secondary" data-testid="coacc-log-negative-note">Log scale: negative correlations are drawn at the low end of the colour scale (a log has no negative values). Linear shows their sign.</div>
+      )}
       <ChartSaveButton canvasRef={canvasRef} filename="coacc_matrix" />
       <ChartMaximizeButton
         title="Co-Accessibility Matrix"

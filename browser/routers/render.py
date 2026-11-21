@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse
 
 from models.requests import FigureRequest, LiveFigureState, RenderRequest
 from services.render_endpoint import _render_sync
+from services.lift.capability import LiveLiftUnsupported
 from state.dependencies import get_dafc_state, get_state
 
 router = APIRouter(tags=["render"])
@@ -43,6 +44,8 @@ async def render_region(request: RenderRequest, state=Depends(get_state), dafc_s
             from services.playwright_render import render_with_playwright
             return await asyncio.to_thread(render_with_playwright, request, state)
         return await asyncio.to_thread(_render_sync, request, state)
+    except LiveLiftUnsupported:
+        raise  # The shared handler preserves the 409 notice for resolved/current datasets.
     except Exception as exc:
         return JSONResponse(
             status_code=500,
@@ -77,6 +80,8 @@ async def render_figure_route(request: FigureRequest, state=Depends(get_state), 
     from services.figure_render import render_figure
     try:
         return await asyncio.to_thread(render_figure, request, state, dafc_state)
+    except LiveLiftUnsupported:
+        raise
     except Exception as exc:
         import traceback
         traceback.print_exc()

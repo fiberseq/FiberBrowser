@@ -24,6 +24,8 @@ import { panelTraits } from './panelExtensions';
 import { panelTitle } from './panelTitle';
 import { useSplitPanelStore } from '../stores/splitPanelStore';
 import { splitShowsAll } from './splitLocus';
+import { foldedInShownGraph } from '../stores/graphMembership';
+import { idSetHas, qnameOfId, recordKey } from './recordKeys';
 
 export type ClusterPeak = { start: number; end: number; mode?: string; chrom?: string; genome?: string; match?: MatchedRegionInfo };
 
@@ -35,7 +37,7 @@ export type PlanState = Pick<BrowserState, 'panels' | 'datasets' | 'selectedData
 /** One panel's window in a Cluster run (the request's viewport), with the panel it came from. */
 export interface ClusterWindow {
   dataset_id: string; result_key: string; chrom: string; start: number; end: number;
-  read_ids?: string[]; strand?: 'CT' | 'GA'; panel: PanelConfig;
+  read_ids?: string[]; strand?: 'CT' | 'GA'; lift_hap?: string; panel: PanelConfig;
 }
 
 /**
@@ -45,36 +47,48 @@ export interface ClusterWindow {
  */
 export function clusterWindows(st: PlanState, datasetIds: string[]): ClusterWindow[] {
   const { chrom, start, end } = st;
-  return st.panels.filter(panel => panel.contentType === 'dataset' && panel.datasetId && datasetIds.includes(panel.datasetId) && !panel.collapsed
-    && (!st.selectedDatasets.size || st.selectedDatasets.has(panel.id))).map(panel => {
+  // A member folded into a host's graph counts as shown (its reads are in the host's sub-band), selected with its host.
+  return st.panels.filter(panel => {
+    if (panel.contentType !== 'dataset' || !panel.datasetId) return false;
+    const host = panel.collapsed ? foldedInShownGraph(panel, st.panels) : null;
+    // A folded member of a targeted host is targeted with it (its dataset may be another one).
+    if (!datasetIds.includes(panel.datasetId) && !(host?.datasetId && datasetIds.includes(host.datasetId))) return false;
+    if (panel.collapsed && !host) return false;
+    return !st.selectedDatasets.size || st.selectedDatasets.has(panel.id) || Boolean(host && st.selectedDatasets.has(host.id));
+  }).map(panel => {
     const sk = panel.stateKey ?? panel.datasetId!;
-    const viewport = panel.viewportOverride ?? { chrom, start, end };
+    // A folded member analyses the window its host shows (its sub-band is in the host's graph).
+    const shownBy = panel.collapsed ? foldedInShownGraph(panel, st.panels) : null;
+    const viewport = (shownBy ?? panel).viewportOverride ?? { chrom, start, end };
     const assignments = st.clusterAssignments?.[sk];
     const selected = st.selectedClusters?.[sk], focus = st.clusterFocus?.[sk];
     const subset = selected?.size ? selected : focus?.size ? focus : null;
     // No filter is null; an applied filter that matched nothing is an empty set (that panel has nothing to cluster).
     const filter = st.filteredReadIds[sk];
     // Inside a cluster subset, only its reads that pass the filter.
-    let ids = subset && assignments ? Object.keys(assignments).filter(id => subset.has(assignments[id]) && (!filter || filter.has(id)))
+    // (Identity-aware: a graph run's labels are record keys, a kept read is its QNAME; idSetHas matches either.)
+    let ids = subset && assignments ? Object.keys(assignments).filter(id => subset.has(assignments[id]) && (!filter || idSetHas(filter, [id, qnameOfId(id)], recordKey(id))))
       : filter ? Array.from(filter) : undefined;
     // A split panel (Split into panels) clusters only its own reads; all targeted split panels cluster together.
     const split = panel.readSubset ? useSplitPanelStore.getState().reads[sk] : undefined;
     // (Away from its locus showing every read here, utils/splitLocus.ts: those reads.)
     // (A panel on a contig of its own, e.g. an insert-expanded Carriers panel, shows its own dataset: with no split
     // reads under its key it clusters as it is; restricting it to none left it nothing to cluster.)
-    if (panel.readSubset && !(panelTraits(panel).ownContig && !split) && !splitShowsAll(panel.readSubset, viewport, panel)) {
+    if (panel.readSubset && !panel.readSubset.rule.liftHap && !panel.liftHap && !(panelTraits(panel).ownContig && !split) && !splitShowsAll(panel.readSubset, viewport, panel)) {
       const own = split && (split.state === 'ready' || split.state === 'frozen') ? split.ids : new Set<string>();
-      ids = ids ? ids.filter(id => own.has(id)) : Array.from(own);
+      ids = ids ? ids.filter(id => idSetHas(own, [id, qnameOfId(id)], recordKey(id))) : Array.from(own);
     }
-    return { dataset_id: panel.datasetId!, result_key: sk, ...viewport, read_ids: ids, ...(panel.strand ? { strand: panel.strand } : {}), panel };
+    return { dataset_id: panel.datasetId!, result_key: sk, ...viewport, read_ids: ids, ...(panel.strand ? { strand: panel.strand } : {}), ...(panel.liftHap || panel.readSubset?.rule.liftHap ? { lift_hap: panel.liftHap ?? panel.readSubset?.rule.liftHap } : {}), panel };
   }).filter((view, index, all) => all.findIndex(other => other.result_key === view.result_key) === index);
 }
 
 /** What a Cluster run clusters on, decided as the run decides it (components/Browser.tsx handleCluster branches on it). */
-export type ClusterBasisKind = 'ordered' | 'matched' | 'peaks' | 'feature-regions' | 'combinatorial' | 'rule' | 'none';
+export type ClusterBasisKind = 'ordered' | 'matched' | 'peaks' | 'whole-view' | 'feature-regions' | 'combinatorial' | 'rule' | 'none';
 
 export interface ClusterBasis {
   kind: ClusterBasisKind;
+  /** Retained when an extension routes this basis through another engine (graph columns). */
+  scope?: 'whole-view';
   /** The regions sent to the run (the peaks, the features' spans, the rule's regions; Combinatorial: the features' spans). */
   regions: ClusterPeak[];
   /** The selected features on the main view's chromosome. */
@@ -92,6 +106,13 @@ function kindNoun(kind: string): string {
 }
 const plural = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString()} ${n === 1 ? one : many}`;
 const nounsOf = (features: FeatureRef[]) => listNames([...new Set(features.map(f => kindNoun(f.kind)))]);
+
+export const WHOLE_VIEW_LABEL = 'whole view (no peaks selected)';
+
+/** One feature region per visible span, with the same per-molecule mode as a selected peak. */
+export function wholeViewRegion(view: { start: number; end: number }, mode = 'accessibility') {
+  return { start: view.start, end: view.end, mode };
+}
 
 /**
  * What a Cluster run clusters on (round 3, R6/B5: the tooltip named the ticked SVs while the run used the peak):
@@ -164,6 +185,14 @@ export function clusterBasis(st: PlanState): ClusterBasis {
       ...(p.chrom ? { chrom: p.chrom } : {}),
       ...(p.genome ? { genome: p.genome } : {}),
     }));
+  if (!peaks.length && !st.selectedPeaks.size) {
+    const ids = getTargetDatasetIds(st.selectedDatasets, st.panels ?? [], st.datasets ?? []);
+    const view = st.panels?.length ? clusterWindows(st, ids).find(w => w.read_ids?.length !== 0) : undefined;
+    const locus = view ?? st;
+    return { kind: 'whole-view', scope: 'whole-view',
+      regions: [{ ...wholeViewRegion(locus, typeof mode === 'string' && !mode.startsWith(CLUSTER_RULE_MODE_PREFIX) ? mode : undefined), chrom: locus.chrom, ...(view?.panel.genome ? { genome: view.panel.genome } : {}) }],
+      features, what: WHOLE_VIEW_LABEL, unused };
+  }
   return { kind: peaks.length ? 'peaks' : 'none', regions: peaks, features, what: plural(peaks.length, 'selected peak'), unused };
 }
 
@@ -399,6 +428,9 @@ export interface RegionClusterWindow extends ClusterWindow {
   genome: string | null;
   region_label: string;
   blocks: { feature: number; frame: [number, number]; genomic: [number, number]; reverse: boolean }[];
+  /** Its blocks run across a circular origin: reads must cover each feature's whole hull (an explicit flag; the
+   * server no longer infers it from block order, graph primary G0). */
+  wraps_origin?: boolean;
 }
 
 /** Pair groups by panel and copy order, never by positional peak indices. */
@@ -419,7 +451,7 @@ export function matchedClusterWindows(windows: ClusterWindow[], regions: Cluster
     const present = own.filter((p): p is ClusterPeak => !!p);
     return { ...w, stateKey: w.result_key, result_key: `${w.result_key}@${ids.join('+')}:${p.match!.label}`,
       start: Math.min(...present.map(p => p.start)), end: Math.max(...present.map(p => p.end)), genome: w.panel.genome ?? null,
-      region_label: p.match!.label,
+      region_label: p.match!.label, wraps_origin: present.some(q => Boolean(q.match?.wrapsOrigin)),
       blocks: own.flatMap((p, feature) => p?.match?.blocks.map(b => ({ ...b, feature, reverse: p.match!.reversed })) ?? []) };
   }) };
 }

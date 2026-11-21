@@ -12,38 +12,7 @@ import shutil
 
 import pytest
 
-import contextlib
-from pathlib import Path
-
-DEMO_BAM = Path(__file__).resolve().parents[1] / "browser" / "data" / "demo" / "napa_ddda.bam"
-
-
-@contextlib.contextmanager
-def state_client(app, datasets: dict[str, str]):
-    """A TestClient whose main state holds ``datasets`` ({id: BAM path}); restored afterwards (dev realpath_helpers)."""
-    import server as srv
-    from starlette.testclient import TestClient
-    from conftest import auth_headers
-    from plugins import init_context
-    from state import runtime_state
-    from state.browser_state import BrowserState
-    from state.runtime_state import set_browser_state
-
-    previous = srv.state
-    previous_runtime = runtime_state._state
-    state = BrowserState(None, None, None, None)
-    for dataset_id, path in datasets.items():
-        state.add_dataset(dataset_id, str(path), dataset_id)
-    srv.state = state
-    set_browser_state(state)
-    init_context(state)
-    try:
-        yield TestClient(app, headers=auth_headers()), state
-    finally:
-        srv.state = previous
-        set_browser_state(previous_runtime)
-        init_context(previous)
-
+from realpath_helpers import DEMO_BAM, state_client
 
 pytestmark = pytest.mark.skipif(not DEMO_BAM.exists(), reason="tracked demo BAM browser/data/demo/napa_ddda.bam missing")
 PARAMS = dict(chrom="chr19", region_start=47515000, region_end=47517000, spanning="false")

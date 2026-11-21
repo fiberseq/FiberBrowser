@@ -144,6 +144,10 @@ describe('resize, delete and restore (store)', () => {
     expect(feedHasSv({ ...feed, chrom: 'chr3R' })).toBe(false);
     expect(feedHasCoverage({ ...feed, chrom: 'chr3R' })).toBe(false);
     expect(feedHasCoverage({ ...feed, zoomedOut: true })).toBe(false);
+    // A first paint keeps the SV row's place (empty) until the full set's summary lands.
+    expect(feedHasSv({ ...feed, sv: null })).toBe(false);
+    expect(feedHasSv({ ...feed, sv: null, svPending: true })).toBe(true);
+    expect(feedHasSv({ ...feed, sv: null, svPending: true, zoomedOut: true })).toBe(false);
   });
 
   it('is saved with the panel (sessions, snapshots), and undoable', () => {

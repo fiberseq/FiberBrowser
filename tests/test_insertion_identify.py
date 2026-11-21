@@ -844,3 +844,74 @@ def test_verdict_picks_the_best_qualifying_candidate_and_names_it():
     r = _result([low], loci=[good])
     assert ii.verdict(r)["source"] == "genome"
     assert ii.summarise(r).startswith("Best candidate: matches chr2:11") and "WeakTE" not in ii.summarise(r)
+
+
+# ---------------------------------------------------------------------------
+# Lab members: the shared job registry is owner-scoped; identify routes refuse other job kinds (3.1.0 audit)
+
+
+def test_identify_and_search_job_routes_are_scoped_to_their_owner_and_kind(monkeypatch):
+    from types import SimpleNamespace
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from routers.insertions import router as insertions_router
+    from routers.sequence_search import router as search_router
+    from services import runtime
+    from services import sequence_search as ss
+
+    release = threading.Event()
+
+    def slow(runner, progress):
+        while not release.wait(0.01):
+            pass
+        return {"schema": ii.SCHEMA}
+
+    current = {"user": None}
+
+    app = FastAPI()
+
+    @app.middleware("http")
+    async def as_member(request, call_next):
+        with runtime.lab_request_context(current["user"]):
+            return await call_next(request)
+
+    app.include_router(insertions_router)
+    app.include_router(search_router)
+    http = TestClient(app)
+    monkeypatch.setattr(runtime, "_lab_mode", True)
+    alice, bob = SimpleNamespace(name="alice"), SimpleNamespace(name="bob")
+    try:
+        with runtime.lab_request_context(alice):
+            search = ii.start_job("sequence_search", "owner-scope-search", slow, persist=False)
+            ident = ii.start_job("identify", "owner-scope-identify", slow, persist=False)
+        with runtime.lab_request_context(bob):
+            # Bob starting the same identify key gets his own job, not Alice's.
+            bobs = ii.start_job("identify", "owner-scope-identify", slow, persist=False)
+        assert bobs["job_id"] != ident["job_id"]
+
+        current["user"] = bob
+        for job_id in (search["job_id"], ident["job_id"]):
+            assert http.get(f"/api/insertions/identify/jobs/{job_id}").json()["status"] == "missing"
+            assert http.delete(f"/api/insertions/identify/jobs/{job_id}").json()["success"] is False
+            assert http.get(f"/api/sequence_search/jobs/{job_id}").json()["status"] == "missing"
+            assert http.delete(f"/api/sequence_search/jobs/{job_id}").json()["success"] is False
+
+        current["user"] = alice
+        # Her own search job is not an identify job: the identify routes neither show nor cancel it.
+        assert http.get(f"/api/insertions/identify/jobs/{search['job_id']}").json()["status"] == "missing"
+        assert http.delete(f"/api/insertions/identify/jobs/{search['job_id']}").json()["success"] is False
+        # ...and the search routes do not reach her identify job.
+        assert http.get(f"/api/sequence_search/jobs/{ident['job_id']}").json()["status"] == "missing"
+        assert http.get(f"/api/insertions/identify/jobs/{ident['job_id']}").json()["status"] == "running"
+        assert http.get(f"/api/sequence_search/jobs/{search['job_id']}").json()["status"] == "running"
+        with runtime.lab_request_context(alice):
+            assert ss.get_search_job(search["job_id"])["status"] == "running"
+        assert http.delete(f"/api/insertions/identify/jobs/{ident['job_id']}").json()["success"] is True
+        assert http.delete(f"/api/sequence_search/jobs/{search['job_id']}").json()["success"] is True
+
+        current["user"] = bob
+        assert http.get(f"/api/insertions/identify/jobs/{bobs['job_id']}").json()["status"] == "running"
+    finally:
+        release.set()

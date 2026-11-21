@@ -1,0 +1,28 @@
+{
+ "metrics": [
+  {
+   "group": "nucmol",
+   "id": "nuc.nrl",
+   "label": "Repeat length (NRL)",
+   "module": "nuc",
+   "name": "nrl",
+   "unit": "bp"
+  },
+  {
+   "group": "nucmol",
+   "id": "nuc.regularity",
+   "label": "Regularity S",
+   "module": "nuc",
+   "name": "regularity",
+   "unit": "acf"
+  },
+  {
+   "group": "nucmol",
+   "id": "nuc.spectral_snr",
+   "label": "Spectral SNR",
+   "module": "nuc",
+   "name": "spectral_snr",
+   "unit": "ratio"
+  }
+ ]
+}

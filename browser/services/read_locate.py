@@ -127,7 +127,7 @@ def _datasets(state, dataset_ids: Optional[list[str]]):
     out = []
     for dataset_id in ids:
         ds = state.get_dataset(dataset_id)
-        if ds is not None and getattr(ds, "data_type", None) in ("bam", "bigbed") and (ds.paths or []):
+        if ds is not None and getattr(ds, "data_type", None) in ("bam", "bigbed", "bam_livelift") and (ds.paths or []):
             out.append(ds)
     return out
 
@@ -202,7 +202,9 @@ class _Search:
             self.fallback.setdefault(requested, hit)
 
 
-def _bam_hit(search: _Search, state, dataset, read, path: str) -> dict:
+def _bam_hit(search: _Search, state, dataset, read, path: str, primary: Optional[bool] = None) -> dict:
+    """``primary``: the caller's decision that this is the drawn record (default: the
+    BAM flags). Only primaries are cached, never an unrepaired lift's hidden record."""
     contig = read.reference_name
     start = int(read.reference_start)
     end = int(read.reference_end or start + 1)
@@ -215,7 +217,9 @@ def _bam_hit(search: _Search, state, dataset, read, path: str) -> dict:
         "end": end,
         "strand": "-" if read.is_reverse else "+",
     }
-    if not (read.is_secondary or read.is_supplementary):
+    if primary is None:
+        primary = not (read.is_secondary or read.is_supplementary)
+    if primary:
         _cache_put(path, search.version(path), read.query_name, {k: hit[k] for k in ("read_id", "contig", "start", "end", "strand")})
     return hit
 
@@ -253,6 +257,8 @@ def _scan_bam(search: _Search, state, dataset, path: str, intervals) -> None:
 
 def _scan_bam_records(search: _Search, state, dataset, path: str, bam, intervals) -> None:
     wanted = search.wanted
+    from services.graph_lift import lift_hidden_predicate
+    hidden = lift_hidden_predicate(getattr(bam, "header", None))
     for contig, lo, hi in intervals:
         if search.done() or search.out_of_budget():
             return
@@ -274,7 +280,9 @@ def _scan_bam_records(search: _Search, state, dataset, path: str, bam, intervals
                     continue
                 if read.is_unmapped or read.is_secondary:
                     continue
-                search.record(requested, _bam_hit(search, state, dataset, read, path), primary=not read.is_supplementary)
+                # An unrepaired lift's ex-supplementary is not the drawn record: a supplementary hit.
+                primary = not read.is_supplementary and not (hidden is not None and hidden(read))
+                search.record(requested, _bam_hit(search, state, dataset, read, path, primary), primary=primary)
                 if search.done():
                     search.scanned += n % CHECK_EVERY
                     return
@@ -358,7 +366,7 @@ def _scan_bigbed(search: _Search, state, dataset, path: str, intervals) -> None:
 
 def _contigs_by_reads(dataset, path: str) -> list[tuple[str, float]]:
     from services.random_window import _bam_contigs, _bigbed_contigs
-    reader = _bam_contigs if dataset.data_type == "bam" else _bigbed_contigs
+    reader = _bam_contigs if dataset.data_type in ("bam", "bam_livelift") else _bigbed_contigs
     try:
         contigs = reader(path)
     except Exception:
@@ -369,7 +377,13 @@ def _contigs_by_reads(dataset, path: str) -> list[tuple[str, float]]:
 def _intervals(scope: str, dataset, path: str, chrom: Optional[str], start: Optional[int], end: Optional[int]):
     """[(file contig, start or None, end or None)] a scope searches in one file.
 
-    Raises when the file cannot be opened (the caller reports it)."""
+    Raises when the file cannot be opened (the caller reports it).
+
+    A live-lift dataset's file is searched in source coordinates: a region or
+    chromosome scope is translated through the map's selected primary pieces
+    (its hits are projected back in ``_result``)."""
+    if dataset.data_type == "bam_livelift":
+        return _lifted_intervals(scope, dataset, path, chrom, start, end)
     if dataset.data_type == "bam":
         handle = get_bam_handle(path)
         if handle is None:
@@ -412,6 +426,7 @@ def locate_reads(
     requested, not_searched = asked[:MAX_NAMES], asked[MAX_NAMES:]
     budget_s = max(0.0, min(float(budget_s), MAX_BUDGET_S))
     search = _Search(requested, budget_s, int(max_records), cancelled)
+    search.state = state  # live-lift hits are projected onto the main genome (_result)
     search.not_searched = list(not_searched)
     if not_searched:
         search.complete = False
@@ -442,17 +457,84 @@ def locate_reads(
             except Exception as err:  # noqa: BLE001 - unreadable: reported, the search incomplete
                 search.failed(dataset, path, _error_text(err))
                 continue
-            if dataset.data_type == "bam":
+            if dataset.data_type in ("bam", "bam_livelift"):
                 _scan_bam(search, state, dataset, path, intervals)
             else:
                 _scan_bigbed(search, state, dataset, path, intervals)
     return _result(search, scope, datasets)
 
 
+def _lifted_intervals(scope, dataset, path, chrom, start, end):
+    config = dataset.live_lift
+    handle = config.handle
+    if scope == "genome":
+        haps = set(config.haplotypes)
+        sources = [name for name, hap in handle.source_haplotype.items() if hap in haps]
+        bam = get_bam_handle(path)
+        if bam is None:
+            raise OSError("the file could not be opened")
+        refs = set(bam.references)
+        return [(c, None, None) for c in sources if c in refs]
+    if chrom not in handle.map.targets:
+        return []
+    size = handle.target_size(chrom) or 0
+    lo, hi = (0, size) if scope == "chrom" or start is None or end is None else (int(start), int(end))
+    with handle.lock:
+        pieces = handle.map.target_to_source(chrom, lo, hi)
+    haps = set(config.haplotypes)
+    windows: dict = {}
+    for p in pieces:
+        c = handle.map.chains[p.chain]
+        if not p.primary or c["haplotype"] not in haps:
+            continue
+        name = handle.manifest["sources"][c["source"]]["name"]
+        windows.setdefault(name, []).append([p.q_start, p.q_end])
+    out = []
+    for name, spans in windows.items():
+        spans.sort()
+        merged = []
+        for a, b in spans:
+            if merged and a <= merged[-1][1] + 50_000:
+                merged[-1][1] = max(merged[-1][1], b)
+            else:
+                merged.append([a, b])
+        out += [(name, a, b) for a, b in merged]
+    return out
+
+
+def _project_lifted_hit(state, hit: dict) -> dict:
+    """A hit in a live-lift dataset's source file, on the main genome: the hull of
+    its alignment's projections through the selected primary pieces (the first
+    target chromosome reached), or ``no_correspondence`` (still reported)."""
+    dataset = state.get_dataset(hit.get("dataset_id"))
+    config = getattr(dataset, "live_lift", None)
+    contig = hit.get("contig")
+    if config is None or contig is None:
+        return hit
+    handle = config.handle
+    with handle.lock:
+        pieces = handle.map.source_to_target(contig, int(hit["start"]), int(hit["end"]))
+    haps = set(config.haplotypes)
+    by_target: dict = {}
+    for p in pieces:
+        c = handle.map.chains[p.chain]
+        if p.primary and c["haplotype"] in haps:
+            by_target.setdefault(handle.manifest["targets"][c["target"]]["name"], []).append(p)
+    if not by_target:
+        return {**hit, "chrom": None, "source_contig": contig,
+                "no_correspondence": f"on {contig}:{int(hit['start']) + 1:,}, no correspondence on this genome"}
+    target, ps = max(by_target.items(), key=lambda kv: sum(p.t_end - p.t_start for p in kv[1]))
+    return {**hit, "chrom": target, "start": min(p.t_start for p in ps), "end": max(p.t_end for p in ps),
+            "source_contig": contig, "source_start": hit["start"], "source_end": hit["end"]}
+
+
 def _result(search: _Search, scope: str, datasets) -> dict:
     found = []
+    lifted = {getattr(d, "id", None) for d in datasets if getattr(d, "data_type", None) == "bam_livelift"}
     for name in search.names:
         hit = search.found.get(name) or search.fallback.get(name)
+        if hit is not None and hit.get("dataset_id") in lifted and getattr(search, "state", None) is not None:
+            hit = _project_lifted_hit(search.state, hit)
         if hit is not None:
             entry = {k: v for k, v in hit.items() if k != "contig"}
             found.append({"name": name, **entry, "supplementary": name not in search.found})

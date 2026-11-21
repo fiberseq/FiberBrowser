@@ -374,7 +374,7 @@ NEVER_REMOTE_PREFIXES = (
     "/api/primer", "/api/design_", "/api/render/figure", "/api/remote/", "/api/s3/", "/api/nl/", "/api/jupyter",
     "/api/linked/", "/api/new-window", "/api/shutdown", "/api/quit", "/api/tabs/", "/api/cancel_shutdown",
     "/api/session/read", "/api/session/import", "/api/session/check_files", "/api/datasets/add",
-    "/api/footprint/rules", "/api/footprint/derived_layers", "/api/regions/catalog", "/api/reads/export_bam",
+    "/api/footprint/rules", "/api/footprint/derived_layers", "/api/regions/catalog", "/api/reads/export_bam", "/api/lift/export_bam",
     "/api/panel_genomes/attach", "/api/annotations/add", "/api/annotations/browse", "/api/add_track",
     "/api/tracks/add_motif_file", "/api/upload", "/api/settings", "/api/diagnose_bam",
 )

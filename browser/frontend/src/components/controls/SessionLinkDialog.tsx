@@ -9,6 +9,7 @@ import {
   type LinkRequest,
 } from '../../utils/sessionLinks';
 import { useConnectClusterStore } from '../../utils/connectCluster';
+import { markReferenceChosen } from '../../stores/referenceNoticeStore';
 import { isLabServerPage } from '../../utils/labServer';
 
 type Phase =
@@ -142,6 +143,8 @@ export function SessionLinkHost({ request = STARTUP_LINK_REQUEST }: { request?: 
     if (!linkId || phase?.name !== 'ready') return;
     const preview = phase.preview;
     setPhase({ name: 'opening', preview });
+    // A session link carries its own reference: the user's choice.
+    markReferenceChosen();
     const result = await openLink(linkId, [...selected].sort((a, b) => a - b));
     if (result.success || (result.opened ?? 0) > 0) {
       await applyOpenedLink(result);

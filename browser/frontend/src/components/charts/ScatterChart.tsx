@@ -18,6 +18,9 @@ interface ScatterChartProps {
   pointIds?: string[];                 // per-point read/observation id (parallel)
   datasetIds?: string[];               // per-point dataset id (parallel)
   clusterColors: Record<number, string>;
+  /** Per-point colours (parallel; null = no value, drawn grey and faint): the map coloured by a molecule value.
+   * Absent: each dot in its cluster's colour. Centroids keep their cluster colours either way. */
+  pointColors?: ReadonlyArray<string | null> | null;
   centroids?: Record<number, [number, number]>;  // cluster id -> [x,y]
   dimClusterIds?: Set<number>;         // clusters that were dissolved (drawn hollow/faded)
   highlightedClusters?: Set<number> | null;
@@ -169,6 +172,7 @@ function drawScatter(
     labels: number[];
     datasetIds: string[] | undefined;
     clusterColors: Record<number, string>;
+    pointColors?: ReadonlyArray<string | null> | null;
     centroids: Record<number, [number, number]> | undefined;
     dimClusterIds: Set<number> | undefined;
     highlightedClusters: Set<number> | null | undefined;
@@ -190,7 +194,7 @@ function drawScatter(
     coordsX, coordsY, labels, datasetIds, clusterColors, centroids,
     dimClusterIds, highlightedClusters, highlightedDatasetIds, dissolveArrows,
     title, xLabel, yLabel, pointSize, jitter,
-    showAxes, showCentroids, showCentroidLabels, selectedClusters, highlightLabels,
+    showAxes, showCentroids, showCentroidLabels, selectedClusters, highlightLabels, pointColors,
   } = props;
 
   const pxOut = new Float32Array(coordsX.length);
@@ -274,8 +278,11 @@ function drawScatter(
     pyOut[i] = py;
     drawnOut[i] = 1;
 
-    const color = clusterColors[cluster] || '#9ca3af';
-    const baseAlpha = isDim ? 0.22 : (hl ? 0.75 : 0.15);
+    const valueColor = pointColors ? pointColors[i] : undefined;
+    const color = pointColors ? (valueColor ?? '#9ca3af') : (clusterColors[cluster] || '#9ca3af');
+    // A dot without a value stays faint so the coloured ones read.
+    const missing = !!pointColors && !valueColor;
+    const baseAlpha = (isDim ? 0.22 : (hl ? (pointColors ? 0.85 : 0.75) : 0.15)) * (missing ? 0.35 : 1);
     ctx.globalAlpha = baseAlpha;
     ctx.fillStyle = color;
     ctx.beginPath();
@@ -399,6 +406,7 @@ export function ScatterChart({
   pointIds,
   datasetIds,
   clusterColors,
+  pointColors,
   centroids,
   dimClusterIds,
   highlightedClusters,
@@ -462,13 +470,13 @@ export function ScatterChart({
       coordsX, coordsY, labels, datasetIds, clusterColors, centroids,
       dimClusterIds, highlightedClusters, highlightedDatasetIds, dissolveArrows,
       title, xLabel, yLabel, pointSize, jitter,
-      showAxes, showCentroids, showCentroidLabels, selectedClusters, highlightLabels,
+      showAxes, showCentroids, showCentroidLabels, selectedClusters, highlightLabels, pointColors,
     });
   }, [
     bounds, coordsX, coordsY, labels, datasetIds, clusterColors, centroids,
     dimClusterIds, highlightedClusters, highlightedDatasetIds, dissolveArrows,
     title, xLabel, yLabel, pointSize, jitter,
-    showAxes, showCentroids, showCentroidLabels, selectedClusters, highlightLabels,
+    showAxes, showCentroids, showCentroidLabels, selectedClusters, highlightLabels, pointColors,
   ]);
 
   useEffect(() => {
@@ -571,6 +579,7 @@ export function ScatterChart({
             pointIds={pointIds}
             datasetIds={datasetIds}
             clusterColors={clusterColors}
+            pointColors={pointColors}
             centroids={centroids}
             dimClusterIds={dimClusterIds}
             highlightedClusters={highlightedClusters}

@@ -18,7 +18,7 @@
 #                     (git archive: untracked files never reach the wheel; default: this checkout)
 #   FB_FIBERHMM       a FiberHMM wheel, or a git checkout (built from a fresh clone of its HEAD,
 #                     so the wheel records the commit), or a pip requirement
-#                     (default: fiberhmm[consensus]>=3.0.3,<4 from PyPI)
+#                     (default: fiberhmm[consensus]>=3.2.0,<4 from PyPI)
 #   FB_PYTHON         Python with `build` for the wheels (default: python3)
 #   FB_PYTHON_IMAGE   base image (default: python:3.12-slim-bookworm)
 #   FB_GZIP_LEVEL     1-9 (default 9)
@@ -80,8 +80,13 @@ wheel_from_checkout() {  # git checkout, label -> builds its committed HEAD into
 
 say "Wheels"
 FB_SRC="${FB_FIBERBROWSER:-$ROOT}"
+if [ ! -f "$FB_SRC" ] && [ "${FB_ALLOW_STALE_DIST:-0}" != 1 ]; then
+  # The distribution ships the committed frontend build: it must be current (packaging/check_frontend_dist.py).
+  "$PY" "$ROOT/packaging/check_frontend_dist.py" --repo "$FB_SRC" \
+    || die "rebuild browser/frontend/dist (cd browser/frontend && npm run build), commit it, and build again (FB_ALLOW_STALE_DIST=1: a test build)"
+fi
 if [ -f "$FB_SRC" ]; then cp "$FB_SRC" "$WHEELS/"; else wheel_from_checkout "$FB_SRC" fiberbrowser; fi
-FH="${FB_FIBERHMM:-fiberhmm[consensus]>=3.0.3,<4}"
+FH="${FB_FIBERHMM:-fiberhmm[consensus]>=3.2.0,<4}"
 if [ -f "$FH" ]; then
   cp "$FH" "$WHEELS/"
 elif [ -d "$FH" ]; then

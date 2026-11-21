@@ -1,18 +1,27 @@
+import { syncPatchLabels } from './utils/nucPatchLabels';
+import { DifferenceInspectorRoot } from './features/differences/DifferenceInspector';
 import { useEffect, Component, ReactNode, ErrorInfo } from 'react';
 import { SkipLinks } from './components/ui/SkipLinks';
 import { Browser } from './components/Browser';
 import { useBrowserStore } from './stores/browserStore';
 import { autoSaveNow } from './hooks/useAutoSave';
-import { getChromosomes, getGenomes, loadGenome, loadFasta } from './api/reference';
+import { getChromosomes, getFastaAssembly, getGenomes, loadGenome, loadFasta } from './api/reference';
 import { getGenomeCheck } from './api/genomeCheck';
 import { getStatus } from './api/status';
 import { fetchApiResponse } from './api/sharedFetch';
+import { useServerDatasetsStore } from './stores/serverDatasetsStore';
+import { adoptServerDatasetsIfEmpty } from './utils/adoptServerDatasets';
 import { registerAnalysisPanel } from './plugins';
 import { PythonPluginPanel } from './components/controls/PythonPluginPanel';
 import { openTourTab } from './utils/tourTab';
-import { genomeLoadHasFasta, pickAutoloadGenome, startupGenomeAutoload } from './utils/genomeAutoload';
+import { genomeLoadHasFasta, startupGenomeAutoload } from './utils/genomeAutoload';
+import { decideStartupReference, isRemoteReference, type StartupReferenceDecision } from './utils/startupReference';
+import { useReferenceNoticeStore } from './stores/referenceNoticeStore';
+import { LAST_FASTA_PATH_STORAGE_KEY, LAST_GENOME_STORAGE_KEY } from './stores/utils';
 import { installPlasmidLinkWatcher } from './utils/plasmidLoader';
 import { SessionLinkHost } from './components/controls/SessionLinkDialog';
+import { LiveLiftDialog } from './features/liveLift/LiveLiftDialog';
+import { LiveLiftSettingsDialog } from './features/liveLift/LiveLiftSettingsDialog';
 import { LinkExpiryBanner } from './components/controls/LinkExpiryBanner';
 import { STARTUP_LINK_REQUEST, isSessionLinkValue, startupLinkOutcome } from './utils/sessionLinks';
 import { UI_THEME, roundedPanels } from './theme/uiTheme';
@@ -156,6 +165,11 @@ function App() {
   // A BAM linked to a plasmid map when it loaded (any load path): refresh the
   // chromosomes and say why a plasmid BAM did not match.
   useEffect(() => installPlasmidLinkWatcher(), []);
+  // The nucpatch lane's geometry labels follow the datasets' label identity (an overlay: no read reload).
+  useEffect(() => {
+    void syncPatchLabels(useBrowserStore.getState().datasets);
+    return useBrowserStore.subscribe((s, prev) => { if (s.datasets !== prev.datasets) void syncPatchLabels(s.datasets); });
+  }, []);
 
   // Sync dark mode class to <html> and color-scheme meta tag
   useEffect(() => {
@@ -237,91 +251,84 @@ function App() {
     function doAutoLoad() {
       const s = useBrowserStore.getState();
       if (s.currentGenome || s.hasFasta) return;
-
-    // 1. Try restoring a stored local FASTA first.
-    let lastFastaPath: string | null = null;
-    try { lastFastaPath = localStorage.getItem('fiberhmm_last_fasta_path'); } catch {}
-    if (lastFastaPath) {
-      loadFasta(lastFastaPath)
-        .then(res => {
-          if (res.success) {
-            const s = useBrowserStore.getState();
-            s.setHasFasta(true);
-            s.setFastaPath(lastFastaPath!);
-            // Don't set currentGenome — local FASTAs aren't registry genomes.
-            useBrowserStore.getState().triggerRefresh();
-            getStatus().then(statusRes => {
-              if (statusRes.initial_position) {
-                useBrowserStore.getState().setViewport(
-                  statusRes.initial_position.chrom,
-                  statusRes.initial_position.start,
-                  statusRes.initial_position.end,
-                );
-              }
-            }).catch(() => {});
-          } else {
-            // Stored path is stale (e.g. file moved) — clear it and fall back.
-            try { localStorage.removeItem('fiberhmm_last_fasta_path'); } catch {}
-            autoLoadGenomeFallback();
-          }
-        })
-        .catch(() => {
-          try { localStorage.removeItem('fiberhmm_last_fasta_path'); } catch {}
-          autoLoadGenomeFallback();
+      let rememberedFasta: string | null = null;
+      let rememberedGenome: string | null = null;
+      try {
+        rememberedFasta = localStorage.getItem(LAST_FASTA_PATH_STORAGE_KEY);
+        rememberedGenome = localStorage.getItem(LAST_GENOME_STORAGE_KEY);
+      } catch {}
+      // The server's reference, then the loaded data's genome, then what this browser remembers
+      // (utils/startupReference.ts): a remembered reference of another assembly than the data is not restored.
+      Promise.all([
+        getGenomes(), getChromosomes().catch(() => ({ chroms: [] })), getGenomeCheck().catch(() => null),
+        getStatus(false).catch(() => null),
+        rememberedFasta && !isRemoteReference(rememberedFasta) ? getFastaAssembly(rememberedFasta).catch(() => null) : Promise.resolve(null),
+      ]).then(([res, chromRes, check, status, fastaInfo]) => {
+        const datasets = useBrowserStore.getState().datasets.length > 0 || (check?.datasets?.length ?? 0) > 0;
+        const decide = (fastaPath: string | null) => decideStartupReference({
+          server: { hasFasta: !!status?.has_fasta, currentGenome: status?.current_genome ?? null },
+          remembered: { fastaPath, fastaAssembly: fastaInfo?.assembly ?? null, genomeId: rememberedGenome },
+          // The assembly the data's contig lengths name (hg19 vs hg38, mm10 vs mm39), else its contig names.
+          data: {
+            genome: datasets && check?.suggestion?.confidence === 'high' ? check.suggestion.genome_id : null,
+            chroms: chromRes.chroms.map((c: { name: string }) => c.name),
+          },
+          registryIds: res.genomes.map((g: { id: string }) => g.id),
         });
-      return;
-    }
-
-    autoLoadGenomeFallback();
-
-    // 2/3. Registry genome (last used) → hg38 fallback.
-    function autoLoadGenomeFallback() {
-      let targetId: string | null = null;
-      try { targetId = localStorage.getItem('fiberhmm_last_genome'); } catch {}
-      if (!targetId) targetId = 'hg38';
-      const remembered = targetId;
-      // The data's chromosome names decide the species: hg38 (or a remembered
-      // genome) is not loaded under a fly BAM, whose chr2R it doesn't have.
-      Promise.all([getGenomes(), getChromosomes().catch(() => ({ chroms: [] })), getGenomeCheck().catch(() => null)])
-        .then(([res, chromRes, check]) => {
-          // The assembly the data's contig lengths name (hg19 vs hg38, mm10
-          // vs mm39) wins over the remembered genome and the species guess.
-          const fromData = check?.suggestion?.confidence === 'high' ? check.suggestion.genome_id : null;
-          const genomeId = fromData && res.genomes.some((g: { id: string }) => g.id === fromData) ? fromData : pickAutoloadGenome(
-            remembered,
-            chromRes.chroms.map((c: { name: string }) => c.name),
-            res.genomes.map((g: { id: string }) => g.id),
-          );
-          const genome = res.genomes.find((g: { id: string }) => g.id === genomeId);
-          if (genome) {
-            loadGenome(genome.id).then(loadRes => {
-              if (loadRes.success) {
-                const s = useBrowserStore.getState();
-                // Only a loaded FASTA gives the sequence track bases to ask for.
-                s.setHasFasta(genomeLoadHasFasta(loadRes));
-                // IMPORTANT: pass null, not genome.name. Persisting
-                // genome.name as `fiberhmm_last_fasta_path` makes the next
-                // reload take the local-FASTA branch (which only calls
-                // loadFasta, never loadGenome → GTF never re-downloads).
-                s.setFastaPath(null);
-                s.setCurrentGenome(genome.id);
-                useBrowserStore.getState().triggerRefresh();
-                getStatus().then(statusRes => {
-                  if (statusRes.initial_position) {
-                    useBrowserStore.getState().setViewport(
-                      statusRes.initial_position.chrom,
-                      statusRes.initial_position.start,
-                      statusRes.initial_position.end,
-                    );
-                  }
-                }).catch(() => {});
-              }
-            }).catch(() => {});
+        const apply = (decision: StartupReferenceDecision) => {
+          if (useBrowserStore.getState().currentGenome || useBrowserStore.getState().hasFasta) return;  // loaded meanwhile
+          if (decision.action === 'keep-server' || decision.action === 'none') {
+            if (decision.action === 'none' && decision.notRestored) useReferenceNoticeStore.getState().setNotice(decision.notRestored);
+            return;
           }
-        })
-        .catch(() => {});
+          if (decision.action === 'load-fasta') {
+            const path = decision.path;
+            loadFasta(path).then(loaded => {
+              if (!loaded.success) throw new Error('stale');
+              const st = useBrowserStore.getState();
+              st.setHasFasta(true);
+              st.setFastaPath(path);
+              // Don't set currentGenome — local FASTAs aren't registry genomes.
+              st.triggerRefresh();
+              goToInitialPosition();
+            }).catch(() => {
+              // Stored path is stale (e.g. file moved) — clear it and fall back.
+              try { localStorage.removeItem(LAST_FASTA_PATH_STORAGE_KEY); } catch {}
+              apply(decide(null));
+            });
+            return;
+          }
+          const genomeId = decision.genomeId;
+          loadGenome(genomeId).then(loadRes => {
+            if (!loadRes.success) return;
+            const st = useBrowserStore.getState();
+            // Only a loaded FASTA gives the sequence track bases to ask for.
+            st.setHasFasta(genomeLoadHasFasta(loadRes));
+            // IMPORTANT: pass null, not genome.name. Persisting
+            // genome.name as `fiberhmm_last_fasta_path` makes the next
+            // reload take the local-FASTA branch (which only calls
+            // loadFasta, never loadGenome → GTF never re-downloads).
+            st.setFastaPath(null);
+            st.setCurrentGenome(genomeId);
+            if (decision.notRestored) useReferenceNoticeStore.getState().setNotice(decision.notRestored);
+            st.triggerRefresh();
+            goToInitialPosition();
+          }).catch(() => {});
+        };
+        apply(decide(rememberedFasta));
+      }).catch(() => {});
+      function goToInitialPosition() {
+        getStatus().then(statusRes => {
+          if (statusRes.initial_position) {
+            useBrowserStore.getState().setViewport(
+              statusRes.initial_position.chrom,
+              statusRes.initial_position.start,
+              statusRes.initial_position.end,
+            );
+          }
+        }).catch(() => {});
+      }
     } // end doAutoLoad
-    }  // end inner block from catalog check
     }  // end runAutoLoad
   }, []);
 
@@ -371,10 +378,20 @@ function App() {
     // reload must not be mistaken for the page that just closed.
     const tabId = Math.random().toString(36).slice(2, 12);
     const heartbeat = () => {
-      fetchApiResponse(`/api/tabs/heartbeat?tab=${tabId}`, { method: 'POST' }).catch(() => {});
+      fetchApiResponse(`/api/tabs/heartbeat?tab=${tabId}`, { method: 'POST' })
+        .then(r => (r.ok ? r.json() : null))
+        // The loaded datasets' key: a dataset added on the server (another tab, a script) is noticed.
+        .then(body => {
+          useServerDatasetsStore.getState().setKey(body?.datasets);
+          void adoptServerDatasetsIfEmpty();
+        })
+        .catch(() => {});
     };
     heartbeat();
     const heartbeatTimer = window.setInterval(heartbeat, 10_000);
+    // Coming back to the tab checks in at once (background tabs' timers are slowed).
+    const onVisible = () => { if (document.visibilityState === 'visible') heartbeat(); };
+    document.addEventListener('visibilitychange', onVisible);
 
     const handleUnload = () => {
       // Mark that we're unloading — if we come back (reload), we'll cancel
@@ -385,6 +402,7 @@ function App() {
     window.addEventListener('beforeunload', handleUnload);
     return () => {
       window.clearInterval(heartbeatTimer);
+      document.removeEventListener('visibilitychange', onVisible);
       window.removeEventListener('beforeunload', handleUnload);
     };
   }, [publicMode]);
@@ -395,8 +413,10 @@ function App() {
       <div className="w-full h-full">
         {/* First in the tab order: jump past the toolbar to the reads or the side panels (N13). */}
         <SkipLinks />
-        <Browser />
+        <DifferenceInspectorRoot><Browser /></DifferenceInspectorRoot>
         <SessionLinkHost />
+        <LiveLiftDialog />
+        <LiveLiftSettingsDialog />
         <LinkExpiryBanner />
       </div>
     </ErrorBoundary>

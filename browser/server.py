@@ -280,8 +280,20 @@ async def lifespan(app: FastAPI):
     yield
     for manager in tab_managers:
         manager.stop_gc()
+    # Graph panel helpers (services/graph_panel/pool.py): shut down or killed, and reaped.
+    from services.graph_panel.service import shutdown as shutdown_graph_helpers
+    try:
+        await shutdown_graph_helpers()
+    except Exception as exc:
+        print(f"  [graph] helper shutdown failed: {exc}")
     from services.file_handles import handles
     handles.discard()
+    # The nucleosome record-count helper process (services/nuc/record_count.py).
+    try:
+        from services.nuc.record_count import shutdown as shutdown_count_helper
+        shutdown_count_helper(True)
+    except Exception as exc:
+        print(f"  [nuc] count helper shutdown failed: {exc}")
     # Cluster connections: stop the remote helpers and local forwards (a
     # ControlMaster FiberBrowser opened lives on until its ControlPersist).
     from services.remote_endpoint import shutdown_remote_sources
@@ -324,6 +336,29 @@ from services.validation_errors import install_validation_error_handler
 install_validation_error_handler(app)
 
 from services.remote_sources.base import RemoteReadError as _RemoteReadError
+
+
+from services.lift.capability import LiveLiftUnsupported as _LiveLiftUnsupported
+from services.lift.live_lift import LiftRefused as _LiftRefused
+from services.lift.registration import LiveLiftDisabled as _LiveLiftDisabled
+
+
+@app.exception_handler(_LiveLiftUnsupported)
+async def _live_lift_unsupported(_request, exc):
+    """An analysis that does not support live-lift datasets (services/lift/capability.py): 409 and one notice."""
+    return _NanSafeJSONResponse({"detail": str(exc), "error": str(exc), "notice": str(exc),
+                                 "live_lift_unsupported": exc.feature}, status_code=409)
+
+
+@app.exception_handler(_LiftRefused)
+async def _live_lift_refused(_request, exc):
+    """A lifted view that cannot be served whole (too many source windows or bp: zoom in)."""
+    return _NanSafeJSONResponse({"detail": str(exc), "error": str(exc), "notice": str(exc)}, status_code=exc.status)
+
+
+@app.exception_handler(_LiveLiftDisabled)
+async def _live_lift_disabled(_request, exc):
+    return _NanSafeJSONResponse({"detail": str(exc), "error": str(exc)}, status_code=404)
 
 
 @app.exception_handler(_RemoteReadError)
@@ -370,9 +405,15 @@ GZIP_COMPRESSLEVEL = 6
 app.add_middleware(OffloopGZipMiddleware, minimum_size=1000, compresslevel=GZIP_COMPRESSLEVEL,
                    # A 9 MB read response takes ~260 ms at level 6, ~41 ms at
                    # level 1. The extra 0.5 MB is cheap across desktop loopback.
+                   # Every local browser benefits, including CLI launches.
                    # Remote requests retain level 6, including desktop shares.
-                   loopback_compresslevel=1 if os.environ.get("FIBERBROWSER_EXIT_WITH_PARENT") else None)
+                   loopback_compresslevel=1)
 
+from services.lift.guard import install_live_lift_guard
+
+# Live-lift datasets outside the display paths: one uniform 409 (services/lift/guard.py).
+from state.dependencies import get_state as _guard_state
+install_live_lift_guard(app, _guard_state)
 from services.runtime import get_public_mode
 
 install_public_mode_guard(app, get_public_mode)
@@ -580,9 +621,13 @@ def main():
         print("No data loaded. Use 'Add Dataset' buttons to load data.")
         print("  Supported formats: BigBed files/folders, BAM files with ns/nl tags")
         state = BrowserState(None, args.gtf, args.fire, args.tracks, max_working_reads=args.max_working_reads, fasta_path=args.fasta)
+        # The reference given on the command line: a restored page's saved reference never replaces it (genome-restore precedence).
+        state.startup_fasta = state.fasta_path if args.fasta and state.fasta is not None else None
     else:
         # Initialize with primary data source (or None if using --dataset)
         state = BrowserState(data_source, args.gtf, args.fire, args.tracks, max_working_reads=args.max_working_reads, fasta_path=args.fasta)
+        # The reference given on the command line: a restored page's saved reference never replaces it (genome-restore precedence).
+        state.startup_fasta = state.fasta_path if args.fasta and state.fasta is not None else None
         
         add_cli_datasets(state, cli_datasets)
         

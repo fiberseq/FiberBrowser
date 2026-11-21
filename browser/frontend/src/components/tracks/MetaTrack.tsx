@@ -1,10 +1,13 @@
+import { referenceCanvasX } from '../../features/differences/referenceCanvas';
 import { logicalOffset } from '../../utils/scaledCoordinates';
 import { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import { defaultMetaprofileTogglesKey, togglesFromKey } from '../../utils/defaultMetaprofile';
 import { usePanelDisplayStore as useBrowserStore } from '../../hooks/usePanelDisplayStore';
 import { setupHighDpiCanvas, useCanvasRenderVersion } from '../../utils/canvasUtils';
 import { DEBUG } from '../../stores/utils';
-import { getLayerColor } from '../../utils/layerColors';
+import { getLayerColor, getLayerColorOverride } from '../../utils/layerColors';
+import { displayRuleColor } from '../../utils/layerColourFollow';
+import { useLayerColorVersion } from '../../features/layerColours/state';
 import { logPerfTiming, nowMs } from '../../utils/perfDebug';
 import { drawTrackLabel } from '../../utils/trackLabels';
 import { HoverLabel, useTrackLabels } from './TrackLabels';
@@ -41,6 +44,8 @@ export function MetaTrack({ width, height, datasetId: datasetIdProp, profileKey,
   const activeColormap = useBrowserStore(s => s.activeColormap);
   const datasets = useBrowserStore(s => s.datasets);
   const isReversed = useBrowserStore(s => s.isReversed);
+  // The user's layer colours (Labels → Layer colours): a change repaints the profiles.
+  const layerColorVersion = useLayerColorVersion();
 
   // Derive datasetId from props or use first dataset from store
   const datasetId = datasetIdProp ?? datasets[0]?.id ?? 'default';
@@ -55,7 +60,7 @@ export function MetaTrack({ width, height, datasetId: datasetIdProp, profileKey,
   const enabledRuleProfiles: { id: string; color: string; profile: number[] }[] = [];
   for (const rule of activeColormap.rules) {
     if (enabledMetaProfiles[rule.id] && dsProfiles.rules?.[rule.id]?.length > 0) {
-      enabledRuleProfiles.push({ id: rule.id, color: rule.color, profile: dsProfiles.rules[rule.id] });
+      enabledRuleProfiles.push({ id: rule.id, color: displayRuleColor(rule), profile: dsProfiles.rules[rule.id] });
     }
   }
   // Per-layer profiles (one per data layer the dataset exposes — nuc, tf, FIRE/internal msp,
@@ -95,7 +100,7 @@ export function MetaTrack({ width, height, datasetId: datasetIdProp, profileKey,
     
     const handleDocumentMouseMove = (e: MouseEvent) => {
       if (!canvasRectRef.current) return;
-      const x = logicalOffset(e.clientX - canvasRectRef.current.left, width, canvasRectRef.current.width);
+      const x = referenceCanvasX(canvasRef.current, logicalOffset(e.clientX - canvasRectRef.current.left, width, canvasRectRef.current.width));
       // Clamp to canvas bounds for visual feedback
       const clampedX = Math.max(0, Math.min(width, x));
       setDragEndX(clampedX);
@@ -109,7 +114,7 @@ export function MetaTrack({ width, height, datasetId: datasetIdProp, profileKey,
         return;
       }
       
-      const x = logicalOffset(e.clientX - canvasRectRef.current.left, width, canvasRectRef.current.width);
+      const x = referenceCanvasX(canvasRef.current, logicalOffset(e.clientX - canvasRectRef.current.left, width, canvasRectRef.current.width));
       const clampedX = Math.max(0, Math.min(width, x));
       
       const left = Math.min(dragStartX, clampedX);
@@ -227,10 +232,10 @@ export function MetaTrack({ width, height, datasetId: datasetIdProp, profileKey,
     }
 
     // Draw mod (orange)
-    drawProfile(modProfile, '#e67e22');
+    drawProfile(modProfile, getLayerColorOverride('m6a') ?? '#e67e22');
 
     // Draw FIRE (bright orange)
-    drawProfile(fireProfile, '#f97316');
+    drawProfile(fireProfile, getLayerColorOverride('fire') ?? '#f97316');
 
     // Draw drag selection overlay (screen coords, no pan offset)
     if (isDragging && dragStartX !== null && dragEndX !== null) {
@@ -252,12 +257,12 @@ export function MetaTrack({ width, height, datasetId: datasetIdProp, profileKey,
       ctx.stroke();
     }
     finish('standard');
-  }, [modProfile, fireProfile, enabledRuleProfiles, enabledLayerProfiles, hasAnyProfile, width, height, datasetLabel, datasetColor, isDragging, dragStartX, dragEndX, loading, datasetId, sidebarWidth, isReversed, canvasRenderVersion, trackLabels]);
+  }, [modProfile, fireProfile, enabledRuleProfiles, enabledLayerProfiles, hasAnyProfile, width, height, datasetLabel, datasetColor, isDragging, dragStartX, dragEndX, loading, datasetId, sidebarWidth, isReversed, canvasRenderVersion, trackLabels, layerColorVersion]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
     canvasRectRef.current = rect;
-    const x = logicalOffset(e.clientX - rect.left, e.currentTarget.clientWidth, rect.width);
+    const x = referenceCanvasX(canvasRef.current, logicalOffset(e.clientX - rect.left, e.currentTarget.clientWidth, rect.width));
     setIsDragging(true);
     setDragStartX(x);
     setDragEndX(x);

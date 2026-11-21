@@ -11,6 +11,7 @@ from typing import Optional
 
 from utils.chrom import get_chrom_variants
 from utils.validation import is_url
+from services.bam_tags import ma_tag_is_spec
 
 # Cheap tag-name scan cap for the sparse-tag rescue pass (see diagnose_bam_tags).
 # Large enough to reach the tagged minority in DAF recall BAMs where only the
@@ -262,6 +263,10 @@ def diagnose_bam_tags(
                 chroms_to_try = chroms
 
             has_iupac_ry = False
+            # Sampled reads with an st:Z strand tag, and those whose SEQ R/Y
+            # marks say the other strand (services/read_strand.py).
+            st_reads = 0
+            st_conflicts = 0
             has_m6a_mm = False
             has_m5c_mm = False
             daf_mismatches = 0
@@ -280,9 +285,14 @@ def diagnose_bam_tags(
                 legacy_frame = file_legacy_frame(bam_path, bam.header)
             except Exception:
                 legacy_frame = {"frame": legacy_tag_frame.get("frame"), "basis": "header"}
+            from services.graph_lift import lift_summary
+            from services.read_strand import record_strand_fields
+            graph_lift = lift_summary(bam.header)
             ma_layer_types: set[str] = set(declared_ma_layer_types)
             # Annotation types actually seen in MA/Ma tags (not just declared in the header).
             observed_ma_types: set[str] = set()
+            # Types present in a read's MA/Ma tag, even with no intervals (a call that found none).
+            present_ma_types: set[str] = set()
             has_circular_annotations = False
             seen_read_keys: set[tuple] = set()
 
@@ -303,7 +313,7 @@ def diagnose_bam_tags(
                             has_m5c_mm = True
 
                     # `Ma`: the same annotation spec as written by fibertools-rs v0.13+.
-                    if tag in ("MA", "Ma") and isinstance(value, str):
+                    if tag in ("MA", "Ma") and isinstance(value, str) and ma_tag_is_spec(value):
                         for part in value.split(";")[1:]:
                             if ":" not in part:
                                 continue
@@ -312,6 +322,7 @@ def diagnose_bam_tags(
                                 idx = sig.find(separator)
                                 if idx > 0:
                                     ma_layer_types.add(sig[:idx])
+                                    present_ma_types.add(sig[:idx])
                                     if part.split(":", 1)[1].strip():
                                         observed_ma_types.add(sig[:idx])
                                     break
@@ -332,6 +343,7 @@ def diagnose_bam_tags(
                 nonlocal reads_checked
                 nonlocal has_iupac_ry
                 nonlocal daf_mismatches, other_mismatches
+                nonlocal st_reads, st_conflicts
 
                 if reads_checked >= limit:
                     return
@@ -348,6 +360,11 @@ def diagnose_bam_tags(
                     seq = read.query_sequence.upper()
                     if "R" in seq or "Y" in seq:
                         has_iupac_ry = True
+
+                strand_fields = record_strand_fields(read)
+                if strand_fields.get("strand") in ("CT", "GA"):
+                    st_reads += 1
+                    st_conflicts += bool(strand_fields.get("strand_conflict"))
 
                 try:
                     if read.has_tag("MD") and read.query_sequence:
@@ -428,6 +445,9 @@ def diagnose_bam_tags(
                     except ValueError:
                         continue
 
+            from services.signal_evidence import SIGNAL_RECORD_TAGS, signal_header
+            has_signal_tags = any(tag in tag_counts for tag in SIGNAL_RECORD_TAGS) or bool(signal_header(bam.header))
+
             total_mismatches = daf_mismatches + other_mismatches
             has_daf_mismatches = (
                 daf_mismatches >= 10
@@ -447,11 +467,12 @@ def diagnose_bam_tags(
         }
 
         # An MA/Ma nuc./msp. type carries what the legacy arrays (and their
-        # nq/aq qualities) would; fibertools >= 0.13 writes only Ma/Aq.
+        # nq/aq qualities) would; fibertools >= 0.13 writes only Ma/Aq. A type
+        # present with no intervals is a call that found none: still covered.
         covered_by_ma = set()
-        if "nuc" in observed_ma_types:
+        if "nuc" in present_ma_types:
             covered_by_ma.update(("ns", "nl", "nq"))
-        if "msp" in observed_ma_types or "fire" in observed_ma_types:
+        if "msp" in present_ma_types or "fire" in present_ma_types:
             covered_by_ma.update(("as", "al", "aq"))
 
         missing_tags = []
@@ -481,15 +502,15 @@ def diagnose_bam_tags(
             # legacy ns/nl, as/al signals (they drive the `footprint` layer).
             "has_ma_nucleosomes": "nuc" in observed_ma_types,
             "has_ma_msps": "msp" in observed_ma_types,
+            # The calls ran (the type is in a read's MA/Ma), whether or not
+            # they found anything: a nuc./msp. group with no intervals.
+            "has_ma_nucleosome_calls": "nuc" in present_ma_types,
+            "has_ma_msp_calls": "msp" in present_ma_types or "fire" in present_ma_types,
             # Whether the MSP scores are fibertools FIRE scores, and on what basis (services/fire_quality).
             "has_fire": fire_status["fire"] and (
                 ("aq" in tag_counts and "as" in tag_counts and "al" in tag_counts)
                 or "fire" in observed_ma_types or "Ma" in tag_counts),
             "fire_basis": fire_status["basis"],
-            # Frame of the legacy ns/nl/as/al tags on reverse reads ("molecular" | "seq") and its basis: "header",
-            # "m6A in reads" (header without evidence or ambiguous; services/legacy_frame) or "default".
-            "legacy_frame": legacy_frame.get("frame"),
-            "legacy_frame_basis": legacy_frame.get("basis"),
             "has_m6a": has_m6a_mm or (("MM" in tag_counts) and not has_m5c_mm and not has_m6a_mm),
             "has_m5c": has_m5c_mm,
             "has_deam": has_iupac_ry or has_daf_mismatches,
@@ -501,11 +522,23 @@ def diagnose_bam_tags(
             "ma_layers": sorted(ma_layer_types | ({"deam_ct", "deam_ga"} if "deam" in ma_layer_types else set())),
             "declared_ma_layers": sorted(declared_ma_layer_types),
             "has_circular_annotations": has_circular_annotations,
+            # Producer signal evidence (bg/me/db record tags, or the signal tagger's header comment):
+            # the signal read filters are offered only for datasets that carry it (services/signal_evidence).
+            "has_signal_tags": has_signal_tags,
             # Frame of the legacy ns/nl/as/al tags and how it was decided
             # (docs/reference/footprint-tag-frame.md).
             "legacy_tag_frame": legacy_tag_frame,
+            # Frame of the legacy ns/nl/as/al tags on reverse reads ("molecular" | "seq") and its basis: "header",
+            # "m6A in reads" (header without evidence or ambiguous; services/legacy_frame) or "default".
+            "legacy_frame": legacy_frame.get("frame"),
+            "legacy_frame_basis": legacy_frame.get("basis"),
             # @SQ TP:circular contigs (the SAM circular representation).
             "circular_contigs": circular_contigs,
+            # Sampled reads whose st:Z tag and SEQ R/Y marks name different DAF strands.
+            "st_strand_reads": st_reads,
+            "st_strand_conflicts": st_conflicts,
+            # A pangenome-graph lift (services/graph_lift.lift_summary), or None.
+            "graph_lift": graph_lift,
         }
     except Exception as exc:
         return {"error": str(exc), "traceback": traceback.format_exc()}

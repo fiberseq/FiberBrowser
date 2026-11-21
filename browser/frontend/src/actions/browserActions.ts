@@ -23,6 +23,7 @@ import type {
   CaptureRegion,
   ClusterFeatureRule,
   ClusterFeatureRuleTerm,
+  ClusterMetricCohort,
   ColorRule,
   FirePeak,
   Gene,
@@ -31,18 +32,18 @@ import type {
   PrimerPair,
   TranscriptionStateRuleKind,
 } from '../types';
-import { normalizeAnalysisRuleScope, normalizeTranscriptionStateRuleKind, resolveClusterRuleRegions } from '../utils/analysisRules';
+import { analysisFilterLabel, analysisRuleTermProblem, filterRuleRequestFields, intersectWithCurrentFilter, normalizeAnalysisRuleScope, normalizeTranscriptionStateRuleKind, resolveClusterRuleRegions, sortRuleRequestFields } from '../utils/analysisRules';
 import { highlightForAction, COPILOT_ANCHORS, type HighlightOptions } from '../utils/copilotAnchors';
 import { isStrandedDafDataset } from '../utils/datasetChemistry';
 import { findTopLocus, isTopLocusStep } from '../utils/topLoci';
 import { runUiCluster, runUiScan } from '../utils/clusterRunner';
 import { invalidateFilterRequests, isCurrentFilterRequest, nextFilterRequest } from '../utils/filterRequests';
 import { isCurrentSortRequest, nextSortRequest } from '../utils/sortRequests';
-import { resolveSortRequestScope, sortRounds } from '../utils/sortScope';
+import { liftHapsForRound, resolveSortRequestScope, sortRounds } from '../utils/sortScope';
 import { registerBackendMotifTrack, registerTrack, removeTrackAtIndex, setTrackNameFilter } from '../utils/trackLoader';
 import { CLUSTER_RULE_MODE_PREFIX } from '../types';
 import { sameChrom } from '../utils/chromAliases';
-import { qualityGatesPayload } from '../utils/ruleMatching';
+import { ruleTermPayload } from './ruleTermPayload';
 import { openSidebarSection } from '../utils/tutorialAnchors';
 import { conditionById, conditionHolds } from '../utils/tutorialMilestones';
 
@@ -133,6 +134,21 @@ function isBlockedKey(key: string): boolean {
  * fragments): the blocklist must see the route that actually runs.
  * Parity: canonical_copilot_api_path.
  */
+/** A fit without a reassignment model (no patterns or centroids used) still brings its molecule metric cohort,
+ * which merges and the map rank against: it replaces an earlier fit's (none: {}) in the store and on the active
+ * cluster-tree node, as setClusterPatterns does with a model. */
+export function adoptFitMetricCohort(cohort?: ClusterMetricCohort): void {
+  const next = { ...(cohort ?? {}) };
+  useBrowserStore.setState(state => {
+    const id = state.activeClusterTreeNodeId;
+    const node = id ? state.clusterTreeNodes[id] : undefined;
+    return {
+      clusterMetricCohort: next,
+      ...(id && node ? { clusterTreeNodes: { ...state.clusterTreeNodes, [id]: { ...node, metricCohort: next } } } : {}),
+    };
+  });
+}
+
 export function canonicalApiPath(path: string): string | null {
   const raw = path.split('?', 1)[0];
   if (path.includes('#') || !raw.startsWith('/api/')) return null;
@@ -511,19 +527,9 @@ function layerFromAnalysisTerm(term: ClusterFeatureRuleTerm | undefined): string
   return term.layer ?? null;
 }
 
+/** Size, conditions, quality gates and a labeling rule's nucleosome conditions (actions/ruleTermPayload.ts). */
 function rulePayloadFromAnalysisTerm(term: ClusterFeatureRuleTerm | undefined) {
-  const base = term?.source === 'label_rule'
-    ? term.rule
-    : term?.source === 'footprint_group'
-      ? term.group
-      : term;
-  const rawSizeMax = (base as any)?.sizeMax ?? term?.sizeMax;
-  return {
-    size_min: Math.max(0, Number((base as any)?.sizeMin ?? term?.sizeMin ?? 0) || 0),
-    size_max: rawSizeMax == null ? null : Math.max(0, Number(rawSizeMax) || 0),
-    conditions: [...((base as any)?.conditions ?? [])],
-    quality_gates: qualityGatesPayload((base as any)?.qualityGates ?? term?.qualityGates),
-  };
+  return ruleTermPayload(term);
 }
 
 function transcriptionStateFromAnalysisTerm(term: ClusterFeatureRuleTerm | undefined): TranscriptionStateRuleKind | null {
@@ -784,6 +790,7 @@ async function clusterPeakRegions(
   let filteredOut = 0;
   let skipped = 0;
   let lastPatterns: Record<string, unknown> | undefined;
+  let lastMetricCohort: import('../types').ClusterMetricCohort | undefined;
   let seeded = false;
   for (const round of sortRounds(runIds, mainKeys)) {
     const readIdsMap: Record<string, string[]> = {};
@@ -849,6 +856,7 @@ async function clusterPeakRegions(
     }
     if (appliedHere) {
       lastPatterns = res.cluster_patterns as Record<string, unknown> | undefined;
+      lastMetricCohort = res.cluster_metric_cohort;
       const note = performanceSamplingNote(res.results);
       if (note) performanceNotes.add(note);
     }
@@ -859,11 +867,12 @@ async function clusterPeakRegions(
     return `Clustering on the ${label} changed nothing${skipped ? ` (${skipped} panel(s) changed while it ran)` : ''}.`;
   }
   if (lastPatterns && clusterMethod === 'combinatorial') {
-    useBrowserStore.getState().setClusterPatterns(lastPatterns as never);
+    useBrowserStore.getState().setClusterPatterns(lastPatterns as never, lastMetricCohort);
     useBrowserStore.getState().setClusterPeakRegions(peakRegions);
     useBrowserStore.getState().setDynamicClustering(true);
   } else {
     useBrowserStore.getState().setClusterPatterns({});
+    adoptFitMetricCohort(lastMetricCohort);
     useBrowserStore.getState().setClusterPeakRegions(peakRegions);
     useBrowserStore.getState().setDynamicClustering(false);
   }
@@ -1332,6 +1341,9 @@ export async function executeBrowserAction(
         ...base,
         operator: valueAsString(action.operator, 'gte'),
         threshold: valueAsNumber(action.threshold, 1),
+        // 'between' bound and AND with the current filter (terms may be molecule_metric / feature_hub).
+        ...(action.threshold_max != null ? { thresholdMax: valueAsNumber(action.threshold_max, 0) } : {}),
+        ...(action.combine === 'and' ? { combine: 'and' } : {}),
       });
     } else {
       store.addAnalysisSortRule?.({
@@ -1361,7 +1373,8 @@ export async function executeBrowserAction(
       if (!visible.has(clusterId)) { hidden.push(key); continue; }
       const next = new Set(all.filter(c => visible.has(c) && c !== clusterId));
       if (next.size === 0) continue;
-      store.setClusterFocus(key, next.size >= all.length ? null : next);
+      // (Part of this action's one step, recorded below.)
+      store.setClusterFocus(key, next.size >= all.length ? null : next, { record: false });
       hidden.push(key);
     }
     if (hidden.length === 0) return `hide_cluster: cluster ${clusterId} isn't a visible cluster that can be hidden (the last visible cluster stays).`;
@@ -1376,7 +1389,8 @@ export async function executeBrowserAction(
     const keys = actionStateKeys(action);
     if (keys.length === 0) return 'focus_cluster: no dataset available.';
     const store = useBrowserStore.getState();
-    for (const key of keys) store.setClusterFocus(key, new Set([clusterId]));
+    // One undo step for every panel (stabilize 3, item 2).
+    store.focusClustersIn(keys, new Set([clusterId]), `Focus cluster ${clusterId}`);
     store.openAnalysisPanel('cluster-detail');
     return `Focused on cluster ${clusterId} in ${keys.join(', ')} (others dimmed).`;
   }
@@ -1401,41 +1415,49 @@ export async function executeBrowserAction(
     const changedKeys: string[] = [];
     const branch = store.activeClusterTreeNodeId ?? null;
     let stale = 0;
-    // Each round's panels get their own results back.
-    for (const round of rounds) {
-      const res = await dissolveCluster(
-        view.chrom, view.start, view.end, clusterId,
-        round.assignments,
-        peakRegions,
-        Object.keys(round.keyByDataset),
-        store.spanningOnly,
-        store.subnucleosomalThreshold,
-        store.accessibilityThreshold,
-        store.analysisSampleSeed,
-        store.clusterFeatureRules,
-        view.genome,
-      );
-      // The view, branch or clustering changed while this ran: it no longer applies.
-      if (!copilotRoundStillCurrent(round, view, branch)) { stale += Object.keys(round.keyByDataset).length; continue; }
-      for (const [dsId, result] of Object.entries(res.results ?? {})) {
-        const sk = round.keyByDataset[dsId];
-        if (!sk || !result) continue;
-        const now = useBrowserStore.getState();
-        now.setClusterAssignments(sk, result.assignments || {});
-        const currentOrder = now.clusterOrder[sk];
-        if (currentOrder) now.setClusterOrder(sk, currentOrder.filter(c => c !== clusterId));
-        if (now.clusterFocus[sk]?.has(clusterId)) now.setClusterFocus(sk, null);
-        now.pruneClusterSelection(sk, [clusterId]);
-        dissolvedAny = true;
-        changedKeys.push(sk);
+    // Each round's panels get their own results back. Whatever was applied (even if a later round fails) is one
+    // undo step and can be unmerged, as auto_cull_clusters does (Codex review, stabilize 3 group B round 1).
+    try {
+      for (const round of rounds) {
+        const res = await dissolveCluster(
+          view.chrom, view.start, view.end, clusterId,
+          round.assignments,
+          peakRegions,
+          Object.keys(round.keyByDataset),
+          store.spanningOnly,
+          store.subnucleosomalThreshold,
+          store.accessibilityThreshold,
+          store.analysisSampleSeed,
+          store.clusterFeatureRules,
+          view.genome,
+          // Metric columns rank against the fit's cohort, as the fit did.
+          { metricCohort: store.clusterMetricCohort },
+        );
+        // The view, branch or clustering changed while this ran: it no longer applies.
+        if (!copilotRoundStillCurrent(round, view, branch)) { stale += Object.keys(round.keyByDataset).length; continue; }
+        for (const [dsId, result] of Object.entries(res.results ?? {})) {
+          const sk = round.keyByDataset[dsId];
+          if (!sk || !result) continue;
+          const now = useBrowserStore.getState();
+          now.setClusterAssignments(sk, result.assignments || {});
+          const currentOrder = now.clusterOrder[sk];
+          if (currentOrder) now.setClusterOrder(sk, currentOrder.filter(c => c !== clusterId));
+          if (now.clusterFocus[sk]?.has(clusterId)) now.setClusterFocus(sk, null, { record: false });
+          now.pruneClusterSelection(sk, [clusterId]);
+          dissolvedAny = true;
+          changedKeys.push(sk);
+        }
+      }
+    } finally {
+      // As the Clusters panel does: the reassignment model still has the dissolved cluster.
+      if (dissolvedAny) {
+        useBrowserStore.getState().setDynamicClustering(false);
+        recordAppliedMerge(before, changedKeys, { label: `Delete C${clusterId}`, kind: 'dissolve' });
+        // Its one undo step (the focus it cleared is part of it; stabilize 3, item 2).
+        useBrowserStore.getState().pushSnapshot(`Delete C${clusterId}`, { kind: 'clustering' });
       }
     }
     if (stale === keys.length) return `dissolve_cluster: the clustering changed while it ran; nothing was applied.`;
-    // As the Clusters panel does: the reassignment model still has the dissolved cluster.
-    if (dissolvedAny) {
-      useBrowserStore.getState().setDynamicClustering(false);
-      recordAppliedMerge(before, changedKeys, { label: `Delete C${clusterId}`, kind: 'dissolve' });
-    }
     return `Dissolved cluster ${clusterId} in ${keys.length - stale} clustered panel(s)`
       + `${skippedOtherLoci ? ` (${skippedOtherLoci} panel(s) at another locus left as they are)` : ''}`
       + `${stale ? `; ${stale} panel(s) changed meanwhile and were left as they are` : ''}.`;
@@ -1590,14 +1612,22 @@ export async function executeBrowserAction(
     if (kind === 'sort') {
       const sortRule = rule as AnalysisSortRule;
       const term = sortRule.terms[0];
+      const problem = analysisRuleTermProblem(term);
+      if (problem) return `apply_sort_rule: rule "${sortRule.name}" ${problem}.`;
       const transcriptionState = transcriptionStateFromAnalysisTerm(term);
       const geneIds = transcriptionState ? geneIdsForAnalysisRule(sortRule) : undefined;
       if (transcriptionState && (!geneIds || geneIds.length === 0)) {
         return `apply_sort_rule: rule "${sortRule.name}" needs a selected gene.`;
       }
+      // Molecule metric ('value') and hub hit ('feature_hub') terms read no layer.
+      const layerFree = sortRuleRequestFields(sortRule);
+      // ('value' belongs to molecule metrics: a layer term saved with it counts.)
+      const countSort = sortRule.metric === 'count' || sortRule.metric === 'value';
       const backendSortBy = transcriptionState
         ? 'transcription_state'
-        : sortRule.metric === 'count'
+        : layerFree
+          ? layerFree.sortBy
+          : countSort
           ? 'rule'
           : sortRule.metric === 'rate'
             ? 'fp_rate'
@@ -1624,17 +1654,20 @@ export async function executeBrowserAction(
           clusterTreeNodes: now.clusterTreeNodes,
         });
         const res = await sortReads(chrom, start, end, store.spanningOnly, roundIds, backendSortBy, {
-          rule: !transcriptionState && sortRule.metric === 'count' ? rulePayloadFromAnalysisTerm(term) : undefined,
+          rule: !transcriptionState && !layerFree && countSort ? rulePayloadFromAnalysisTerm(term) : undefined,
+          ...(layerFree?.sortBy === 'value' ? { moleculeMetric: layerFree.moleculeMetric } : {}),
+          ...(layerFree?.sortBy === 'feature_hub' ? { featureHub: layerFree.featureHub } : {}),
           descending: sortRule.descending !== false,
           linked: isLinkedGroup(roundIds, store.panels),
           peakRegions: peakRegions.length > 0 ? peakRegions : undefined,
           selectedPeakWindows: scopeWindows,
-          layer: transcriptionState ? undefined : layerFromAnalysisTerm(term),
+          layer: transcriptionState || layerFree ? undefined : layerFromAnalysisTerm(term),
           transcriptionState,
           geneIds,
           readIds: Object.keys(scope.readIds).length > 0 ? scope.readIds : undefined,
           clusterAssignments: Object.keys(scope.clusterAssignments).length > 0 ? scope.clusterAssignments : undefined,
           sampleSeed: store.analysisSampleSeed,
+          liftHapByDataset: liftHapsForRound(round, store.panels),
         });
         const staleSort = staleRuleResult(kind, requestSeq, { chrom, start, end });
         if (staleSort) return `${type}: ${staleSort}`;
@@ -1661,19 +1694,27 @@ export async function executeBrowserAction(
     // filter
     const filterRule = rule as AnalysisFilterRule;
     const term = filterRule.terms[0];
+    const problem = analysisRuleTermProblem(term);
+    if (problem) return `apply_filter_rule: rule "${filterRule.name}" ${problem}.`;
     const transcriptionState = transcriptionStateFromAnalysisTerm(term);
     const geneIds = transcriptionState ? geneIdsForAnalysisRule(filterRule) : undefined;
     if (transcriptionState && (!geneIds || geneIds.length === 0)) {
       return `apply_filter_rule: rule "${filterRule.name}" needs a selected gene.`;
     }
+    // Molecule metric ('value', between) and hub hit terms read no layer and send no size rule.
+    const fields = filterRuleRequestFields(filterRule);
+    const combine = filterRule.combine === 'and';
     const res = await filterReadsByAnalysisRule(chrom, start, end, store.spanningOnly, datasetIds, {
-      metric: filterRule.metric,
-      operator: filterRule.operator,
-      threshold: filterRule.threshold,
-      rule: !transcriptionState && filterRule.metric === 'count' ? rulePayloadFromAnalysisTerm(term) : undefined,
+      metric: fields.metric,
+      operator: fields.operator,
+      threshold: fields.threshold,
+      thresholdMax: fields.thresholdMax,
+      moleculeMetric: fields.moleculeMetric,
+      featureHub: fields.featureHub,
+      rule: !fields.layerFree && fields.metric === 'count' ? rulePayloadFromAnalysisTerm(term) : undefined,
       peakRegions: peakRegions.length > 0 ? peakRegions : undefined,
       scopeWindows,
-      layer: transcriptionState ? undefined : layerFromAnalysisTerm(term),
+      layer: fields.layerFree ? undefined : layerFromAnalysisTerm(term),
       transcriptionState,
       geneIds,
       sampleSeed: store.analysisSampleSeed,
@@ -1681,19 +1722,22 @@ export async function executeBrowserAction(
     const staleFilter = staleRuleResult(kind, requestSeq, { chrom, start, end });
     if (staleFilter) return `${type}: ${staleFilter}`;
     if (action.pin !== false) {
-      const liveKeys = mainViewKeyMap(keyMap, useBrowserStore.getState());
+      const now = useBrowserStore.getState();
+      const liveKeys = mainViewKeyMap(keyMap, now);
       seedHistoryBaseline(store, 'Before read filter', 'filtering');
       for (const [dsId, result] of Object.entries(res.results)) {
         for (const sk of (liveKeys[dsId] ?? [])) {
-          store.setFilteredReadIds(sk, new Set(result.read_ids ?? []), {
+          // 'and': only the reads the panel's current filter keeps too.
+          const current = combine ? now.filteredReadIds[sk] : null;
+          store.setFilteredReadIds(sk, intersectWithCurrentFilter(result.read_ids ?? [], current), {
             target: 'analysis-filter',
-            label: `Rules > ${filterRule.name}`,
+            label: analysisFilterLabel(filterRule.name, current ? now.readFilterSources[sk] ?? {} : null),
           });
         }
       }
       store.setFootprintFilterKey(null);
     }
-    return `Applied filter rule "${filterRule.name}"${action.pin !== false ? ' (pinned)' : ''}.`;
+    return `Applied filter rule "${filterRule.name}"${combine ? ' within the current filter' : ''}${action.pin !== false ? ' (pinned)' : ''}.`;
   }
 
   if (type === 'select_cluster_reads') {
@@ -1749,6 +1793,7 @@ export async function executeBrowserAction(
           store.clusterFeatureRules,
           view.genome,
           mergeBy,
+          { metricCohort: store.clusterMetricCohort },
         );
         const dissolvedIds = new Set((res.dissolved ?? []).map(d => d.cluster));
         if (dissolvedIds.size === 0) continue;
@@ -1762,16 +1807,17 @@ export async function executeBrowserAction(
           changedKeys.push(sk);
           const currentOrder = now.clusterOrder[sk];
           if (currentOrder) now.setClusterOrder(sk, currentOrder.filter(c => !dissolvedIds.has(c)));
-          now.setClusterFocus(sk, null);
+          now.setClusterFocus(sk, null, { record: false });
           now.pruneClusterSelection(sk, dissolvedIds);
         }
       }
     } finally {
       // As the Clusters panel does: the reassignment model still has the merged-away clusters.
-      // Whatever was applied (even if a later panel's request fails) can be unmerged.
+      // Whatever was applied (even if a later panel's request fails) can be unmerged, as one undo step.
       if (changedKeys.length > 0) {
         useBrowserStore.getState().setDynamicClustering(false);
         recordAppliedMerge(before, changedKeys, { label: 'Merge similar clusters', kind: 'similar', settings: mergeSettings });
+        useBrowserStore.getState().pushSnapshot('Merge similar clusters', { kind: 'clustering' });
       }
     }
     return `Merged away ${merged} cluster${merged === 1 ? '' : 's'} across ${keys.length} clustered panel(s) (min_fraction=${minFraction}, merge_by=${mergeSettings.strategy} ${mergeSettings.threshold})`

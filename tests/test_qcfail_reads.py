@@ -123,8 +123,13 @@ def test_read_inspector_honors_qcfail_policy(qc_bam):
 
 def test_dense_loader_excludes_qcfail(qc_bam):
     from services.dense_bam_loader import load_reads_from_bam
+    # Duplicates and QC-fail reads are hidden unless their toggles show them (3.1.0), as on the read track.
     frame = load_reads_from_bam(qc_bam, CONTIG, 100, 400)
+    assert set(frame["read_id"]) == {"unique"}
+    frame = load_reads_from_bam(qc_bam, CONTIG, 100, 400, include_duplicates=True)
     assert set(frame["read_id"]) == {"unique", "duplicate"}
+    frame = load_reads_from_bam(qc_bam, CONTIG, 100, 400, include_duplicates=True, include_qcfail=True)
+    assert set(frame["read_id"]) >= {"unique", "duplicate", "chimera", "other_qcfail"}
 
 
 @pytest.mark.parametrize("endpoint", ["info", "image", "meta", "meta_all"])
@@ -132,14 +137,15 @@ def test_legacy_payloads_exclude_qcfail(qc_bam, endpoint):
     from services import read_auxiliary_endpoint as api
     state = _state({"bam": qc_bam})
     options = dict(chrom=CONTIG, start=100, end=400)
+    # The duplicate is hidden too, by default (3.1.0: the dense loader follows the duplicate toggle).
     if endpoint == "info":
-        assert api.get_reads_info_payload(state, **options) == {"count": 2}
+        assert api.get_reads_info_payload(state, **options) == {"count": 1}
     elif endpoint == "image":
         payload = api.get_reads_image_payload(state, **options)
-        assert payload["headers"]["X-Read-Count"] == "2"
+        assert payload["headers"]["X-Read-Count"] == "1"
         assert payload["content"].startswith(b"\x89PNG")
     else:
-        # Both eligible reads have a 100-bp footprint at 120..220. The
+        # The eligible read has a 100-bp footprint at 120..220. The
         # untagged chimeras would dilute its occupancy if they entered the profile.
         if endpoint == "meta":
             profile = api.get_meta_payload(state, **options)
@@ -169,6 +175,7 @@ def competing_insertions(tmp_path, request):
     return str(path), request.param
 
 
+@pytest.mark.usefixtures("all_reads_including_uncalled")  # synthetic carriers without footprint calls
 @pytest.mark.parametrize("show", [False, True])
 def test_position_based_insertion_selects_only_visible_carriers(competing_insertions, show):
     from services.insertion_lens import classify_site
@@ -181,6 +188,7 @@ def test_position_based_insertion_selects_only_visible_carriers(competing_insert
         {f"hidden_{i}" for i in range(1, 6)} if show else {"valid"})
 
 
+@pytest.mark.usefixtures("all_reads_including_uncalled")  # synthetic carriers without footprint calls
 def test_position_based_lens_ignores_hidden_carriers(competing_insertions):
     from services.insertion_lens import build_lens
     path, _flag = competing_insertions
@@ -190,6 +198,7 @@ def test_position_based_lens_ignores_hidden_carriers(competing_insertions):
     assert {read["id"] for read in lens["carriers"]} == {"valid"}
 
 
+@pytest.mark.usefixtures("all_reads_including_uncalled")  # synthetic carriers without footprint calls
 def test_position_based_alt_allele_ignores_hidden_carriers(competing_insertions, tmp_path):
     from services.alt_allele import build_alt_allele, normalize_definition
     path, _flag = competing_insertions
@@ -198,3 +207,20 @@ def test_position_based_alt_allele_ignores_hidden_carriers(competing_insertions,
     assert meta["layout"]["insert_len"] == 100
     with pysam.AlignmentFile(str(tmp_path / "alt" / "carriers.bam")) as bam:
         assert {read.query_name for read in bam.fetch()} == {"valid"}
+
+
+@pytest.mark.parametrize("include_qcfail", [False, True])
+def test_dev_record_paths_follow_the_qcfail_policy(qc_bam, include_qcfail):
+    """Dev-line record filters the 3.0.2 patch did not cover: insertion-site records and the native SV cohort."""
+    from services.bam_handles import get_bam_handle
+    from services.insertion_lens import _site_records
+    from services.sv_evidence import select_cohort
+    names = {read.query_name for read, *_ in _site_records(
+        [qc_bam], CONTIG, 0, 500, bam_handle_getter=get_bam_handle, chrom_map=None, contig_links=None,
+        include_duplicates=True, include_qcfail=include_qcfail)}
+    assert ({"chimera", "other_qcfail", "both"} <= names) is include_qcfail
+    assert "unique" in names and "duplicate" in names
+    entries = [{"id": "a", "qcfail": False}, {"id": "b", "qcfail": True},
+               {"id": "b", "qcfail": True, "supplementary": True}]
+    assert [e["id"] for e in select_cohort(entries, include_qcfail=include_qcfail)] == (
+        ["a", "b", "b"] if include_qcfail else ["a"])

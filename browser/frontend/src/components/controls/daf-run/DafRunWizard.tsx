@@ -1,17 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  cancelGenomeDownload, getGenomeDownload, getPipelineStatus, scanReads, startGenomeDownload, submitRun, validateRun,
-  type GenomeDownload,
+  cancelGenomeDownload, getGenomeDownload, getGenomeDownloadSize, getPipelineStatus, scanReads, startGenomeDownload,
+  submitRun, validateRun,
+  type GenomeDownload, type GenomeDownloadSize,
   type BasecallSettings, type DoradoStatus, type Enzyme, type InputKind, type PipelineOptions, type PipelineStatus,
   type TriState, type ValidateResult,
 } from '../../../api/pipeline';
 import { pickAnyFile, pickFolder, uploadFile } from '../../../api/files';
 import {
-  BASECALL_DEVICES, BASECALL_MODELS, DEFAULT_BASECALL, ENZYME_INFO, WIZARD_STEPS, basecallSummary, buildRunRequest,
-  changedOptionLabels, defaultOutputRoot, enzymesFor, formatBytes, includedSamples, initialWizardState,
+  BASECALL_DEVICES, BASECALL_MODELS, DEFAULT_BASECALL, DEFAULT_OPTIONS, ENZYME_INFO, WIZARD_STEPS, basecallSummary, buildRunRequest,
+  changedOptionLabels, defaultOutputRoot, runMinMapq, enzymesFor, formatBytes, includedSamples, initialWizardState,
   genomeDownloadText, hintText, sampleNameError, sampleOutdir, samplesFromScan, stepIssues, type WizardState, type WizardStep,
 } from '../../../utils/dafRun';
 import { useDafRunStore } from './dafRunStore';
+import { confirmLargeDownload, formatDownloadSize } from '../../../utils/downloadSize';
 
 const AUTO_OPEN_KEY = 'fiberbrowser.dafRun.autoOpen';
 
@@ -134,6 +136,8 @@ export function DafRunWizard() {
   const [pathInput, setPathInput] = useState('');
   // The selected genome's FASTA download (services/genome_download.py): progress, or why it failed.
   const [genomeDl, setGenomeDl] = useState<GenomeDownload | null>(null);
+  // Its size before it starts (the first mirror's Content-Length, when it says) and the download warning size.
+  const [dlSize, setDlSize] = useState<GenomeDownloadSize | null>(null);
   const dlPoll = useRef(0);
   // The server's check of the run, for the exact request it was made for.
   const [check, setCheck] = useState<RunCheck | null>(null);
@@ -170,10 +174,25 @@ export function DafRunWizard() {
     markDraftSeeded();
     setState(prev => {
       const fresh = initialWizardState(status, prev.autoOpen);
+      // The server's default options, under any option the user already changed while the status loaded (a run
+      // must never go out with a choice the wizard showed and then silently dropped).
+      const edited = Object.fromEntries(Object.entries(prev.options)
+        .filter(([key, value]) => value !== (DEFAULT_OPTIONS as unknown as Record<string, unknown>)[key]));
+      const options = { ...fresh.options, ...status.default_options, ...edited } as PipelineOptions;
       // The input kind (and basecalling) the user may have picked while the status loaded are kept.
-      return prev.samples.length ? prev : {
+      if (prev.samples.length) {
+        // Samples added while the status loaded are kept; the reference is still seeded unless the user chose one, and
+        // the server's default cores and options apply as for a new draft (they were not shown yet: nothing to keep).
+        const untouched = !prev.genomeId && !prev.referencePath;
+        const defaults = { cores: fresh.cores, options };
+        // A genome reference chosen before the status arrived stays chosen (the status only fills in which genome).
+        const referenceMode = prev.referenceMode === 'genome' ? 'genome' : fresh.referenceMode;
+        return untouched ? { ...prev, ...defaults, referenceMode, genomeId: fresh.genomeId, referencePath: fresh.referencePath }
+          : { ...prev, ...defaults };
+      }
+      return {
         ...fresh, inputKind: prev.inputKind, basecall: prev.basecall,
-        options: { ...fresh.options, ...status.default_options },
+        options,
       };
     });
   }, [status, draftSeeded, markDraftSeeded, setState]);
@@ -311,11 +330,24 @@ export function DafRunWizard() {
     if (seq === dlPoll.current && dl.state === 'done') await loadStatus();
   }, [loadStatus]);
 
-  const downloadGenome = async (genomeId: string) => {
+  const downloadGenome = async (genomeId: string, confirmed = false) => {
+    // Over the download warning size (known before it starts): ask first, with its size. No cap.
+    const size = dlSize && dlSize.genome_id === genomeId ? dlSize : null;
+    if (!confirmed && size?.over && size.bytes != null) {
+      const name = status?.genomes.find(x => x.id === genomeId)?.name ?? genomeId;
+      if (!confirmLargeDownload(name, { url: size.url, bytes: size.bytes, threshold: size.threshold })) return;
+      confirmed = true;
+    }
+    // Claimed before the request: switching genome or closing the wizard meanwhile (both move dlPoll) leaves
+    // this answer unfollowed, never taking over the newer poll or polling after the wizard closed.
+    const seq = ++dlPoll.current;
     setGenomeDl({ genome_id: genomeId, state: 'running', bytes: 0, total: 0 });
     try {
-      await followGenomeDownload(genomeId, await startGenomeDownload(genomeId));
+      const first = await (confirmed ? startGenomeDownload(genomeId, true) : startGenomeDownload(genomeId));
+      if (seq !== dlPoll.current) return;
+      await followGenomeDownload(genomeId, first);
     } catch (err) {
+      if (seq !== dlPoll.current) return;
       setGenomeDl({
         genome_id: genomeId, state: 'error',
         error: `Could not start the ${genomeId} download: ${err instanceof Error ? err.message : String(err)}`,
@@ -323,10 +355,22 @@ export function DafRunWizard() {
     }
   };
   const cancelDownload = async (genomeId: string) => {
+    // At once: the server may finish decompressing or indexing before it stops.
+    setGenomeDl(dl => (dl && dl.genome_id === genomeId && dl.state === 'running' ? { ...dl, cancelling: true } : dl));
     try {
       await cancelGenomeDownload(genomeId);
     } catch { /* the poll reports what happened */ }
   };
+
+  // Choosing a genome that is not downloaded asks the server what its download will be (shown on the button).
+  useEffect(() => {
+    setDlSize(null);
+    const g = status?.genomes.find(x => x.id === state.genomeId);
+    if (state.step !== 1 || state.referenceMode !== 'genome' || !g || g.downloaded) return;
+    let cancelled = false;
+    getGenomeDownloadSize(g.id).then(size => { if (!cancelled) setDlSize(size); }).catch(() => { /* size unknown */ });
+    return () => { cancelled = true; };
+  }, [state.genomeId, state.step, state.referenceMode, status]);
 
   // Choosing a genome shows its download if one is under way (the wizard was closed meanwhile), else nothing.
   useEffect(() => {
@@ -598,13 +642,15 @@ export function DafRunWizard() {
                     const g = status?.genomes.find(x => x.id === state.genomeId);
                     if (!g || g.downloaded) return null;
                     const running = genomeDl?.genome_id === g.id && genomeDl.state === 'running';
+                    const size = dlSize?.genome_id === g.id && dlSize.bytes != null ? ` (${formatDownloadSize(dlSize.bytes)})` : '';
                     return (
                       <>
-                        <button type="button" className={BUTTON} disabled={running} onClick={() => void downloadGenome(g.id)} data-testid="daf-run-download-genome">
-                          {running ? 'Downloading…' : `Download ${g.id}`}
+                        <button type="button" className={BUTTON} disabled={running} onClick={() => void downloadGenome(g.id)} data-testid="daf-run-download-genome"
+                          title={dlSize?.genome_id === g.id && dlSize.over ? `Over the ${formatDownloadSize(dlSize.threshold)} download warning size: you will be asked first.` : undefined}>
+                          {running ? 'Downloading…' : `Download ${g.id}${size}`}
                         </button>
                         {running && (
-                          <button type="button" className={BUTTON} onClick={() => void cancelDownload(g.id)} data-testid="daf-run-genome-cancel">Cancel</button>
+                          <button type="button" className={BUTTON} disabled={!!genomeDl?.cancelling} onClick={() => void cancelDownload(g.id)} data-testid="daf-run-genome-cancel">{genomeDl?.cancelling ? 'Cancelling…' : 'Cancel'}</button>
                         )}
                       </>
                     );
@@ -618,11 +664,27 @@ export function DafRunWizard() {
                   }
                   if (!genomeDl || genomeDl.genome_id !== g.id) return null;
                   const line = genomeDownloadText(genomeDl);
+                  const warning = genomeDl.warning
+                    ? <div className="text-[11px] text-amber-700 dark:text-amber-300" data-testid="daf-run-genome-warning">{genomeDl.warning}</div>
+                    : null;
+                  if (line.kind === 'confirm') {
+                    return (
+                      <div className="space-y-1" data-testid="daf-run-genome-confirm">
+                        <div className="text-[12px] text-amber-700 dark:text-amber-300">{line.text}</div>
+                        <div className="flex gap-1">
+                          <button type="button" className={BUTTON} onClick={() => void downloadGenome(g.id, true)} data-testid="daf-run-genome-confirm-download">Download</button>
+                          <button type="button" className={BUTTON} onClick={() => update({ referenceMode: 'file' })} data-testid="daf-run-genome-confirm-use-file">Use a FASTA file instead</button>
+                        </div>
+                      </div>
+                    );
+                  }
                   if (line.kind === 'progress') {
-                    const pct = genomeDl.total ? Math.min(100, ((genomeDl.bytes ?? 0) * 100) / genomeDl.total) : null;
+                    const pct = genomeDl.total && (genomeDl.bytes ?? 0) <= genomeDl.total && (genomeDl.stage ?? 'downloading') === 'downloading' && !genomeDl.cancelling
+                      ? ((genomeDl.bytes ?? 0) * 100) / genomeDl.total : null;
                     return (
                       <div className="space-y-0.5" data-testid="daf-run-genome-progress">
                         <div className="text-[12px] text-blue-600 dark:text-blue-300">{line.text}</div>
+                        {warning}
                         {pct !== null && (
                           <div className="h-1 w-64 max-w-full rounded bg-gray-200 dark:bg-white/10 overflow-hidden">
                             <div className="h-full bg-blue-500" style={{ width: `${pct}%` }} />
@@ -859,6 +921,18 @@ export function DafRunWizard() {
                   data-testid="daf-run-opt-ml"
                 />
               </OptionRow>
+              <OptionRow label="Minimum MAPQ" help="Alignments below this mapping quality are not called. Always passed to FiberHMM as --min-mapq (0: no MAPQ filter).">
+                <input
+                  type="number"
+                  min={0}
+                  max={255}
+                  step={1}
+                  className={`${INPUT} w-24`}
+                  value={runMinMapq(state.options)}
+                  onChange={e => setOption('min_mapq', e.target.value === '' ? 0 : Number(e.target.value))}
+                  data-testid="daf-run-opt-mapq"
+                />
+              </OptionRow>
               {state.enzyme === 'ddda' && (
                 <>
                   <OptionRow label="CpG-aware recall (DddA)" help="Exclude CpG observations outside unmethylated islands from footprint recall (on by default for DddA).">
@@ -893,6 +967,11 @@ export function DafRunWizard() {
                 <div key={e.message} className="text-red-600 whitespace-pre-wrap">{e.message}{hintText(e.hint) ? `\n${hintText(e.hint)}` : ''}</div>
               ))}
               {validation.warnings.map(w => <div key={w} className="text-amber-700 dark:text-amber-300">{w}</div>)}
+              {validation.ok && (
+                <div className="text-gray-600 dark:text-gray-300" data-testid="daf-run-plan-options">
+                  Calling options: {changedOptionLabels(state.options, state.enzyme).join(', ')}
+                </div>
+              )}
               {validation.ok && validation.jobs.map(job => (
                 <div key={job.sample} className="text-gray-500 dark:text-gray-400 truncate" title={job.command ?? ''}>
                   {job.sample} → {job.outdir || sampleOutdir(state.outputRoot, job.sample, validation.jobs.length)}

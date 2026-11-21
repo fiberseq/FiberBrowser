@@ -9,7 +9,9 @@ import heapq
 import threading
 from bisect import bisect_left, bisect_right
 from collections import OrderedDict
+from contextvars import ContextVar
 from services.byte_cache import ByteCache
+from services.read_columns import IntColumn
 from services.packed_reads import pack_reads, PackedReads, PackedReadBuilder, bounded_analysis, compact_read_bounds
 from typing import Callable, Iterable, Optional
 
@@ -30,12 +32,12 @@ from services.read_metrics import (
     nuc_layer_duplicates_primary,
     normalize_sample_seed,
 )
-from services.read_selection import is_read_spanning, read_matches_id_filter
+from services.read_selection import is_read_spanning, read_matches_id_filter, count_footprints
 
 
 LayerKey = Optional[tuple[str, ...]]
 WORKING_SET_DIAGNOSTICS_ENV = "FIBERBROWSER_WORKING_SET_DIAGNOSTICS"
-BROAD_CACHE_SCHEMA_VERSION = 6
+BROAD_CACHE_SCHEMA_VERSION = 7  # 7: broad keys gain hide_uncalled (slot 11)
 _BROAD_CACHE_SYNC_INIT_LOCK = threading.Lock()
 
 
@@ -56,7 +58,18 @@ def _broad_cache_sync(state) -> tuple[threading.RLock, dict[tuple, threading.Eve
     return state._broad_cache_lock, state._broad_cache_inflight
 
 
-def _store_broad_cache_entry(state, key: tuple, reads: list[dict], generation: Optional[int] = None):
+def layer_epoch(state, dataset_id: str, layer_key) -> tuple:
+    """The epochs of the dataset's layers a load with ``layer_key`` carries (``invalidate_dataset_layer_caches`` moves
+    them): taken when a load starts, a load whose layers changed meanwhile caches nothing."""
+    from services.dataset_generation import layer_epochs
+    epochs = layer_epochs(state, dataset_id)
+    if not epochs:
+        return ()
+    return tuple(sorted((n, e) for n, e in epochs.items() if layer_key_includes(layer_key, n)))
+
+
+def _store_broad_cache_entry(state, key: tuple, reads: list[dict], generation: Optional[int] = None,
+                             epoch: Optional[tuple] = None):
     from services.read_sampling import decode_read_scope
     if decode_read_scope.get() is not None:
         return  # An explicit capped cohort must never populate an unfiltered key.
@@ -68,6 +81,8 @@ def _store_broad_cache_entry(state, key: tuple, reads: list[dict], generation: O
         # Loaded for a source since replaced under the same ID: not cached.
         if generation is not None and dataset_generation(state, key[0]) != generation:
             return
+        if epoch is not None and layer_epoch(state, key[0], broad_cache_layer_key(key)) != epoch:
+            return  # its layers changed while it loaded (rows built with the old regularity / patches)
         state._broad_cache[key] = (retained, time.time())
         state._broad_cache.move_to_end(key)
         while not isinstance(state._broad_cache, ByteCache) and len(state._broad_cache) > getattr(state, "_broad_cache_max", 20):
@@ -168,7 +183,8 @@ def effective_hide_uncalled(dataset, hide_uncalled: Optional[bool] = None) -> bo
     if hide_uncalled is None:
         from services.signal_evidence import request_hide_uncalled
         hide_uncalled = request_hide_uncalled()
-    return bool(hide_uncalled) or getattr(dataset, "data_type", None) != "bam"
+    # Live-lift rows come from BAM records too (their source records' calls decide).
+    return bool(hide_uncalled) or getattr(dataset, "data_type", None) not in ("bam", "bam_livelift")
 
 
 def read_load_token(state, chrom: str, terminal_bp: Optional[int] = None, *, sample_level: int = 0) -> tuple:
@@ -182,6 +198,10 @@ def read_load_token(state, chrom: str, terminal_bp: Optional[int] = None, *, sam
     from services.signal_evidence import signal_filter_key
     from services.background_work import dataset_identity
     token = circular_topology_token(state, chrom)
+    if str(chrom).startswith("meta:"):
+        # A meta-locus contig's reads change with its view (More reads, Resample, refill): its generation.
+        from services.meta_locus_jobs import meta_load_token
+        token += meta_load_token(chrom)
     signal_key = signal_filter_key(state)
     if any(signal_key):
         token += ("signal", signal_key)
@@ -219,7 +239,10 @@ def broad_cache_topology(broad_key: tuple) -> tuple:
 
 def ensure_broad_cache_schema(state) -> None:
     """Drop process-local read caches from older loader behavior after hot reload."""
-    if getattr(state, "_broad_cache_schema_version", None) == BROAD_CACHE_SCHEMA_VERSION:
+    from services.sv_alleles import reference_identity
+    reference = reference_identity(state)
+    if (getattr(state, "_broad_cache_schema_version", None) == BROAD_CACHE_SCHEMA_VERSION
+            and getattr(state, '_sv_reference_identity', (None, None)) == reference):
         return
     if hasattr(state, "_broad_cache"):
         state._broad_cache.clear()
@@ -229,6 +252,7 @@ def ensure_broad_cache_schema(state) -> None:
     if hasattr(state, "_working_set_cache"):
         state._working_set_cache.clear()
     state._broad_cache_schema_version = BROAD_CACHE_SCHEMA_VERSION
+    state._sv_reference_identity = reference
 
 
 def layer_key_has_payload(layer_key: LayerKey) -> bool:
@@ -244,12 +268,18 @@ def _expand_layer_aliases(names: Iterable[str]) -> set[str]:
     return expanded
 
 
+#: Layers a load of every layer leaves out or fills only partly (services/nuc/layers.py): regularity patches are
+#: computed only when a load names them, and regularity tiles only for a load naming nucreg (an all-layer load
+#: uses cached tiles). Rows cached for every layer therefore never stand in for a request naming one of these.
+NAMED_ONLY_LAYERS = frozenset({'nucreg', 'nucpatch'})
+
+
 def layer_key_covers(cached_layer_key: LayerKey, requested_layer_key: LayerKey) -> bool:
     """Return True when cached layer payload can satisfy the requested payload."""
     if requested_layer_key == ():
         return True
     if cached_layer_key is None:
-        return True
+        return requested_layer_key is None or NAMED_ONLY_LAYERS.isdisjoint(requested_layer_key)
     if cached_layer_key == ():
         return requested_layer_key == ()
     if requested_layer_key is None:
@@ -353,6 +383,10 @@ def layer_key_for_quality_filters(layer_key: LayerKey, quality_filters: Iterable
             continue
         layer = str(filt.get("layer", "*") or "*")
         if layer == "*":
+            # Every layer, unless the request names on-demand layers (NAMED_ONLY_LAYERS): a load of every layer
+            # never computes them, so the named layers stay (a wildcard filter applies to the layers loaded).
+            if layer_key and not NAMED_ONLY_LAYERS.isdisjoint(_expand_layer_aliases(layer_key)):
+                return layer_key
             return None
         needed.update(_expand_layer_aliases([layer]))
 
@@ -417,7 +451,11 @@ def _sampled_entry_with_reads(state, dataset, dataset_id, chrom, start, end, rea
                 continue
             have = set()
             exact_ids = len(token) >= 3 and token[-3] == 'cluster_sample_v1'
-            names = reads.read_ids() if isinstance(reads, PackedReads) else (str(r.get("id", "")) for r in reads)
+            if getattr(dataset, "data_type", None) == "bam_livelift":
+                from services.lift.cohort import analysis_id
+                names = (key for r in reads for key in (r.get("id", ""), analysis_id(r, dataset.live_lift.settings)))
+            else:
+                names = reads.read_ids() if isinstance(reads, PackedReads) else (str(r.get("id", "")) for r in reads)
             for read_id in names:
                 have.add(read_id)
                 if not exact_ids:
@@ -622,6 +660,39 @@ def _load_broad_reads(
         {} if short_terminal_footprint_bp is None
         else {"short_terminal_footprint_bp": int(short_terminal_footprint_bp)}
     )
+    if str(chrom).startswith("meta:"):
+        # A meta-locus's virtual contig (services/meta_locus_jobs): the pool's current view, decoded with these
+        # options and the display's read filters, relative to broad_start like any load.
+        from services.meta_locus_jobs import meta_broad_reads
+        return meta_broad_reads(dataset_id, chrom, broad_start, broad_end, dict(
+            include_methylation=include_methylation, ml_threshold=ml_threshold, include_layers=include_layers,
+            requested_layers=requested_layers, include_layer_qualities=include_layer_qualities,
+            infer_legacy_layers=infer_legacy_layers, legacy_nuc_min_size=legacy_nuc_min_size,
+            min_footprints=min_footprints, hide_uncalled=bool(hide_uncalled), **terminal_option,
+            **{"min_fp_quality": 0, **(bam_read_options or {})}))
+    if dataset.data_type == "bam_livelift":
+        # Source records lifted onto this region, with an explicit sampler for
+        # deep display views. Broad rows remain free of display/haplotype rules.
+        from services.lift.reads import lifted_reads_for_region
+        from services.read_sampling import SampledReads, Sampler
+        from services.read_pins import current_pins
+        pins = current_pins()
+        from services.read_sampling import decode_read_scope
+        scope = decode_read_scope.get()
+        sampler = Sampler(sample_level or 1, keep_ids=set(pins) | {re.sub(r'_\d+$', '', p) for p in pins}, **(scope or {})) if sample_level or scope is not None else None
+        rows = lifted_reads_for_region(dataset, chrom, broad_start, broad_end, dict(
+            include_methylation=include_methylation, ml_threshold=ml_threshold, include_layers=include_layers,
+            insertion_ids=[], requested_layers=requested_layers, include_layer_qualities=include_layer_qualities,
+            infer_legacy_layers=infer_legacy_layers, legacy_nuc_min_size=legacy_nuc_min_size,
+            min_footprints=min_footprints, hide_uncalled=bool(hide_uncalled), **terminal_option,
+            **(bam_read_options or {})), sampler=sampler)
+        if sampler is not None:
+            # Explicit lift sampling records extents on the target, already
+            # absolute; adding broad_start here would shift them a second time.
+            rows = SampledReads(rows, level=sampler.level, estimated=True, skipped_starts=sampler.skipped_starts,
+                                skipped_ends=sampler.skipped_ends, kept_starts=sampler.kept_starts,
+                                kept_ends=sampler.kept_ends)
+        return rows
     if dataset.data_type == "bam":
         from services.read_sampling import SampledReads, Sampler, sampling
         # A sampled display load parses only the reads whose name hash is in
@@ -668,6 +739,9 @@ def _load_broad_reads(
                     all_reads.extend(reads)
             if pooled is not None:
                 all_reads = pooled
+        if getattr(dataset, "molecule_groups", None):
+            from services.differences.native import qualified_display_rows
+            all_reads = qualified_display_rows(all_reads, dataset)
         if sampler is not None:
             all_reads = SampledReads(all_reads, level=sampler.level, skipped_starts=sampler.skipped_starts,
                                      skipped_ends=sampler.skipped_ends, kept_starts=sampler.kept_starts,
@@ -699,6 +773,14 @@ def _load_broad_reads(
                     f"  Derived layers: matched {matched}/{len(layer_reads)} sidecar rows "
                     f"from {len(derived_paths)} bundle(s)"
                 )
+        from services.background_work import is_interactive_read
+        if is_interactive_read() and isinstance(all_reads, list):
+            # Native display caches can use row format 2 too: arrays avoid
+            # retaining and sizing a Python object for every coordinate, and
+            # the viewport projector already handles their numeric columns.
+            from services.compact_read_loader import _lift_columns
+            for read in all_reads:
+                _lift_columns(read)
         return all_reads
 
     from services.signal_evidence import signal_keeps
@@ -964,10 +1046,12 @@ def _load_and_cache_broad_reads_singleflight(
     cache_lock, inflight = _broad_cache_sync(state)
     # The ID's current source: waiters on a load for an older source don't share it.
     generation = dataset_generation(state, dataset_id)
+    epoch = layer_epoch(state, dataset_id, layer_key)
     from services.read_stream import is_prefetch
     # A foreground request must never wait for a speculative worker that is
     # paused to give that very request priority. Completed entries are shared.
-    inflight_key = exact_key + (("generation", generation), ("prefetch", is_prefetch()))
+    # (A load started before its layers changed is not joined: ``epoch``.)
+    inflight_key = exact_key + (("generation", generation), ("prefetch", is_prefetch()), ("layers", epoch))
 
     from services.background_work import checkpoint
     while True:
@@ -1025,7 +1109,7 @@ def _load_and_cache_broad_reads_singleflight(
                 sample_level=sample_level,
                 hide_uncalled=hide_uncalled,
             )
-            retained = _store_broad_cache_entry(state, exact_key, loaded_reads, generation)
+            retained = _store_broad_cache_entry(state, exact_key, loaded_reads, generation, epoch)
             log_working_set_diagnostic(
                 f"  Broad cache stored: {dataset_id} {len(loaded_reads)} reads"
             )
@@ -1043,7 +1127,7 @@ def geometry_filter(layer_key: LayerKey):
         return None
 
     def include(name: str) -> bool:
-        if name == 'intervals':
+        if name in ('intervals', 'live_lift'):
             return True
         if name == 'fire':
             return layer_key_includes(layer_key, 'fire', 'msp')
@@ -1067,7 +1151,11 @@ def _read_viewport_bounds(read: dict, viewport_offset: int, region_width: int,
     if read_end <= 0 or read_start >= region_width:
         return None
 
-    return read_start, read_end, read_start <= 0 and read_end >= region_width
+    spanning = read_start <= 0 and read_end >= region_width
+    if read.get("live_lift"):
+        from services.lift.reads import body_spans_view
+        spanning = body_spans_view(read["live_lift"], viewport_offset, viewport_offset + region_width)
+    return read_start, read_end, spanning
 
 
 def _absolute_read_bounds(read: dict) -> Optional[tuple[int, int]]:
@@ -1171,12 +1259,16 @@ def iter_broad_reads_overlapping_viewport(state, all_reads: list[dict], start: i
         yield read
 
 
-def _clip_interval_to_viewport(interval, viewport_offset: int, region_width: int):
+def _clip_interval_to_viewport(interval, viewport_offset: int, region_width: int, *, call=None):
     """Project one absolute interval and keep only the visible span."""
     if len(interval) < 2:
         return None
     start = interval[0] - viewport_offset
     end = interval[1] - viewport_offset
+    if start == end and call is not None:
+        from services.lift.reads import keep_interval
+        if keep_interval(interval, viewport_offset, region_width, call):
+            return start, end, interval[2] if len(interval) > 2 else 0
     if end <= 0 or start >= region_width:
         return None
     clipped_start = max(0, start)
@@ -1228,13 +1320,53 @@ def _visible_interval_range(container: dict, view_start: int, view_end: int):
     return intervals, range(lo, hi), positive_prefix
 
 
+def _column_view(intervals, viewport_offset: int, region_width: int, calls=()):
+    """For an ``IntColumn`` of ``[start, end, size]`` (read row format 2,
+    services/read_columns.py): ``(kept indices, starts, ends, sizes)`` of the
+    intervals the projection loops below keep, clipped, as arrays; None for
+    any other value (the loops then run). Kept: a visible span, or a
+    zero-width insertion marker with a call inside ``[0, width]``
+    (``lift.reads.keep_interval``)."""
+    if type(intervals) is not IntColumn or intervals.width is None or intervals.width < 3:
+        return None
+    import numpy as np
+    arr = intervals.array
+    rel_start = arr[:, 0] - viewport_offset
+    rel_end = arr[:, 1] - viewport_offset
+    clipped_start = np.maximum(rel_start, 0)
+    clipped_end = np.minimum(rel_end, region_width)
+    keep = clipped_end > clipped_start
+    marker = ~keep & (rel_start == rel_end) & (rel_start >= 0) & (rel_start <= region_width)
+    if marker.any():
+        for i in np.flatnonzero(marker).tolist():
+            marker[i] = i < len(calls) and calls[i] is not None
+        keep |= marker
+    kept = np.flatnonzero(keep)
+    return kept, clipped_start[kept], clipped_end[kept], arr[kept, 2]
+
+
 def _project_primary_intervals(read: dict, viewport_offset: int, region_width: int, *, index_intervals=True):
+    column = _column_view(read.get("intervals"), viewport_offset, region_width,
+                          ((read.get("live_lift") or {}).get("calls") or {}).get("intervals") or ())
+    if column is not None:
+        # The loop below on the column's array (same intervals, qualities and types).
+        kept, starts, ends, sizes = column
+        qualities = read.get("qualities")
+        adjusted_intervals = tuple(zip(starts.tolist(), ends.tolist(), sizes.tolist()))
+        if qualities is None:
+            return adjusted_intervals, None
+        import numpy as np
+        positive = read["intervals"].array[:, 2] > 0
+        index = np.cumsum(positive) - positive  # positive intervals before each
+        take = kept[positive[kept]]
+        return adjusted_intervals, [qualities[i] for i in index[take].tolist() if i < len(qualities)]
     adjusted_intervals = []
     adjusted_qualities = []
     qualities = read.get("qualities")
     view_start = viewport_offset
     view_end = viewport_offset + region_width
-    if index_intervals:
+    calls = ((read.get("live_lift") or {}).get("calls") or {}).get("intervals") or ()
+    if index_intervals and not calls:
         intervals, visible_range, positive_prefix = _visible_interval_range(read, view_start, view_end)
     else:
         intervals = read.get("intervals") or []
@@ -1254,7 +1386,9 @@ def _project_primary_intervals(read: dict, viewport_offset: int, region_width: i
         clipped_start = 0 if rel_start < 0 else rel_start
         clipped_end = region_width if rel_end > region_width else rel_end
         if clipped_end <= clipped_start:
-            continue
+            from services.lift.reads import keep_interval
+            if not keep_interval(interval, viewport_offset, region_width, calls[idx] if idx < len(calls) else None):
+                continue
         size = interval[2] if len(interval) > 2 else interval[1] - interval[0]
         adjusted_intervals.append((clipped_start, clipped_end, size))
         if is_positive and qualities is not None and positive_index < len(qualities):
@@ -1264,6 +1398,9 @@ def _project_primary_intervals(read: dict, viewport_offset: int, region_width: i
 
 
 def _project_positions(positions, viewport_offset: int, region_width: int) -> list[int]:
+    if type(positions) is IntColumn and positions.width is None:
+        rel = positions.array - viewport_offset
+        return rel[(rel >= 0) & (rel < region_width)].tolist()
     adjusted = []
     for pos in positions or []:
         rel = pos - viewport_offset
@@ -1290,13 +1427,20 @@ def _project_layer_intervals(
     *,
     include_qualities: bool = True,
     index_intervals: bool = True,
+    calls=(),
 ) -> Optional[dict]:
     intervals = layer.get("intervals") or []
     adjusted_intervals = []
     kept_indices = []
     view_start = viewport_offset
     view_end = viewport_offset + region_width
-    if index_intervals:
+    column = _column_view(intervals, viewport_offset, region_width, calls)
+    if column is not None:
+        kept, starts, ends, sizes = column
+        adjusted_intervals = [list(iv) for iv in zip(starts.tolist(), ends.tolist(), sizes.tolist())]
+        kept_indices = kept.tolist()
+        visible_range = ()
+    elif index_intervals and not calls:
         intervals, visible_range, _positive_prefix = _visible_interval_range(layer, view_start, view_end)
     else:
         visible_range = range(len(intervals))
@@ -1309,7 +1453,9 @@ def _project_layer_intervals(
         clipped_start = 0 if rel_start < 0 else rel_start
         clipped_end = region_width if rel_end > region_width else rel_end
         if clipped_end <= clipped_start:
-            continue
+            from services.lift.reads import keep_interval
+            if not keep_interval(interval, viewport_offset, region_width, calls[idx] if idx < len(calls) else None):
+                continue
         size = interval[2] if len(interval) > 2 else interval[1] - interval[0]
         adjusted_intervals.append([clipped_start, clipped_end, size])
         kept_indices.append(idx)
@@ -1353,6 +1499,14 @@ def _project_layer_intervals(
             ]
             if any(projected_values):
                 adjusted_layer[meta_key] = projected_values
+    # Regularity layer metadata: the lane's colour scale and digest and the patches' label key (lk) as they are, the
+    # window grid's reach re-based.
+    for meta_key in ("scale", "params_digest", "lk", "pg"):
+        if meta_key in layer:
+            adjusted_layer[meta_key] = layer[meta_key]
+    reach = layer.get("reach")
+    if isinstance(reach, (list, tuple)) and len(reach) == 2:
+        adjusted_layer["reach"] = [int(reach[0]) - viewport_offset, int(reach[1]) - viewport_offset]
     if "quality_source" in layer:
         # A FIRE-scored MSP layer (services/fire_quality): 0 is a score there.
         adjusted_layer["quality_source"] = layer["quality_source"]
@@ -1394,14 +1548,24 @@ def project_broad_read_to_viewport(
     for identity_key in (
         "library_id", "source_path", "record_sha256", "alignment_occurrence",
         "reference_start", "reference_end", "alignment_orientation",
-        "chemical_strand", "daf_strand", "strand", "_original_id",
+        "chemical_strand", "daf_strand", "strand", "_original_id", "_display_id",
         "alignment_spans", "signal",
+        # st/SEQ strand disagreement and graph-lift provenance (record-level).
+        "strand_conflict", "lift", "analysis_id", "_fiberbrowser_inferred_strand", "lift_flipped", "strand_frame",
         # SV events are in absolute reference coordinates: never shifted.
         "sv",
+        "aligned_blocks", "sv_segments", "sequence_span",
+        "sv_alignments", "supplementary",
+        # The molecule's scalars (nucmol / nfrmol: services/nuc/scalars.py), the same in every view, and the receipt
+        # that its nucleosome groups are live outputs.
+        "_fiberbrowser_scalars", "_fiberbrowser_nuc_without_calls", "nuc_live",
+        # The dataset's regularity reference for the row's nucreg tiles (cluster fill, frac_above_ref).
+        "_fiberbrowser_nucreg_ref",
+        # A meta-locus row's provenance (site, real coordinates, shared flag) and its record's own read name.
+        "meta", "source_id",
     ):
         if identity_key in read:
             adjusted_read[identity_key] = read[identity_key]
-
     if include_methylation and read.get("methyl"):
         adjusted_read["methyl"] = _project_positions(read["methyl"], viewport_offset, region_width)
     if include_methylation and read.get("methyl_m6a"):
@@ -1422,8 +1586,14 @@ def project_broad_read_to_viewport(
         adjusted_read["qualities"] = adjusted_qualities
     if layer_key_includes(layer_key, "fire", "msp") and read.get("fire"):
         adjusted_fire = []
-        for iv in read["fire"]:
-            clipped = _clip_interval_to_viewport(iv, viewport_offset, region_width)
+        calls = ((read.get("live_lift") or {}).get("calls") or {}).get("fire") or ()
+        column = _column_view(read["fire"], viewport_offset, region_width, calls)
+        if column is not None:
+            _kept, starts, ends, sizes = column
+            adjusted_fire = [list(iv) for iv in zip(starts.tolist(), ends.tolist(), sizes.tolist())]
+        for i, iv in enumerate(read["fire"] if column is None else ()):
+            clipped = _clip_interval_to_viewport(iv, viewport_offset, region_width,
+                                                 call=calls[i] if i < len(calls) else None)
             if clipped is not None:
                 adjusted_fire.append([clipped[0], clipped[1], clipped[2]])
         if adjusted_fire:
@@ -1437,7 +1607,7 @@ def project_broad_read_to_viewport(
         for layer_name, layer in read["layers"].items():
             if not layer_key_includes(layer_key, layer_name):
                 continue
-            if layer_name == "nuc" and not include_layer_qualities and nuc_layer_duplicates_primary(read):
+            if layer_name == "nuc" and not read.get("live_lift") and not include_layer_qualities and nuc_layer_duplicates_primary(read):
                 derived_layers.append("nuc")
                 continue
             adjusted_layer = _project_layer_intervals(
@@ -1446,9 +1616,10 @@ def project_broad_read_to_viewport(
                 region_width,
                 include_qualities=include_layer_qualities,
                 index_intervals=index_intervals,
+                calls=(((read.get("live_lift") or {}).get("calls") or {}).get(f"layer:{layer_name}") or ()),
             )
             if adjusted_layer is not None:
-                if layer_name == "nuc" and not include_layer_qualities:
+                if layer_name == "nuc" and not read.get("live_lift") and not include_layer_qualities:
                     if positive_primary_intervals is None:
                         positive_primary_intervals = _positive_primary_interval_payload(adjusted_intervals)
                     if adjusted_layer.get("intervals") == positive_primary_intervals:
@@ -1468,12 +1639,29 @@ def project_broad_read_to_viewport(
         visible_annotations = list(adjusted_read.get("fire") or [])
         for layer in (adjusted_read.get("layers") or {}).values():
             visible_annotations.extend(layer.get("intervals") or [])
-        if not visible_annotations:
+        # A live-lift row seen only through a body segment or a badge is still drawn.
+        from services.lift.reads import _body_spans, _merge, clip_geometry, geometry_intervals
+        geometry = clip_geometry(read.get("live_lift") or {}, viewport_offset, region_width)
+        body = [[max(a, 0), min(b, region_width)] for a, b in _merge(_body_spans(geometry))
+                if min(b, region_width) > max(a, 0)]
+        visible_annotations.extend(body)
+        visible_annotations.extend([b[0], b[0]] for b in geometry.get("badges") or ())
+        if visible_annotations and body:
+            # One neutral interval per body span: never one across a target gap between a lifted row's runs
+            # (one record each on fiberhmm-lift) or a hole, where the row has no data.
+            adjusted_read["intervals"] = [[a, b, 0] for a, b in body]
+        elif visible_annotations:
+            neutral_start = min(int(iv[0]) for iv in visible_annotations)
+            neutral_end = max(int(iv[1]) for iv in visible_annotations)
+            adjusted_read["intervals"] = [[neutral_start, neutral_end, 0]]
+        elif not geometry_intervals({"live_lift": geometry}):
             return None, False
-        neutral_start = min(int(iv[0]) for iv in visible_annotations)
-        neutral_end = max(int(iv[1]) for iv in visible_annotations)
-        adjusted_read["intervals"] = [[neutral_start, neutral_end, 0]]
 
+    if "live_lift" in read:
+        # Crop parallel provenance only after FIRE, layers and the neutral
+        # geometry exist, otherwise their call identities are silently lost.
+        from services.lift.reads import crop_live_lift
+        crop_live_lift(read, adjusted_read, viewport_offset, region_width)
     return adjusted_read, is_spanning
 
 
@@ -1494,12 +1682,54 @@ def _viewport_reads_from_broad(
     include_layer_qualities: bool = True,
     quality_filters: Optional[Iterable[dict]] = None,
     bc_end: Optional[int] = None,
+    row_filter: Optional[Callable] = None,
+    cohort_out: Optional[dict] = None,
+    overlay: Optional[Callable] = None,
 ) -> tuple[list[dict], int, int]:
+    """``row_filter``: rows that never enter the working set (a lifted display's
+    haplotype and display settings), applied before every count, filter and cap.
+    ``overlay``: a function adding scan layers to a projected row (before quality filters)."""
+    # Prepare the complete broad cohort before spatial, spanning or ID filters.
+    from services.lift.capability import is_lifted
+    if is_lifted(dataset):
+        from services.lift.cohort import prepare_lift_cohort, cohort_scope
+        purpose, hap, strand = cohort_scope(dataset)
+        prepared = prepare_lift_cohort(all_reads, purpose, dataset.live_lift.settings, hap)
+        all_reads = prepared.rows
+        if cohort_out is not None:
+            cohort_out.update(prepared.description)
+        from services.read_strand import filter_reads_by_strand, strand_calls
+        calls = strand_calls(state, dataset.id)
+        # The session's cross-window cache, by molecule, as graph rows use it (reads.resolve_molecule_strands; graph
+        # features review): an explicit call is the molecule's own; else a molecule called before keeps that call,
+        # and one called from its marks here is cached. A molecule whose marks tie stays without a strand (never
+        # re-inferred from one of its records alone).
+        for r in all_reads:
+            mol = (r.get("live_lift") or {}).get("molecule")
+            if mol is None or (r.get("strand") in ("CT", "GA", ".") and not r.get("_fiberbrowser_inferred_strand")):
+                if mol is not None and r.get("strand") in ("CT", "GA"):
+                    calls[mol] = r["strand"]   # an explicit call is the molecule's in every window
+                continue
+            known = calls.get(mol)
+            if known is not None:
+                r["strand"], r["_fiberbrowser_inferred_strand"] = known, True
+            elif r.get("strand") in ("CT", "GA"):
+                calls[mol] = r["strand"]
+            elif r.get("deam"):
+                # (Its marks tie over the molecule: no strand, rather than one record's own majority.)
+                r["strand"], r["_fiberbrowser_inferred_strand"] = ".", True
+        if strand:
+            all_reads = filter_reads_by_strand(all_reads, strand, calls)
+        row_filter = None
     viewport_offset = start - bc_start
     viewport_reads = PackedReadBuilder() if bounded_analysis.get() else []
     total_overlapping = 0
     total_spanning = 0
     read_id_set = set(read_ids) if read_ids is not None and not isinstance(read_ids, set) else read_ids
+    if read_id_set is not None and is_lifted(dataset):
+        # A graph row's identity names its record's rows here (graph features).
+        from services.read_selection import with_graph_record_keys
+        read_id_set = with_graph_record_keys(read_id_set)
     quality_filters = list(
         active_quality_filters(state)
         if quality_filters is None
@@ -1522,6 +1752,8 @@ def _viewport_reads_from_broad(
         from services.packed_reads import select_read_ids
         candidates = select_read_ids(all_reads, read_id_set, aliases=True)
     for read in candidates:
+        if row_filter is not None and not row_filter(read):
+            continue
         if early_read_id_filter:
             bounds = _read_viewport_bounds(read, viewport_offset, region_width, layer_key)
             if bounds is None:
@@ -1532,7 +1764,7 @@ def _viewport_reads_from_broad(
                 total_spanning += 1
             if spanning and not is_spanning:
                 continue
-            if not read_matches_id_filter(str(read.get("id", "")), read_id_set):
+            if not read_matches_id_filter(read, read_id_set):
                 continue
             adjusted_read, _ = project_broad_read_to_viewport(
                 read,
@@ -1543,7 +1775,9 @@ def _viewport_reads_from_broad(
                 include_layer_qualities=include_layer_qualities,
                 index_intervals=index_intervals,
             )
-            if adjusted_read is not None:
+            if adjusted_read is not None and overlay is not None:
+                adjusted_read = overlay(adjusted_read)
+            if adjusted_read is not None and (not min_footprints or not adjusted_read.get("live_lift") or count_footprints(adjusted_read) >= min_footprints):
                 viewport_reads.append(adjusted_read)
             continue
 
@@ -1558,6 +1792,8 @@ def _viewport_reads_from_broad(
         )
         if adjusted_read is None:
             continue
+        if overlay is not None:
+            adjusted_read = overlay(adjusted_read)
 
         if quality_filters and "layers" in adjusted_read:
             if (
@@ -1570,13 +1806,15 @@ def _viewport_reads_from_broad(
             if adjusted_read is None:
                 continue
 
+        if min_footprints and adjusted_read.get("live_lift") and count_footprints(adjusted_read) < min_footprints:
+            continue
         total_overlapping += 1
         if is_spanning:
             total_spanning += 1
         if spanning and not is_spanning:
             continue
 
-        if read_ids is None or read_matches_id_filter(str(adjusted_read.get("id", "")), read_id_set):
+        if read_ids is None or read_matches_id_filter(adjusted_read, read_id_set):
             viewport_reads.append(adjusted_read)
 
     if isinstance(viewport_reads, PackedReadBuilder):
@@ -1633,6 +1871,7 @@ def build_sampled_display_working_set(
     profile_include_legacy_profiles: bool = False,
     timings: Optional[dict[str, float]] = None,
     sv_min_len: Optional[int] = None,
+    sv_conflict_options=None,
     full_working_set: bool = False,
 ) -> tuple[WorkingSet, int]:
     """Build a display-sampled working set without projecting every candidate read.
@@ -1660,6 +1899,24 @@ def build_sampled_display_working_set(
     dataset = state.get_dataset(dataset_id)
     if not dataset:
         return WorkingSet([], 0, 0, chrom, start, end), 0
+    from services.lift.reads import is_lifted
+    if is_lifted(dataset):
+        from services.lift.cohort import using_lift_cohort
+        from services.read_metrics import sample_by_coverage, sample_stable_by_id
+        with using_lift_cohort("display"):
+            ws = build_working_set(state, dataset_id, chrom, start, end, spanning=spanning,
+                min_footprints=min_footprints, include_methylation=include_methylation, include_layers=include_layers,
+                requested_layers=requested_layers, include_layer_qualities=include_layer_qualities,
+                quality_filters=quality_filters, infer_legacy_layers=infer_legacy_layers,
+                legacy_nuc_min_size=legacy_nuc_min_size, build_bam_reads=build_bam_reads,
+                build_bigbed_reads=build_bigbed_reads, load_bigbed_marks=load_bigbed_marks,
+                stable_sampler=sample_stable_by_id)
+        count = len(ws.reads)
+        if max_reads and count > max_reads:
+            from copy import copy
+            ws = copy(ws)
+            ws.reads = sample_by_coverage(ws.reads, max_reads, start, end)
+        return ws, count
     effective_min_footprints = (
         int(min_footprints or 0)
         if dataset.available_layers.get("footprint", True)
@@ -1719,6 +1976,10 @@ def build_sampled_display_working_set(
                 segment_sampling.append(segment_set.sampling)
 
         viewport_reads = merge_compact_reads_by_id(merged_inputs)
+        # The segments' scan overlays name the wrapped view before its quality filters run (the display
+        # post-pass over this view is then a no-op and never restores a filtered mark).
+        from services.scan.overlay import rewindow_receipts
+        viewport_reads = rewindow_receipts(viewport_reads, chrom, start, end)
         if quality_filters:
             viewport_reads = [
                 filtered
@@ -1901,7 +2162,7 @@ def build_sampled_display_working_set(
         phase_t0 = time.perf_counter()
         sv_summary = sv_summary_for_reads(
             [read for _coverage, _idx, read, _is_spanning in candidates],
-            start, end, int(sv_min_len), chrom=chrom)
+            start, end, int(sv_min_len), chrom=chrom, conflict_options=sv_conflict_options)
         if timings is not None:
             timings["sv_summary_ms"] = (time.perf_counter() - phase_t0) * 1000
 
@@ -1960,6 +2221,13 @@ def build_sampled_display_working_set(
                 + timings.get("display_profile_payload_ms", 0.0)
             )
 
+    # Tables-mode scans' layers go on the projected rows before the quality filters, as in
+    # _viewport_reads_from_broad, so the display post-pass over this window finds their receipt and never restores
+    # a filtered mark. (The profile rows above are broad-cache rows, in the cache's frame: left without them.)
+    scan_overlay = None
+    if state.__dict__.get('scan_registry'):
+        from services.scan.overlay import prepare_scan_overlay
+        scan_overlay = prepare_scan_overlay(state, dataset_id, chrom, start, end)
     viewport_reads = []
     phase_t0 = time.perf_counter()
     for _coverage, _idx, read, is_spanning in selected:
@@ -1974,6 +2242,8 @@ def build_sampled_display_working_set(
         )
         if adjusted_read is None:
             continue
+        if scan_overlay is not None:
+            adjusted_read = scan_overlay(adjusted_read)
         if quality_filters:
             adjusted_read = apply_quality_filters(adjusted_read, quality_filters)
             if adjusted_read is None:
@@ -1997,6 +2267,16 @@ def build_sampled_display_working_set(
     from services.read_sampling import sampling_info
     working_set.sampling = sampling_info(all_reads, start, end, total_overlapping, total_spanning)
     return working_set, working_count
+
+
+class WorkingSetNotCached(Exception):
+    """Raised under ``working_set_probe`` when building the working set would read the BAM."""
+
+
+# Set while asking whether a view's working set can be built from the caches
+# alone (services/first_paint.py): a build that would load reads raises
+# ``WorkingSetNotCached`` instead.
+working_set_probe: ContextVar[bool] = ContextVar("working_set_probe", default=False)
 
 
 def _build_working_set(
@@ -2088,6 +2368,10 @@ def _build_working_set(
                 for read in segment_set.reads)
 
         viewport_reads = merge_compact_reads_by_id(merged_inputs)
+        # Each segment overlaid its rows before its quality filters: their receipts name this view, so the
+        # post-pass over it (BrowserState.build_working_set) never restores a filtered mark.
+        from services.scan.overlay import rewindow_receipts
+        viewport_reads = rewindow_receipts(viewport_reads, chrom, start, end)
         total_overlapping = len(viewport_reads)
         total_spanning = sum(1 for read in viewport_reads if is_read_spanning(read, region_width))
         if spanning:
@@ -2130,18 +2414,29 @@ def _build_working_set(
     now = time.time()
     cacheable = read_ids is None
     generation = dataset_generation(state, dataset_id)
+    epoch = layer_epoch(state, dataset_id, layer_key)
     from services.compact_read_loader import short_terminal_footprint_bp_for
     terminal_bp = short_terminal_footprint_bp_for(state)
     from services.read_sampling import sample_level, sampling_info
     low_memory = getattr(state, 'performance', {}).get('effective') == 'low'
     from services.read_sampling import decode_read_scope
-    level = (1 if decode_read_scope.get() is not None else sample_level(state, dataset, chrom, start, end)) if low_memory else 0
+    from services.lift.reads import display_sampling
+    level = (1 if decode_read_scope.get() is not None else sample_level(state, dataset, chrom, start, end)) if low_memory or display_sampling(dataset) else 0
     from services.cluster_sample import cluster_sample_scope
     cluster_sample = cluster_sample_scope.get()
     if cluster_sample is not None:
         level = 1
     topology = read_load_token(state, chrom, terminal_bp, sample_level=level)
+    from services.lift.reads import display_row_filter
+    from services.lift.cohort import cohort_key
+    lift_display = cohort_key(dataset)
 
+    # Tables-mode scans bound to the dataset put their layers and scalars on the rows before quality filters and
+    # metaprofiles see them (feature hub agy A5); the scans are part of the cached working set's identity.
+    scan_overlay, overlay_key = None, ()
+    if state.__dict__.get('scan_registry'):
+        from services.scan.overlay import overlay_signature, prepare_scan_overlay
+        overlay_key = overlay_signature(state, dataset_id)
     working_cache_key = make_working_cache_key(
         dataset_id,
         chrom,
@@ -2157,9 +2452,10 @@ def _build_working_set(
         infer_legacy_layers,
         legacy_nuc_min_size,
         include_layer_qualities,
-        topology=topology,
+        # A lifted display's haplotype rule: its rows are filtered before the cap below.
+        topology=topology if lift_display is None else (*topology, lift_display),
         hide_uncalled=hide_uncalled,
-    )
+    ) + ((('scan-overlay', overlay_key),) if overlay_key else ())
     if cacheable and not force_reload:
         cache_lock, _inflight = _broad_cache_sync(state)
         with cache_lock:
@@ -2175,6 +2471,9 @@ def _build_working_set(
     if broad_prefetch_multiplier is None:
         broad_prefetch_multiplier = configured_prefetch_multiplier(state)
     broad_multiplier = max(1, int(broad_prefetch_multiplier or 1))
+    if level:
+        from services.read_sampling import bounded_prefetch
+        broad_multiplier = bounded_prefetch(state, dataset, chrom, start, end, broad_multiplier, level)
     if getattr(dataset, "data_type", None) == "bigbed" and not effective_min_footprints:
         broad_multiplier = min(broad_multiplier, 2)
     broad_width = region_width * broad_multiplier
@@ -2221,8 +2520,10 @@ def _build_working_set(
     if all_reads is None and selected_analysis.get() and read_ids is not None and not force_reload:
         if not read_ids:
             return WorkingSet([], 0, 0, chrom, start, end)
-        scope = decode_read_scope.set(dict(only_ids=set(map(str, read_ids)),
-            raw_aliases={re.sub(r'_\d+$', '', str(name)) for name in read_ids}))
+        from services.lift.cohort import raw_qnames
+        raw_ids = raw_qnames(read_ids, dataset) if dataset.data_type == "bam_livelift" else set(map(str, read_ids))
+        scope = decode_read_scope.set(dict(only_ids=raw_ids,
+            raw_aliases={re.sub(r'_\d+$', '', str(name)) for name in raw_ids}))
         try:
             return _build_working_set(state, dataset_id, chrom, start, end,
                 spanning=spanning, min_footprints=min_footprints, hide_uncalled=hide_uncalled, read_ids=read_ids,
@@ -2236,6 +2537,9 @@ def _build_working_set(
         finally:
             decode_read_scope.reset(scope)
     if all_reads is None:
+        if working_set_probe.get():
+            # Asked only whether the view is cached (services/first_paint.py): it is not.
+            raise WorkingSetNotCached()
         if force_reload:
             all_reads = _load_broad_reads(
                 dataset=dataset,
@@ -2264,7 +2568,7 @@ def _build_working_set(
                 int(legacy_nuc_min_size or 90), effective_min_footprints,
                 topology, bool(hide_uncalled),
             )
-            _store_broad_cache_entry(state, broad_cache_key, all_reads, generation)
+            _store_broad_cache_entry(state, broad_cache_key, all_reads, generation, epoch)
         else:
             all_reads, broad_cache_key = _load_and_cache_broad_reads_singleflight(
                 state,
@@ -2291,6 +2595,11 @@ def _build_working_set(
             )
 
     bc_start = broad_cache_key[2] if broad_cache_key else broad_start
+    # A cached working set already contains the overlay (and its quality
+    # filters). Fetch scan tables only when rows actually need projecting.
+    if overlay_key:
+        scan_overlay = prepare_scan_overlay(state, dataset_id, chrom, start, end)
+    cohort_description = {}
     viewport_reads, total_overlapping, total_spanning = _viewport_reads_from_broad(
         state=state,
         all_reads=all_reads,
@@ -2307,9 +2616,15 @@ def _build_working_set(
         include_layer_qualities=include_layer_qualities,
         quality_filters=quality_filters,
         bc_end=broad_cache_key[3] if broad_cache_key else broad_end,
+        row_filter=display_row_filter(dataset),
+        cohort_out=cohort_description,
+        overlay=scan_overlay,
     )
     sampling_metadata = sampling_info(all_reads, start, end, total_overlapping, total_spanning) if level else None
     if sampling_metadata:
+        from services.lift.reads import is_lifted, scoped_sampling_info
+        if is_lifted(dataset):
+            sampling_metadata = scoped_sampling_info(sampling_metadata)
         if decode_read_scope.get() is not None or cluster_sample is not None:
             sampling_metadata['fraction'] = sampling_metadata['kept'] / max(1, sampling_metadata['total'])
         total_overlapping = sampling_metadata['total']
@@ -2344,6 +2659,9 @@ def _build_working_set(
 
     working_set = WorkingSet(viewport_reads, total_overlapping, total_spanning, chrom, start, end)
     working_set.sampling = sampling_metadata
+    if cohort_description:
+        working_set.lift_cohort = {**cohort_description, "scope": "broad load before viewport filters",
+                                   "overlapping_rows": total_overlapping, "used_rows": len(viewport_reads)}
     if cacheable:
         if isinstance(state._working_set_cache, ByteCache) and len(viewport_reads) >= 4096:
             import copy
@@ -2357,7 +2675,7 @@ def _build_working_set(
             retained = working_set
         cache_lock, _inflight = _broad_cache_sync(state)
         with cache_lock:
-            if dataset_generation(state, dataset_id) == generation:
+            if dataset_generation(state, dataset_id) == generation and layer_epoch(state, dataset_id, layer_key) == epoch:
                 state._working_set_cache[working_cache_key] = (retained, t1)
                 state._working_set_cache.move_to_end(working_cache_key)
                 while not isinstance(state._working_set_cache, ByteCache) and len(state._working_set_cache) > state._working_set_cache_max:
@@ -2375,7 +2693,7 @@ def build_working_set(state, dataset_id, chrom, start, end, **kwargs):
     from services.read_sampling import decode_read_scope, name_hash
     ids = kwargs.get('read_ids')
     cap = int(getattr(state, 'max_working_reads', 0) or 0)
-    if getattr(state, 'performance', {}).get('effective') != 'low' or ids is None or not cap:
+    if getattr(state.get_dataset(dataset_id), 'data_type', None) == 'bam_livelift' or getattr(state, 'performance', {}).get('effective') != 'low' or ids is None or not cap:
         return _build_working_set(state, dataset_id, chrom, start, end, **kwargs)
     selected = heapq.nsmallest(cap, set(map(str, ids)), key=lambda name: (name_hash(name), name))
     token = decode_read_scope.set(dict(only_ids=set(selected),

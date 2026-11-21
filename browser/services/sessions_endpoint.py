@@ -60,8 +60,13 @@ def build_session_export_for_request(state, req, *, now: datetime | None = None,
                 "layer_type": dataset.layer_type,
                 "available_layers": dataset.available_layers,
                 "derived_layers": getattr(dataset, "derived_layers", {}),
+                **({"molecule_groups": [[_portable_path(p), g] for p, g in getattr(dataset, "molecule_groups", [])],
+                    "joint_dedup": getattr(dataset, "joint_dedup", "off")}
+                   if getattr(dataset, "molecule_groups", None) or getattr(dataset, "joint_dedup", "off") != "off" else {}),
                 # A chemistry chosen in the browser (not saved into the file).
                 **_chemistry_override(dataset),
+                # A live-lift source view's BAM (shown only in its source view).
+                **({"lift_source_of": dataset.lift_source_of} if getattr(dataset, "lift_source_of", None) else {}),
                 # Fields a plugin pack keeps for a dataset of its own (rebuilt from them on import).
                 **dataset_session_fields(dataset),
             }
@@ -100,7 +105,8 @@ def build_session_export_for_request(state, req, *, now: datetime | None = None,
                 ),
             }
             for track in getattr(state, "orthogonal_tracks", []) or []
-            if isinstance(track, dict)
+            # A temporary track (a sequence search's hits) lives in this session only.
+            if isinstance(track, dict) and not track.get("temporary")
         ],
         "gtf": {
             "loaded": state.gtf_data is not None,
@@ -143,7 +149,11 @@ def build_session_export_for_request(state, req, *, now: datetime | None = None,
         session["clustering"] = clustering_data
 
     if req.frontend_state:
-        session["frontend"] = req.frontend_state
+        from services.scan.session import export_scans
+        saved_frontend, scan_bundles = export_scans(state, req.frontend_state)
+        session["frontend"] = saved_frontend
+        if scan_bundles:
+            session["hub_scans"] = scan_bundles
 
     # Completed footprint-class runs the saved classes (and the active view) refer to, frozen into the session:
     # their artifacts are temporary and gone after a restart.
@@ -334,6 +344,12 @@ def _import_session(state, req, *, dafc_state=None) -> dict:
     # Runs the session carries (its saved classes refer to them) stay as they are; the rest go. None is deleted
     # before its replacement exists: they are restored under their own ids once the datasets are open.
     dispose_consensus(state, keep_fit_cache=True, keep_job_ids=session_run_ids(session))
+    # Scans open in the workspace and live scans belong to it too (the feature hub reopens the session's own).
+    from services.scan.jobs import dispose_session as dispose_scans
+    dispose_scans(state)
+    # Nucleosome jobs and active configurations belong to the replaced datasets too.
+    from services.nuc.jobs import dispose_session as dispose_nuc
+    dispose_nuc(state)
     # Plugin packs drop their work for the replaced session (keeping what the new one carries).
     run_hooks("session_import_begin", state, session)
     # Loads still running for the replaced datasets must not refill the caches.
@@ -628,8 +644,15 @@ def _import_session(state, req, *, dafc_state=None) -> dict:
     restored_runs, run_problems = restore_session_runs(state, session)
     results["consensus_runs_restored"] = len(restored_runs)
     results["consensus_runs_failed"] = run_problems
+    from services.scan.session import restore_scans
+    restored_scans, scan_problems = restore_scans(state, session)
+    results["hub_scans_restored"] = len(restored_scans)
+    results["hub_scans_failed"] = scan_problems
     # Plugin packs restore their parts; a session written with packs this build doesn't have is said so.
     run_hooks("session_import_end", state, session, results)
+    from services.hub.migration import legacy_runs
+    hub_legacy = legacy_runs(state)
+    results["hub_legacy"] = hub_legacy
     missing = _missing_packs(session)
     if missing:
         results["missing_packs"] = missing
@@ -703,6 +726,10 @@ def _restore_chemistry_override(dataset, dataset_data: dict) -> None:
     """Put back a chemistry the session's user chose in the browser."""
     from services.chemistry_metadata import DECLARATIONS
 
+    dataset.molecule_groups = dataset_data.get("molecule_groups") or []
+    dataset.joint_dedup = dataset_data.get("joint_dedup", "off")
+    if dataset_data.get("lift_source_of"):
+        dataset.lift_source_of = str(dataset_data["lift_source_of"])
     # consensus_chemistry; sessions saved before 3.0 call it family_scan_chemistry.
     chemistry = dataset_data.get("consensus_chemistry") or dataset_data.get("family_scan_chemistry")
     metadata = dataset_data.get("chemistry_metadata")
@@ -749,6 +776,12 @@ def state_import_payload(state, *, viewport: dict, frontend: dict, contact_map=N
     response_datasets = []
     for dataset_id in state.dataset_order:
         dataset = state.datasets[dataset_id]
+        # Match dataset listing/registration, including live_lift and source
+        # identity: restored controls and coverage caches need both immediately.
+        # Older embedded callers still supply the lightweight dataset protocol.
+        if hasattr(dataset, "to_dict"):
+            response_datasets.append(dataset.to_dict())
+            continue
         response_datasets.append({
             "id": dataset.id,
             "label": dataset.label,

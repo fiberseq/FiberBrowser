@@ -640,15 +640,8 @@ def accumulate_profile_and_vplot(
     if table.empty:
         return agg, vp_matrix
 
+    from services.vplot_matrix import accumulate_vplot
     centers = table.centers
-    size_idx = ((table.sizes - size_min) // size_bin).astype(np.intp) if size_bin > 0 else np.zeros_like(table.sizes)
-    size_valid = (
-        (size_bin > 0)
-        & (table.sizes >= size_min)
-        & (table.sizes < size_max)
-        & (size_idx >= 0)
-        & (size_idx < n_size_bins)
-    )
 
     for footprint in footprints:
         abs_start, abs_end = _footprint_bounds(footprint)
@@ -661,10 +654,10 @@ def accumulate_profile_and_vplot(
 
         if n_size_bins == 0 or n_pos_bins == 0 or pos_bin <= 0:
             continue
-        pos_idx = ((rel + profile_window) // pos_bin).astype(np.intp)
-        in_vplot = size_valid & (pos_idx >= 0) & (pos_idx < n_pos_bins)
-        if np.any(in_vplot):
-            np.add.at(vp_matrix, (size_idx[in_vplot], pos_idx[in_vplot]), 1)
+        # The one V-plot counting (services.vplot_matrix, midpoint mode), in a window centred on this footprint.
+        offset = center - profile_window
+        vp_matrix += accumulate_vplot(table.starts - offset, table.ends - offset, table.sizes, size_min=size_min, size_bin=size_bin,
+                                      n_size_bins=n_size_bins, pos_bin=pos_bin, n_pos_bins=n_pos_bins, mode="midpoint")
 
     return agg, vp_matrix
 
@@ -805,19 +798,9 @@ def _sorted_read_ids(read_ids) -> list[str]:
 
 
 def benjamini_hochberg(p_values: Sequence[float]) -> list[float]:
-    """Return monotone Benjamini-Hochberg adjusted p-values in input order."""
-    if not p_values:
-        return []
-    clean = [min(1.0, max(0.0, float(p))) if np.isfinite(p) else 1.0 for p in p_values]
-    order = sorted(range(len(clean)), key=lambda index: (clean[index], index))
-    adjusted = [1.0] * len(clean)
-    running_min = 1.0
-    for reverse_index in range(len(order) - 1, -1, -1):
-        original_index = order[reverse_index]
-        rank = reverse_index + 1
-        running_min = min(running_min, clean[original_index] * len(clean) / rank)
-        adjusted[original_index] = min(1.0, running_min)
-    return adjusted
+    """Return monotone Benjamini-Hochberg adjusted p-values in input order (non-finite p count as 1)."""
+    from services.fdr import bh_qvalues
+    return [float(q) for q in bh_qvalues(p_values, missing="one")]
 
 
 def add_cooccupancy_fdr(co_occupancy: dict) -> dict:

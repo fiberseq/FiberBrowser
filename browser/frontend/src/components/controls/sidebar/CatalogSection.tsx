@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { getCatalog, catalogLoad, catalogLoadFailure, catalogUnload, catalogTrackLoad, catalogTrackUnload, type Catalog, type CatalogGroup, type CatalogTrack } from '../../../api/catalog';
 import { getDatasets } from '../../../api/datasets';
 import { loadGenome } from '../../../api/reference';
+import { getStatus } from '../../../api/status';
 import { getTracks } from '../../../api/tracks';
 import { useBrowserStore } from '../../../stores/browserStore';
 import { CatalogDatasetGroups } from './catalog/CatalogDatasetGroups';
@@ -52,7 +53,10 @@ export function CatalogSection() {
         const firstMount = !catalogGenomeInitialized;
         catalogGenomeInitialized = true;
         if (catalogGenome && firstMount && !store.hasFasta && !store.currentGenome) {
-          loadGenome(catalogGenome).then(loadRes => {
+          // Asked of the server itself (the page's status may not be in yet): a reference it has (--fasta, one
+          // loaded since) is never replaced by the catalog's default (genome-restore precedence).
+          getStatus(false).then(st => (st.has_fasta || st.current_genome ? null : loadGenome(catalogGenome))).then(loadRes => {
+            if (!loadRes) return;
             if (loadRes.success) {
               const s = useBrowserStore.getState();
               s.setHasFasta(genomeLoadHasFasta(loadRes));

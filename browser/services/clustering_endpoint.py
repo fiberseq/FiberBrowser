@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from services.scoped_read_analysis import scoped_analysis
 
+import hashlib
 import time
 from typing import Any, Dict, Optional
 
@@ -10,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 from services.analysis_query import AnalysisReadQuery
+from services.read_selection import cohort_read_id, read_matches_id_filter
 from services.cluster_analysis import (
     MERGE_DEFAULT_ALPHA,
     compute_cluster_projection,
@@ -243,9 +245,13 @@ def assigned_cluster_feature_rows(
         return None, peaks, peak_modes, ([], [], []), None
     feature_rules = stored_settings.get("cluster_feature_rules") or req.cluster_feature_rules
     threshold = stored_settings.get("subnucleosomal_threshold", req.subnucleosomal_threshold)
+    # Molecule metric columns rank against the fit's cohort: the request's, else the stored clustering's.
+    metric_cohort = getattr(req, "cluster_metric_cohort", None) or stored_settings.get("metric_cohort") or None
 
     query = AnalysisReadQuery.from_request(
         state,
+        capability="clustering",
+        lift_hap_by_dataset=getattr(req, "lift_hap_by_dataset", None),
         chrom=chrom,
         start=start,
         end=end,
@@ -274,6 +280,7 @@ def assigned_cluster_feature_rows(
         feature_rules,
         cluster_rule_context,
         query,
+        **({"metric_cohort": metric_cohort} if metric_cohort else {}),
     )
     return query.dataset_ids, peaks, peak_modes, rows, query
 
@@ -493,6 +500,7 @@ def run_scan_peaks_endpoint(
         include_layers=scan_signal_needs_layers(req.signal_source),
         requested_layers=[custom_layer] if custom_layer else None,
         include_layer_qualities=False,
+        capability="peaks",
     )
     resolved_chrom = query.chrom
     scan_dataset_ids = query.dataset_ids
@@ -519,10 +527,18 @@ def run_scan_peaks_endpoint(
 
     from services.background_work import checkpoint
     phase_t0 = time.perf_counter()
+    from services.lift.joint import joint_dedup_datasets
+    # Datasets whose shared molecules the joint policy deduplicates: their rows, never cached counts (Codex review,
+    # group G).
+    joint_rows = joint_dedup_datasets(state, query.dataset_ids) if len(query.dataset_ids) > 1 else set()
     for ds_id in query.dataset_ids:
         checkpoint()  # a scan whose clients left stops between datasets
         from services.direct_read_projection import direct_scan_counts
-        direct_counts = None if getattr(req, "strand", None) else direct_scan_counts(state, query, ds_id, signal_source)
+        from services.lift.capability import is_lifted
+        # A lifted dataset is scanned on its analysis cohort (target coordinates), never from display caches.
+        lifted = is_lifted(state.datasets.get(ds_id))
+        no_shortcut = bool(getattr(req, "strand", None)) or lifted or ds_id in joint_rows
+        direct_counts = None if no_shortcut else direct_scan_counts(state, query, ds_id, signal_source)
         if direct_counts is not None:
             numerator, total_counts, ds_n_reads = direct_counts
             scan_numerators.append(numerator)
@@ -530,7 +546,7 @@ def run_scan_peaks_endpoint(
             n_reads += ds_n_reads
             direct_scan_hits += 1
             continue
-        broad_counts = None if getattr(req, "strand", None) else _compute_scan_counts_from_broad_cache(
+        broad_counts = None if no_shortcut else _compute_scan_counts_from_broad_cache(
             state=state,
             query=query,
             dataset_id=ds_id,
@@ -546,12 +562,37 @@ def run_scan_peaks_endpoint(
             log_clustering_diagnostic(f"  Dataset {ds_id}: {ds_n_reads} reads from broad cache")
             continue
 
-        working_set = query.build_working_set(state, ds_id)
+        scope = query.read_ids_for_dataset(ds_id) if lifted else None
+        if lifted and scope is not None:
+            # A lifted panel's shown reads name their molecules: a display row folds its supplementaries into its
+            # primary's identity, so every row of a shown molecule is scanned (agy review, group E).
+            import json as _json
+            molecules, qnames = set(), set()
+            for v in scope:
+                v = str(v)
+                if v.startswith(("lift-cohort:v1 ", "lift-record:v1 ")):
+                    try:
+                        parts = _json.loads(v.split(" ", 1)[1])
+                        molecules.add(parts[0])
+                        qnames.add(str(parts[1]))
+                    except (ValueError, IndexError, TypeError):
+                        pass
+                else:
+                    qnames.add(v)
+            # Loaded by the shown molecules' QNAMEs (every record of each, supplementaries too, still a targeted
+            # load that sampling cannot thin), then matched by molecule (Codex review, group G round 2).
+            working_set = query.build_working_set(state, ds_id, read_ids=sorted(qnames))
+            ds_reads = [r for r in working_set.reads if (r.get("live_lift") or {}).get("molecule") in molecules
+                        or query.filter_reads_for_dataset(ds_id, [r])]
+        else:
+            working_set = query.build_working_set(state, ds_id)
+            ds_reads = None
         if not working_set.reads:
             log_clustering_diagnostic(f"  Dataset {ds_id}: no reads")
             continue
 
-        ds_reads = query.filter_reads_for_dataset(ds_id, working_set.reads)
+        if ds_reads is None:
+            ds_reads = query.filter_reads_for_dataset(ds_id, working_set.reads)
         if ds_reads is not working_set.reads and len(ds_reads) != len(working_set.reads):
             log_clustering_diagnostic(
                 f"  Dataset {ds_id}: {len(ds_reads)} specified reads "
@@ -567,7 +608,7 @@ def run_scan_peaks_endpoint(
             from services.read_strand import filter_reads_by_strand, strand_calls
             ds_reads = filter_reads_by_strand(ds_reads, req.strand, strand_calls(state, ds_id))
         n_reads += len(ds_reads)
-        scan_reads.extend(ds_reads)
+        scan_reads.extend({**r, "_consensus_dataset_id": ds_id} for r in ds_reads)
     server_timings["working_set_ms"] = phase_ms(phase_t0)
     if broad_scan_hits:
         server_timings["broad_scan_hits"] = float(broad_scan_hits)
@@ -586,6 +627,13 @@ def run_scan_peaks_endpoint(
         }
 
     phase_t0 = time.perf_counter()
+    if scan_reads and len({r["_consensus_dataset_id"] for r in scan_reads}) > 1:
+        # Molecules shared by datasets: their joint policy (joint_dedup by_molecule keeps one row), as the
+        # graph-column scan and clustering apply it (agy review, group E).
+        from services.lift.joint import prepare_joint_cohort
+        before = len(scan_reads)
+        scan_reads, _joint = prepare_joint_cohort(state, scan_reads, sorted({r["_consensus_dataset_id"] for r in scan_reads}))
+        n_reads -= before - len(scan_reads)
     if scan_reads:
         numerator, total_counts = compute_scan_counts(scan_reads, req.signal_source, region_width)
         scan_numerators.append(numerator)
@@ -609,7 +657,26 @@ def run_scan_peaks_endpoint(
         f"Signal stats: max={combined_signal.max():.3f}, mean={combined_signal.mean():.3f}"
     )
 
-    thresholds = build_peak_thresholds(
+    scan_result = None
+    execution_note = None
+    if signal_source in ('accessibility', 'tf_density') and getattr(req, 'execution_engine', 'scan') == 'scan':
+        from services.scan.legacy_execution import native_inputs, run_peak_counts
+        region = dict(chrom=resolved_chrom, start=start, end=end)
+        scan_inputs, execution_note = native_inputs(state, dict(region, dataset_ids=list(query.dataset_ids)))
+        if scan_inputs:
+            params = {k: getattr(req, k) for k in ('min_width', 'min_reads', 'threshold_strong',
+                'threshold_medium', 'threshold_weak', 'threshold_rare')}
+            params.update(smooth_width=smooth_width,
+                          max_peak_width=getattr(req, 'max_peak_width', DEFAULT_MAX_PEAK_WIDTH),
+                          signal_source=signal_source, tier_rule=getattr(req, 'tier_rule', 'local'))
+            scan_result = run_peak_counts(scan_inputs, region, numerator, total_counts, n_reads, params,
+                population=dict(dataset_ids=list(query.dataset_ids), spanning=spanning,
+                    sample_seed=req.sample_seed, read_ids_sha256=hashlib.sha256(
+                        repr((req.read_ids, req.read_ids_by_dataset)).encode()).hexdigest(),
+                    strand=getattr(req, 'strand', None)))
+            combined_signal = scan_result['smoothed']
+
+    thresholds = scan_result['thresholds'] if scan_result is not None else build_peak_thresholds(
         req.threshold_strong,
         req.threshold_medium,
         req.threshold_weak,
@@ -625,16 +692,20 @@ def run_scan_peaks_endpoint(
 
     phase_t0 = time.perf_counter()
     broad_peaks: list[dict] = []
-    all_peaks, layer_info = detect_threshold_layers(
-        combined_signal,
-        total_counts,
-        thresholds,
-        req.min_width,
-        req.min_reads,
-        smooth_width,
-        max_width=getattr(req, "max_peak_width", DEFAULT_MAX_PEAK_WIDTH),
-        broad_out=broad_peaks,
-    )
+    if scan_result is not None:
+        all_peaks, layer_info = scan_result['peaks'], scan_result['layer_info']
+        broad_peaks = scan_result['broad']
+    else:
+        all_peaks, layer_info = detect_threshold_layers(
+            combined_signal,
+            total_counts,
+            thresholds,
+            req.min_width,
+            req.min_reads,
+            smooth_width,
+            max_width=getattr(req, "max_peak_width", DEFAULT_MAX_PEAK_WIDTH),
+            broad_out=broad_peaks,
+        )
     server_timings["detect_ms"] = phase_ms(phase_t0)
     for info in layer_info:
         log_clustering_diagnostic(f"  Layer {info['layer']} ({info['label']}): {info['n_peaks']} peaks")
@@ -665,6 +736,9 @@ def run_scan_peaks_endpoint(
 
     result = {
         "peaks": peaks_list,
+        "execution_engine": 'scan:peaks' if scan_result is not None else 'legacy',
+        "tier_rule": getattr(req, 'tier_rule', 'local') if scan_result is not None else 'window',
+        **({"execution_note": execution_note} if execution_note else {}),
         "layer_info": layer_info,
         "n_reads": n_reads,
         # Above a tier's threshold but wider than max_peak_width: the view's
@@ -713,11 +787,11 @@ def run_dissolve_cluster_endpoint(
         assignments_by_dataset=req.current_assignments,
     )
     if dataset_ids is None:
-        return {"results": {}}
+        return {"results": {}, **({"cohorts": _query.cohort_descriptions} if _query and _query.cohort_descriptions else {})}
 
     all_features, all_read_ids, all_assignments = rows
     if not all_features:
-        return {"results": {}}
+        return {"results": {}, **({"cohorts": _query.cohort_descriptions} if _query and _query.cohort_descriptions else {})}
 
     features = np.array(all_features, dtype=np.float32)
     assignments_arr = np.array(all_assignments, dtype=np.int32)
@@ -729,11 +803,11 @@ def run_dissolve_cluster_endpoint(
     )
     if not dissolve_info["changed"] and dissolve_info["reason"] == "no_reads":
         log_clustering_diagnostic(f"  Cluster {dissolve_id} has no reads, nothing to dissolve")
-        return {"results": {}}
+        return {"results": {}, **({"cohorts": _query.cohort_descriptions} if _query and _query.cohort_descriptions else {})}
 
     if not dissolve_info["changed"]:
         log_clustering_diagnostic("  No remaining clusters to reassign to")
-        return {"results": {}}
+        return {"results": {}, **({"cohorts": _query.cohort_descriptions} if _query and _query.cohort_descriptions else {})}
 
     # Reads of the dissolved cluster outside the window go where most of its
     # reads in the window went; every other read keeps its cluster.
@@ -755,7 +829,7 @@ def run_dissolve_cluster_endpoint(
         f"-> {len(dissolve_info['remaining_clusters'])} remaining clusters in {t1-t0:.2f}s"
     )
 
-    return {"results": results, "sample_seed": sample_seed}
+    return {"results": results, "sample_seed": sample_seed, "cohorts": _query.cohort_descriptions if _query else {}}
 
 
 def merge_settings(req) -> Dict[str, Any]:
@@ -804,11 +878,11 @@ def run_auto_cull_clusters_endpoint(
         assignments_by_dataset=current_assignments,
     )
     if dataset_ids is None:
-        return {"results": {}, "dissolved": []}
+        return {"results": {}, "dissolved": [], **({"cohorts": _query.cohort_descriptions} if _query and _query.cohort_descriptions else {})}
 
     all_features, all_read_ids, all_assignments = rows
     if not all_features:
-        return {"results": {}, "dissolved": []}
+        return {"results": {}, "dissolved": [], **({"cohorts": _query.cohort_descriptions} if _query and _query.cohort_descriptions else {})}
 
     features = np.array(all_features, dtype=np.float32)
     assignments = np.array(all_assignments, dtype=np.int32)
@@ -841,7 +915,7 @@ def run_auto_cull_clusters_endpoint(
     )
 
     return {"results": results, "dissolved": dissolved_clusters, "sample_seed": sample_seed,
-            "merge": merge_settings(req)}
+            "merge": merge_settings(req), "cohorts": _query.cohort_descriptions if _query else {}}
 
 
 def _fiberbrowser_version() -> str:
@@ -891,6 +965,8 @@ def run_cluster_projection_endpoint(
 
     chrom = state.translate_chrom(chrom)
     dataset_ids = resolve_dataset_ids(state, dataset_ids=req.dataset_ids)
+    from services.lift.capability import require_for_ids
+    require_for_ids(state, dataset_ids, "clustering")  # live-lift datasets: P2b
     if not dataset_ids:
         return {"error": "No datasets"}
     cluster_rule_context = build_cluster_rule_context(state, chrom, start, end)
@@ -911,6 +987,7 @@ def run_cluster_projection_endpoint(
     # peaks set it, and a dataset clustered at other peaks is left out (listed).
     shared_schema = None
     skipped_datasets: list[str] = []
+    cohort_descriptions = {}
 
     assignment_overrides = req.cluster_assignments or {}
     for dataset_id in dataset_ids:
@@ -946,6 +1023,10 @@ def run_cluster_projection_endpoint(
                 continue
         else:
             continue
+        feature_mode = getattr(req, "feature_mode", None)
+        if feature_mode:
+            # The map's own input features: the same peaks, read through another mode.
+            peak_modes = [feature_mode] * len(peaks)
 
         # DAF reads' strand (CT/GA, for the export) comes from their deamination
         # marks; without include_strands only strands already known are given.
@@ -953,6 +1034,8 @@ def run_cluster_projection_endpoint(
             (getattr(dataset, "available_layers", None) or {}).get("deam"))
         working_query = AnalysisReadQuery.from_request(
             state,
+            capability="clustering",
+            lift_hap_by_dataset=getattr(req, "lift_hap_by_dataset", None),
             chrom=chrom,
             start=start,
             end=end,
@@ -969,7 +1052,8 @@ def run_cluster_projection_endpoint(
         if not working_set.reads:
             continue
 
-        reads_to_use = [read for read in working_set.reads if read["id"] in assigned]
+        cohort_descriptions.update(working_query.cohort_descriptions)
+        reads_to_use = [read for read in working_set.reads if read_matches_id_filter(read, set(assigned))]
         if not reads_to_use:
             continue
 
@@ -979,6 +1063,11 @@ def run_cluster_projection_endpoint(
             feature_kwargs["cluster_feature_rules"] = feature_rules
             feature_kwargs["cluster_rule_context"] = cluster_rule_context
         threshold = stored_settings.get("subnucleosomal_threshold", req.subnucleosomal_threshold)
+        # Molecule metric columns rank against the fit's cohort (the request's, else the stored clustering's), so
+        # every dataset's reads rank as they did in the fit, not against this view's reads.
+        metric_cohort = getattr(req, "cluster_metric_cohort", None) or stored_settings.get("metric_cohort")
+        if metric_cohort:
+            feature_kwargs["metric_cohort"] = metric_cohort
         features, read_ids, _, _ = extract_features_from_compact(
             # Saved footprint-class features look reads up by dataset and chromosome.
             [prefix_compact_read({**read, '_consensus_dataset_id': dataset_id, '_consensus_chrom': chrom}, dataset_id)
@@ -999,13 +1088,19 @@ def run_cluster_projection_endpoint(
             skipped_datasets.append(dataset_id)
             continue
 
-        reads_by_id = {read["id"]: read for read in reads_to_use}
+        reads_by_id = {cohort_read_id(read): read for read in reads_to_use}
         calls = strand_calls(state, dataset_id)
         for index, read_id in enumerate(read_ids):
             read_dataset_id, original_id = split_prefixed_read_id(read_id, dataset_id)
             all_features.append(features[index])
             all_read_ids.append((read_dataset_id, original_id))
-            all_assignments.append(assigned.get(original_id, -1))
+            # (A graph run's labels are under record keys: graph features review.)
+            label = assigned.get(original_id)
+            if label is None:
+                from services.lift.cohort import record_key
+                rk = record_key(original_id)
+                label = assigned.get(rk, -1) if rk else -1
+            all_assignments.append(label)
             read = reads_by_id.get(original_id) or {}
             all_strands.append((cached_read_strand(read, calls) or "") if read else "")
             orientation = read.get("alignment_orientation")
@@ -1097,6 +1192,7 @@ def run_cluster_projection_endpoint(
         "n_reads": int(features.shape[0]),
         "sample_seed": sample_seed,
         "projection_random_state": projection_random_state,
+        "cohorts": cohort_descriptions,
         "skipped_datasets": skipped_datasets,
         "strands": all_strands,
         "alignment_strands": all_alignment,
@@ -1109,6 +1205,7 @@ def run_cluster_projection_endpoint(
             "sample_seed": sample_seed,
             "n_reads": int(features.shape[0]),
             "feature_dim": int(features.shape[1]),
+            **({"feature_mode": req.feature_mode} if getattr(req, "feature_mode", None) else {}),
             **({
                 "perplexity": tsne_info["perplexity"],
                 "n_neighbors": tsne_info["n_neighbors"],
@@ -1158,6 +1255,8 @@ def run_cluster_all_endpoint(
     from services.cluster_assignment import check_cluster_method
     check_cluster_method(req.method)  # before any reads are loaded
     dataset_ids = resolve_dataset_ids(state, dataset_ids=req.dataset_ids)
+    from services.lift.capability import require_for_ids
+    require_for_ids(state, dataset_ids, "clustering")  # live-lift datasets: P2b
     log_clustering_diagnostic(
         f"Clustering: method={req.method}, k={req.k}, peaks={len(req.peak_regions)}, datasets={dataset_ids}"
     )
@@ -1193,6 +1292,8 @@ def run_cluster_all_endpoint(
     include_layers = cluster_modes_need_layers(peak_modes)
     analysis_query = AnalysisReadQuery.from_request(
         state,
+        capability="clustering",
+        lift_hap_by_dataset=getattr(req, "lift_hap_by_dataset", None),
         chrom=chrom,
         start=start,
         end=end,
@@ -1226,8 +1327,15 @@ def run_cluster_all_endpoint(
     dataset_read_stats = {}
     working_totals = {}
     preparation_samples = {}
+    cohort_descriptions = {}
+    joint_report = {}
 
     def with_performance_sampling(payload):
+        if joint_report:
+            payload["joint_cohort"] = joint_report
+        for key, desc in cohort_descriptions.items():
+            if key in payload.get("results", {}):
+                payload["results"][key]["cohort"] = desc
         for key, result in payload.get('results', {}).items():
             if key in preparation_samples:
                 result['preparation_sampling'] = {
@@ -1291,7 +1399,7 @@ def run_cluster_all_endpoint(
                 state,
                 dataset_id,
                 chrom=job_chrom,
-                **(dict(start=view.start, end=view.end, read_ids=view.read_ids) if view else {}),
+                **(dict(start=view.start, end=view.end, read_ids=view.read_ids, lift_hap=view.lift_hap, strand=view.strand) if view else {}),
                 **(dict(broad_prefetch_multiplier=3) if sample is not None else {}),
             )
         timings.add("working_set", phase_start)
@@ -1303,6 +1411,8 @@ def run_cluster_all_endpoint(
                 result_key=result_key, dataset_id=dataset_id,
                 start=view.start if view else start, end=view.end if view else end)
         working_totals[result_key] = working_set.total_overlapping
+        if getattr(working_set, "lift_cohort", None):
+            cohort_descriptions[result_key] = working_set.lift_cohort
 
         if not working_set.reads:
             dataset_read_ids[result_key] = []
@@ -1332,7 +1442,7 @@ def run_cluster_all_endpoint(
         reads_for_job = (working_set.reads if view else analysis_query.filter_reads_for_dataset(dataset_id, working_set.reads))
         if view and view.read_ids is not None:
             allowed = set(view.read_ids)
-            reads_for_job = [read for read in reads_for_job if read['id'] in allowed]
+            reads_for_job = [read for read in reads_for_job if read_matches_id_filter(read, allowed)]
         if view and getattr(view, 'strand', None):
             from services.read_strand import filter_reads_by_strand, strand_calls
             reads_for_job = filter_reads_by_strand(reads_for_job, view.strand, strand_calls(state, dataset_id))
@@ -1383,7 +1493,7 @@ def run_cluster_all_endpoint(
             original_ids = []
             prefixed_reads = []
             for read in reads_for_job:
-                original_ids.append(read["id"])
+                original_ids.append(cohort_read_id(read))
                 prefixed_reads.append(prefix_compact_read({**read, '_consensus_dataset_id': dataset_id,
                     '_consensus_chrom': job_chrom, '_cluster_group': result_key}, result_key))
             all_compact.extend(prefixed_reads)
@@ -1419,6 +1529,16 @@ def run_cluster_all_endpoint(
             "analysis_read_count": len(original_ids),
         }
 
+    if all_compact:
+        from services.lift.joint import prepare_joint_cohort
+        all_compact, joint_report = prepare_joint_cohort(state, all_compact, dataset_ids)
+        if not any(getattr(state.get_dataset(d), "data_type", None) == "bam_livelift" or
+                   getattr(state.get_dataset(d), "molecule_groups", None) for d in dataset_ids):
+            joint_report = {}  # native cohorts without declarations retain their existing response
+        for key in dataset_read_ids:
+            dataset_read_ids[key] = [r["_original_id"] for r in all_compact if r.get("_cluster_group") == key]
+            if key in dataset_read_stats:
+                dataset_read_stats[key]["analysis_read_count"] = len(dataset_read_ids[key])
     t2 = time.perf_counter()
     total_reads = (len(columnar) if columnar is not None else
                    len(all_compact) if use_compact_path else sum(len(df) for df in all_reads))
@@ -1429,7 +1549,7 @@ def run_cluster_all_endpoint(
     cluster_features = {}
     if columnar is not None:
         if not len(columnar):
-            return timings.attach(with_performance_sampling({"results": empty_cluster_all_results(dataset_ids)}))
+            return timings.attach(with_performance_sampling({"results": empty_cluster_all_results(list(viewports) if viewports else dataset_ids)}))
         phase_start = time.perf_counter()
         assignments, counts, sorted_idx, element_info = columnar.finish()
         timings.add('cluster_columnar', phase_start)
@@ -1530,6 +1650,12 @@ def run_cluster_all_endpoint(
             response["cluster_centroids"] = centroids
             response["cluster_peak_widths"] = centroid_peak_widths
             response["peak_regions"] = _peak_region_payload()
+    # The fit's molecule metric cohort, for every fit with a metric column (with or without patterns or centroids):
+    # dynamic assignment (Codex C2-1), merges and the map rank a view's reads against the reads the fit ranked, not
+    # against the view's own. Kept with the stored feature settings for requests without explicit peaks.
+    metric_cohort = _fitted_metric_cohort(columnar, all_compact, peak_modes, req.cluster_feature_rules)
+    if metric_cohort:
+        response["cluster_metric_cohort"] = metric_cohort
 
     from services.background_work import checkpoint
     checkpoint()  # A cancelled fit must not replace the workspace's clustering.
@@ -1546,12 +1672,50 @@ def run_cluster_all_endpoint(
         feature_settings={
             "subnucleosomal_threshold": req.subnucleosomal_threshold,
             "cluster_feature_rules": list(req.cluster_feature_rules or []),
+            **({"metric_cohort": metric_cohort} if metric_cohort else {}),
         },
     )
 
+    for key, result in results.items():
+        rows = [r for r in all_compact if r.get('_cluster_group') == key]
+        dsid = next((r.get('_consensus_dataset_id') for r in rows), key)
+        sources = record_sources(state.get_dataset(dsid), rows)
+        if sources:
+            result['record_sources'] = {rid: src for rid, src in sources.items() if rid in result['assignments']}
     response['results'] = results
     timings.add("response_assembly", phase_start)
     return timings.attach(with_performance_sampling(response))
+
+
+def record_sources(dataset, reads) -> dict:
+    """Origins of fitted records, independently of the primary haplotype that places a lifted display row."""
+    handle = getattr(getattr(dataset, 'live_lift', None), 'handle', None)
+    if handle is None:
+        return {}
+    haps = getattr(handle, 'source_haplotype', {})
+    labels = getattr(handle, 'haplotype_labels', {})
+    out = {}
+    for read in reads:
+        contig = ((read.get('live_lift') or {}).get('source') or {}).get('contig')
+        hap = haps.get(contig)
+        rid = read.get('_original_id') or read.get('analysis_id') or read.get('id')
+        if contig and hap and rid:
+            out[rid] = dict(contig=contig, hap=labels.get(hap, hap))
+    return out
+
+
+def _fitted_metric_cohort(columnar, compact_reads, peak_modes, cluster_feature_rules) -> dict:
+    """The exact molecule metric cohort of an ordinary fit (clustering_features ``fitted_metric_cohort``): the fitted
+    compact reads, or the columnar engine's metric values (it keeps every fitted read's value per metric bit)."""
+    from services.clustering_features import fitted_metric_cohort, metric_cohort_counts, molecule_metric_ids
+    if columnar is None:
+        return fitted_metric_cohort(compact_reads, peak_modes, cluster_feature_rules)
+    if not molecule_metric_ids(peak_modes, cluster_feature_rules):
+        return {}
+    out: dict = {}
+    for metric_id, values in (getattr(columnar, "metric_bits", None) or {}).values():
+        out.setdefault(metric_id, metric_cohort_counts(values))
+    return out
 
 
 def run_assign_to_clusters_endpoint(
@@ -1564,6 +1728,8 @@ def run_assign_to_clusters_endpoint(
     spanning: bool,
 ) -> Dict[str, Any]:
     """Assign viewport reads to stored cluster patterns for dynamic clustering."""
+    from services.lift.capability import require_for_ids
+    require_for_ids(state, req.dataset_ids, "clustering")  # live-lift datasets: P2b
     t0 = time.time()
     sample_seed = normalize_sample_seed(req.sample_seed)
 
@@ -1571,9 +1737,14 @@ def run_assign_to_clusters_endpoint(
     use_centroids = bool(getattr(req, "cluster_centroids", None))
     if not peaks or (not req.cluster_patterns and not use_centroids):
         return {"results": {}}
+    # The fit's molecule metric cohort (sent back with its patterns or centroids); absent for older models, whose
+    # metric columns rank each view's reads against themselves as before.
+    metric_cohort = getattr(req, "cluster_metric_cohort", None) or None
 
     query = AnalysisReadQuery.from_request(
         state,
+        capability="clustering",
+        lift_hap_by_dataset=getattr(req, "lift_hap_by_dataset", None),
         chrom=chrom,
         start=start,
         end=end,
@@ -1589,45 +1760,63 @@ def run_assign_to_clusters_endpoint(
     cluster_rule_context = build_cluster_rule_context(state, query.chrom, start, end)
 
     results = {}
-    for ds_id in dataset_ids:
-        working_set = query.build_working_set(state, ds_id)
+    views = getattr(req, "viewports", None) or []
+    if any(v.dataset_id not in dataset_ids or v.end <= v.start for v in views) or len({v.result_key for v in views}) != len(views):
+        raise ValueError("Invalid dynamic clustering windows")
+    jobs = [(v.dataset_id, v.result_key, v) for v in views] if views else [(d, d, None) for d in dataset_ids]
+    for ds_id, result_key, view in jobs:
+        working_set = query.build_working_set(state, ds_id, **(dict(chrom=view.chrom, start=view.start, end=view.end,
+            read_ids=view.read_ids if view.read_ids is not None else query.read_ids_for_dataset(ds_id), lift_hap=view.lift_hap, strand=view.strand) if view else {}))
+        job_start = view.start if view else start
+        job_peaks, job_modes = active_peak_regions(req.peak_regions, job_start)
         if not working_set.reads:
             continue
 
         reads = query.filter_reads_for_dataset(ds_id, working_set.reads)
         if not reads:
-            results[ds_id] = {"assignments": {}, "cluster_counts": {}, "filtered_read_ids": []}
+            results[result_key] = {"assignments": {}, "cluster_counts": {}, "filtered_read_ids": []}
             continue
         # Saved footprint-class features look reads up by dataset and chromosome
         # (as cluster_all tags them); read IDs here are not dataset-prefixed.
-        reads = [{**read, '_consensus_dataset_id': ds_id, '_consensus_chrom': query.chrom} for read in reads]
+        reads = [prefix_compact_read({**read, '_consensus_dataset_id': ds_id, '_consensus_chrom': query.chrom}, ds_id) for read in reads]
         if use_centroids:
-            results[ds_id] = assign_reads_to_centroids(
+            results[result_key] = assign_reads_to_centroids(
                 reads,
-                peaks,
+                job_peaks,
                 req.cluster_centroids,
                 req.cluster_peak_widths,
-                region_start=start,
+                region_start=job_start,
                 subnucleosomal_threshold=req.subnucleosomal_threshold,
-                peak_modes=peak_modes,
+                peak_modes=job_modes,
                 overlap_mode=getattr(req, "overlap_mode", "aggressive"),
                 cluster_feature_rules=req.cluster_feature_rules,
                 cluster_rule_context=cluster_rule_context,
+                metric_cohort=metric_cohort,
             )
         else:
-            results[ds_id] = assign_reads_to_cluster_patterns(
+            results[result_key] = assign_reads_to_cluster_patterns(
                 reads,
-                peaks,
+                job_peaks,
                 req.cluster_patterns,
-                region_start=start,
+                region_start=job_start,
                 subnucleosomal_threshold=req.subnucleosomal_threshold,
                 accessibility_threshold=req.accessibility_threshold,
-                peak_modes=peak_modes,
+                peak_modes=job_modes,
                 overlap_mode=getattr(req, "overlap_mode", "aggressive"),
                 cluster_feature_rules=req.cluster_feature_rules,
                 cluster_rule_context=cluster_rule_context,
+                metric_cohort=metric_cohort,
             )
 
+        assignments = results[result_key]["assignments"]
+        results[result_key]["assignments"] = {split_prefixed_read_id(k, ds_id)[1]: v for k, v in assignments.items()}
+        results[result_key]["filtered_read_ids"] = list(results[result_key]["assignments"])
+        sources = record_sources(state.get_dataset(ds_id), working_set.reads)
+        if sources:
+            results[result_key]['record_sources'] = {rid: src for rid, src in sources.items()
+                                                      if rid in results[result_key]['assignments']}
+        if getattr(working_set, "lift_cohort", None):
+            results[result_key]["cohort"] = working_set.lift_cohort
         dataset = state.get_dataset(ds_id)
         if dataset:
             # Dynamic assignment covers only the reads available in this
@@ -1637,7 +1826,7 @@ def run_assign_to_clusters_endpoint(
             # the same non-shrinking clustered cohort.
             dataset.cluster_assignments = {
                 **(dataset.cluster_assignments or {}),
-                **results[ds_id]["assignments"],
+                **results[result_key]["assignments"],
             }
 
     log_clustering_diagnostic(
@@ -1645,7 +1834,7 @@ def run_assign_to_clusters_endpoint(
         f"{sum(len(r['assignments']) for r in results.values())} reads across "
         f"{len(dataset_ids)} datasets in {time.time() - t0:.2f}s"
     )
-    return {"results": results, "sample_seed": sample_seed}
+    return {"results": results, "sample_seed": sample_seed, "cohorts": query.cohort_descriptions}
 
 
 def run_cluster_endpoint(

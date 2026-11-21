@@ -4,9 +4,10 @@ import { useBrowserStore } from '../stores/browserStore';
 import { CANVAS_SCALE, getCanvasRenderScale, setCanvasRenderScale } from '../utils/canvasUtils';
 import { assertExportSize, canvasToBlob, downloadBlob, exportTrackFigure, figureFileStem, figureReferenceLabel, waitForExportRender } from '../utils/figureExport';
 import { figureRegions, figureTitleText } from '../utils/figureRegions';
+import { captureUiCanvas } from '../utils/uiCapture';
 import { figureCitationLine, loadFigureCitation, saveFigureCitation } from '../utils/citation';
 import { usePanelGenomeStore } from '../stores/panelGenomeStore';
-import { readExportTrackSnapshots } from '../utils/readExport';
+import { assertReadTracksIntact, readExportTrackSnapshots } from '../utils/readExport';
 import { useReadStatusStore } from '../stores/readStatusStore';
 import { Camera, X } from './ui/Icons';
 import { DisclosureChevron } from './ui/Disclosure';
@@ -127,17 +128,19 @@ export function ExportPanel({ onClose }: Props) {
           const root = document.querySelector('[data-browser-root]') as HTMLElement;
           if (!root) throw new Error('Browser root not found');
 
-          const { toCanvas } = await import('html-to-image');
           const uiScale = scale * (window.devicePixelRatio || 1);
           assertExportSize(root.clientWidth * uiScale, root.clientHeight * uiScale);
-          const canvas = await toCanvas(root, {
+          // Drawn until stable: WebKit's first draw leaves every canvas (the reads) blank.
+          const canvas = await captureUiCanvas(root, {
             pixelRatio: uiScale,
             backgroundColor: '#ffffff',
-            filter: (el) => {
+            filter: (el: HTMLElement) => {
               // Hide the export panel modal itself from the capture
               return !(el instanceof Element && el.closest('[data-export-modal]'));
             },
           });
+          // Reads that failed or reloaded while the capture ran: never saved as a figure.
+          assertReadTracksIntact();
 
           const uiFilename = `fiberhmm_ui_${fileStem}`;
 

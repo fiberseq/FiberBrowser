@@ -59,6 +59,8 @@ def signal_counts(state, dataset_id, chrom, start, end, *, include_duplicates=Fa
         if header:
             provenance.append(header)
         legacy_frame = _legacy_frame(path, bam)
+        from services.graph_lift import lift_hidden_predicate
+        lift_hidden = lift_hidden_predicate(bam.header)
         reference = resolve_reference_name(chrom, bam.references, links=links)
         if reference is None:
             continue
@@ -73,6 +75,8 @@ def signal_counts(state, dataset_id, chrom, start, end, *, include_duplicates=Fa
                 continue
             for read in bam.fetch(reference, lo, hi):
                 if read.is_unmapped or read.is_secondary or read.is_supplementary:
+                    continue
+                if lift_hidden is not None and lift_hidden(read):
                     continue
                 if spanning and (read.reference_start > start or read.reference_end < end):
                     continue

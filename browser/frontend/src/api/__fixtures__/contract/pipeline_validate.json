@@ -1,0 +1,23 @@
+{
+ "aligner": {
+  "checked": false,
+  "hint": "",
+  "name": null,
+  "ok": true
+ },
+ "dorado": null,
+ "errors": [],
+ "jobs": [
+  {
+   "command": "fiberhmm-pipeline /data/sample_a.fastq --reference /data/ref.fa --enzyme dddb -o /data/r1 --sample sample_a --cores 1 --progress-json '<job>/progress.jsonl' --min-mapq 0 --dedup off",
+   "n_files": 1,
+   "outdir": "/data/r1",
+   "sample": "sample_a"
+  }
+ ],
+ "ok": true,
+ "output_root": "/data/r1",
+ "warnings": [
+  "Sample 'sample a' will be named 'sample_a' (letters, digits, . _ - only)."
+ ]
+}

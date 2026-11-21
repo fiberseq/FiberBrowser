@@ -34,6 +34,7 @@ import tempfile
 import threading
 import time
 from typing import Any, Optional
+from services.reconstruction_budget import budgeted_request, request_provenance
 
 from services.alt_allele_align import (
     KIND_CIGAR,
@@ -47,7 +48,7 @@ from services.alt_allele_align import (
     realign,
 )
 
-SCHEMA = "fiberbrowser.alt_allele/1"
+SCHEMA = "fiberbrowser.alt_allele/3"
 ALT_DIR_ENV = "FIBERBROWSER_ALT_ALLELE_DIR"
 DEFAULT_FLANK = 20_000
 MAX_FLANK = 100_000
@@ -127,7 +128,7 @@ def _cache_key(paths: list[str], definition: dict, daf: bool, reference_id: str,
     the reference the flanks come from (its key and its FASTA file's stamp: a FASTA replaced
     at the same path is another reference) and the plasmid links that choose the contig."""
     reference = [reference_id, *(_stamps([fasta_path])[0] if fasta_path and "://" not in str(fasta_path) else [fasta_path])]
-    blob = json.dumps({"schema": SCHEMA, "files": _stamps(paths), "def": definition, "daf": daf,
+    blob = json.dumps({"schema": SCHEMA, "budget_version": "reconstruction:v1", "alignment_policy": "native-banded-wavefront:v1", "files": _stamps(paths), "def": definition, "daf": daf,
                        "reference": reference, "links": repr(sorted((contig_links or {}).items()))}, sort_keys=True)
     return hashlib.sha1(blob.encode()).hexdigest()[:20]
 
@@ -208,6 +209,7 @@ def _reference_length(fasta, bam, chrom: str, chrom_map=None) -> Optional[int]:
     return int(bam.get_reference_length(name)) if name is not None else None
 
 
+@budgeted_request
 def build_alt_allele(bam_paths: list[str], definition: dict, out_dir: str, *, fasta=None, daf: bool = False,
                      chrom_map=None, contig_links=None, bam_handle_getter=None, label: str = "",
                      source_genome: Optional[str] = None) -> dict:
@@ -224,11 +226,12 @@ def build_alt_allele(bam_paths: list[str], definition: dict, out_dir: str, *, fa
     d = definition
     site = classify_site(bam_paths, d["chrom"], pos=d["pos"] if d["pos"] is not None else d["ref"],
                          ref=d["ref"], length=d["length"], include_duplicates=d["include_duplicates"], include_qcfail=d["include_qcfail"],
-                         bam_handle_getter=bam_handle_getter, chrom_map=chrom_map, contig_links=contig_links)
+                         bam_handle_getter=bam_handle_getter, chrom_map=chrom_map, contig_links=contig_links, reference=fasta)
     if not site["success"]:
         raise AltAlleleError(site.get("error") or "No insertion there")
     ref, length = site["ref"], site["length"]
-    carriers = sorted(site["carriers"], key=lambda item: (item[1].query_name, item[2], item[1].reference_start))
+    carriers = sorted((item for item in site["carriers"] if item[0].get('evidence_level') == 'confirmed'),
+                      key=lambda item: (item[1].query_name, item[2], item[1].reference_start))
     if not carriers:
         raise AltAlleleError(f"No carrier of the insertion at {d['chrom']}:{ref:,}")
     full = [(plan, read) for plan, read, _p, _b in carriers if plan["kind"] == "cigar" and plan["len"] > 0]
@@ -238,22 +241,32 @@ def build_alt_allele(bam_paths: list[str], definition: dict, out_dir: str, *, fa
 
     # The consensus: FiberHMM's DAF-aware one for DAF data, else a majority vote.
     method, fallback, daf_info = "majority", None, None
-    if daf:
-        daf_info, fallback = daf_aware_consensus([(read, plan["q"], plan["len"]) for plan, read in full])
+    canonical_changed = any(plan.get('canonical_alt_seq', read.query_sequence[plan['q']:plan['q'] + plan['len']])
+                            != read.query_sequence[plan['q']:plan['q'] + plan['len']] for plan, read in full)
+    pure_rotations = all(plan['ref_end'] == plan['ref'] and
+                         len(plan.get('canonical_alt_seq', read.query_sequence[plan['q']:plan['q'] + plan['len']])) == plan['len']
+                         for plan, read in full)
+    if daf and (not canonical_changed or pure_rotations):
+        daf_info, fallback = daf_aware_consensus([(read, plan["q"], plan["len"], plan.get("canonical_alt_seq")) for plan, read in full])
         if daf_info is not None:
             method = "daf"
     if daf_info is not None:
         consensus = daf_info["seq"]
     else:
-        consensus = build_consensus([read.query_sequence[plan["q"]:plan["q"] + plan["len"]] for plan, read in full])
+        consensus = build_consensus([plan.get('canonical_alt_seq', read.query_sequence[plan['q']:plan['q'] + plan['len']])
+                                     for plan, read in full])
+        if daf and canonical_changed:
+            fallback = 'Canonical allele normalization changes the source query span; using canonical sequence majority'
     consensus = consensus.upper()
 
     first_bam = bam_handle_getter(bam_paths[0])
     chrom_len = _reference_length(fasta, first_bam, d["chrom"], chrom_map) or (ref + d["flank"])
-    layout = AltLayout(chrom=d["chrom"], ref=ref, insert_len=len(consensus),
-                       flank_left=min(d["flank"], ref), flank_right=max(0, min(d["flank"], chrom_len - ref)))
+    spans = sorted(plan.get('canonical_ref_len', plan['ref_end'] - plan['ref']) for plan, _read in full)
+    replaced_len = spans[len(spans) // 2]
+    layout = AltLayout(chrom=d["chrom"], ref=ref, insert_len=len(consensus), replaced_len=replaced_len,
+                       flank_left=min(d["flank"], ref), flank_right=max(0, min(d["flank"], chrom_len - ref - replaced_len)))
     alt_seq = (_reference_bases(fasta, d["chrom"], layout.ref_start, ref, chrom_map) + consensus
-               + _reference_bases(fasta, d["chrom"], ref, ref + layout.flank_right, chrom_map))
+               + _reference_bases(fasta, d["chrom"], ref + replaced_len, ref + replaced_len + layout.flank_right, chrom_map))
 
     sampled = _evenly(carriers, d["max_carriers"])
     jobs = [(_plan_kind(plan), plan, read) for plan, read, _p, _b in sampled]
@@ -262,24 +275,12 @@ def build_alt_allele(bam_paths: list[str], definition: dict, out_dir: str, *, fa
         jobs += [(KIND_REFERENCE, {"kind": KIND_REFERENCE}, read)
                  for read, _p, _b in _evenly(reference_reads, DEFAULT_MAX_REFERENCE)]
 
-    def one(job):
-        kind, plan, read = job
-        try:
-            res = realign(read.cigartuples, read.reference_start, read.query_sequence or "",
-                          {**plan, "kind": kind}, layout, alt_seq)
-        except Exception:
-            return None
-        return (kind, read, res) if res is not None else None
-
-    if len(jobs) > 16:
-        # The banded aligner releases the GIL (numba nogil).
-        from concurrent.futures import ThreadPoolExecutor
-        from services.background_work import auxiliary_worker_count, configure_worker_threads
-        workers = auxiliary_worker_count(max(1, min(8, (os.cpu_count() or 2) - 1)))
-        with ThreadPoolExecutor(max_workers=workers, initializer=configure_worker_threads) as pool:
-            results = list(pool.map(one, jobs))
-    else:
-        results = [one(job) for job in jobs]
+    from services.alt_allele_align import realign_batch
+    plans = [(read.cigartuples, read.reference_start, {**plan, 'kind': kind}, read.query_sequence or '')
+             for kind, plan, read in jobs]
+    alignments = realign_batch(plans, layout, alt_seq)
+    results = [(kind, read, res) if res is not None else None
+               for (kind, _plan, read), res in zip(jobs, alignments)]
 
     os.makedirs(out_dir, exist_ok=True)
     tmp = tempfile.mkdtemp(prefix=".build-", dir=out_dir)
@@ -347,6 +348,7 @@ def build_alt_allele(bam_paths: list[str], definition: dict, out_dir: str, *, fa
             "layout": layout.to_dict(),
             "sv": {"t": "I", "ref": ref, "len": length},
             "consensus": {"method": method, "length": len(consensus),
+                          "alignment_algorithms": request_provenance(),
                           **({"fallback": fallback} if daf and fallback else {}),
                           **({k: daf_info[k] for k in ("confident_fraction", "carriers_ct", "carriers_ga")}
                              if daf_info else {})},

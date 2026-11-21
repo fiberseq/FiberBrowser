@@ -1,6 +1,9 @@
 import { useEffect, useCallback, useState, useRef } from 'react';
 import { useBrowserStore } from '../stores/browserStore';
 import { FRONTEND_DIAGNOSTICS } from '../utils/diagnostics';
+import { isMetaChrom } from '../features/metaLocus/metaChrom';
+import { metaUrlState, restoreMetaLocusFromUrl } from '../features/metaLocus/metaLocusStore';
+import { parseMetaUrl, withMetaUrlParams } from '../features/metaLocus/metaUrl';
 
 const DEBUG = FRONTEND_DIAGNOSTICS;
 
@@ -16,7 +19,8 @@ function viewportUrlParams(chrom: string, start: number, end: number): URLSearch
   params.set('chr', chrom);
   params.set('start', start.toString());
   params.set('end', end.toString());
-  return params;
+  // A meta-locus view carries the pool's spec and working set (a reload or a copied link opens it again).
+  return withMetaUrlParams(params, isMetaChrom(chrom) ? metaUrlState() : null);
 }
 
 function writeViewportToUrl(chrom: string, start: number, end: number): void {
@@ -41,7 +45,20 @@ export function useUrlSync() {
     const urlStart = params.get('start');
     const urlEnd = params.get('end');
 
-    if (urlChrom && urlStart && urlEnd) {
+    const metaSaved = isMetaChrom(urlChrom) ? parseMetaUrl(params) : null;
+    if (metaSaved) {
+      // A meta-locus link: reopen its pool (the server's cache makes a built one ready at once), then show its span.
+      initialPositionSet.current = true;
+      urlSyncEnabled.current = false;
+      const startNum = parseInt(urlStart ?? '', 10);
+      const endNum = parseInt(urlEnd ?? '', 10);
+      const viewport = !isNaN(startNum) && !isNaN(endNum) && endNum > startNum ? { start: startNum, end: endNum } : null;
+      void restoreMetaLocusFromUrl(metaSaved, viewport).finally(() => {
+        urlSyncEnabled.current = true;
+        const now = useBrowserStore.getState();
+        writeViewportToUrl(now.chrom, now.start, now.end);
+      });
+    } else if (urlChrom && urlStart && urlEnd && !isMetaChrom(urlChrom)) {
       const startNum = parseInt(urlStart, 10);
       const endNum = parseInt(urlEnd, 10);
       if (!isNaN(startNum) && !isNaN(endNum) && endNum > startNum) {

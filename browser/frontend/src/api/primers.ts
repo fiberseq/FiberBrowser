@@ -13,6 +13,11 @@ export interface PrimerConfigResponse {
   fasta?: string | null;
   blast_db?: string | null;
   configured?: boolean;
+  /** The FASTA as a local file Build can read (a picker genome: its download); null when there is none
+   *  (only plasmid maps loaded, or a remote reference): Build is then not offered. Absent on older servers. */
+  fasta_local?: string | null;
+  /** Plasmid maps loaded beside the genome: designed on from memory, checked against the chosen database. */
+  plasmids?: string[];
   current_genome?: string | null;
   blast_db_warning?: string | null;
   /** Which BLAST+ the server runs (services/external_tools.py): label, version, path, install hint. */

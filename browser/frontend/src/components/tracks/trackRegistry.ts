@@ -76,8 +76,14 @@ const extraMenus = new Map<string, Array<(ctx: TrackMenuContext) => TrackMenuIte
 
 /** Add (or replace) a track kind. Call at module load of the track's own file, or from a plugin pack's register(). */
 export function registerTrackKind(def: TrackKindDef): void {
+  if (!def.label?.trim()) throw new Error(`Track kind "${def.type}" needs a non-empty label`);
   kinds.set(def.type, def);
   if (!def.type.endsWith('-')) declareContribution('tracks', def.type);
+}
+
+/** Every registered kind, including extension rows and track families. */
+export function registeredTrackKinds(): TrackKindDef[] {
+  return [...kinds.values()];
 }
 
 /** Add items to another kind's right-click menu (a plugin pack's "Open <its panel>" on a built-in row). */
@@ -182,7 +188,7 @@ registerTrackKind({
 });
 registerTrackKind({
   type: 'coacc', label: 'Co-accessibility', defaultHeight: 120, minHeight: 48, maxHeight: 480, builtin: true,
-  menu: () => [openPanelItem('co-accessibility', 'Co-accessibility panel')],
+  menu: () => [openPanelItem('co-accessibility', 'Co-accessibility in Plots', 'Open Plots on the co-accessibility matrix of the view (the settings this track draws on)')],
 });
 registerTrackKind({
   type: 'composite-', label: 'Track', defaultHeight: 40, minHeight: 24, maxHeight: 400,
@@ -206,7 +212,7 @@ registerTrackKind({
   menu: () => [openPanelItem('primer-design', 'Primers panel')],
 });
 registerTrackKind({
-  type: 'sv', label: 'SVs', defaultHeight: 44, minHeight: 24, maxHeight: 240, builtin: true,
+  type: 'sv', label: 'Differences', defaultHeight: 44, minHeight: 24, maxHeight: 240, builtin: true,
   settingId: 'view.sv-display',
 });
 registerTrackKind({

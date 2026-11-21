@@ -6,6 +6,7 @@
  * get curated colors; the loaded datasets' other types get distinct palette
  * colours, the same for the same set of layers (assignExtraLayerColors).
  */
+import { NUC_UNDRAWN_LAYERS } from './nucLayers';
 
 const KNOWN_COLORS: Record<string, string> = {
   tf_native_replay:'#94a3b8', tf_sr_lattice:'#8b5cf6', tf_cr:'#0891b2', tf_recall:'#db2777',
@@ -33,6 +34,15 @@ const KNOWN_COLORS: Record<string, string> = {
   deam_ct: '#2563eb',    // blue (CT / C->T strand covered)
   deam_ga: '#e11d48',    // rose (GA / G->A strand covered)
   footprint: '#16a34a',  // green (legacy primary footprint layer)
+  // fiberhmm-scan per-molecule groups (MA groups of annotated BAMs, or the scan overlay of tables-mode scans)
+  fpcls: '#7c3aed',      // violet, as footprint classes
+  nfrvar: '#0f766e',     // teal (NFR variant membership)
+  nfrmol: '#64748b',     // slate (NFR molecule scalars: whole-molecule interval)
+  nucsz: '#16a34a',      // green (nucleosome size classes)
+  nucseg: '#15803d',     // dark green (array segments)
+  nucreg: '#2c8ca0',     // teal-blue (regularity lane ramp)
+  nucpatch: '#c8323c',   // red (regularity patches; geometry colours in the lane)
+  nucmol: '#64748b',     // slate (nucleosome molecule scalars)
 };
 
 /** Short, human-friendly labels for known layer names. Falls back to the raw name. */
@@ -58,6 +68,14 @@ const KNOWN_LABELS: Record<string, string> = {
   deam_ct: 'CT strand',
   deam_ga: 'GA strand',
   footprint: 'FP',
+  fpcls: 'Scan · classes',
+  nfrvar: 'Scan · NFR variants',
+  nfrmol: 'Scan · NFR scalars',
+  nucsz: 'Scan · nuc sizes',
+  nucseg: 'Scan · arrays',
+  nucreg: 'Scan · regularity',
+  nucpatch: 'Scan · regularity patches',
+  nucmol: 'Scan · nuc scalars',
 };
 
 function hslToHex(hue: number, saturation: number, lightness: number): string {
@@ -216,10 +234,77 @@ export function hasKnownLayerColor(name: string): boolean {
  * invalid paint value and draw in the previous color.
  */
 export function getLayerColor(name: string): string {
+  const override = getLayerColorOverride(name);
+  if (override) return override;
+  return getDefaultLayerColor(name);
+}
+
+/** A layer's colour without the user's override (curated, palette or hash): what Reset goes back to. */
+export function getDefaultLayerColor(name: string): string {
   if (KNOWN_COLORS[name]) return KNOWN_COLORS[name];
   const assigned = extraLayerColors.get(name);
   if (assigned) return assigned;
   return EXTRA_LAYER_PALETTE[Math.abs(nameHash(name)) % EXTRA_LAYER_PALETTE.length];
+}
+
+/**
+ * User-set layer colours (Labels → Layer colours; features/layerColours/state.ts). One map, layer key → #rrggbb, read
+ * through a getter so it is current whichever store subscriber runs first. The session's own colours win over the
+ * user's saved defaults; getLayerColor returns the override when there is one.
+ */
+const LAYER_KEY_ALIASES: Record<string, string> = { msp: 'fire', mod: 'm6a', footprint: 'nuc' };
+
+/** The key a layer's colour is kept under: aliases of one user-facing layer share it (msp→fire, mod→m6a, footprint→nuc). */
+export function layerColorKey(name: string): string {
+  return LAYER_KEY_ALIASES[name] ?? name;
+}
+
+let overrideSource: () => Readonly<Record<string, string>> = () => ({});
+
+/** Where the effective overrides come from (the store's session colours over the user's defaults). */
+export function setLayerColorOverrideSource(source: (() => Readonly<Record<string, string>>) | null): void {
+  overrideSource = source ?? (() => ({}));
+}
+
+/** The user's colour for a layer (session over saved default), or null: the default colour applies. */
+export function getLayerColorOverride(name: string): string | null {
+  const map = overrideSource();
+  return map[name] ?? map[layerColorKey(name)] ?? null;
+}
+
+/** Every effective override (layer key → colour). */
+export function getLayerColorOverrides(): Readonly<Record<string, string>> {
+  return overrideSource();
+}
+
+const HEX_COLOR = /^#[0-9a-f]{6}$/;
+
+/** A colour as the overrides keep it (#rrggbb lower case), or null when it is not one. */
+export function normalizeLayerHex(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  let v = value.trim().toLowerCase();
+  if (/^#[0-9a-f]{3}$/.test(v)) v = `#${v[1]}${v[1]}${v[2]}${v[2]}${v[3]}${v[3]}`;
+  return HEX_COLOR.test(v) ? v : null;
+}
+
+/** A stored layer → colour map from untrusted input: canonical keys, #rrggbb values, bounded. */
+export function normalizeLayerColorMap(raw: unknown, maxKeys = 200): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>).slice(0, maxKeys)) {
+    const k = typeof key === 'string' ? key.trim().slice(0, 80) : '';
+    const color = normalizeLayerHex(value);
+    if (k && color) out[layerColorKey(k)] = color;
+  }
+  return out;
+}
+
+/** Effective overrides: the user's saved defaults, then the session's own colours over them. */
+export function effectiveLayerColorOverrides(
+  session: Readonly<Record<string, string>> | null | undefined,
+  userDefault: Readonly<Record<string, string>> | null | undefined,
+): Record<string, string> {
+  return { ...(userDefault ?? {}), ...(session ?? {}) };
 }
 
 /** The accessibility layer's keys: legacy/internal `msp` and `fire` (one user-facing layer). */
@@ -540,7 +625,7 @@ export function getCanonicalLayerGroups(
       key,
       label,
       sourceLayer,
-      color: meta.color,
+      color: getLayerColorOverride(key) ?? meta.color,
       kind: 'derived',
       title: sourceLayer
         ? `Derived layer: ${label} (from ${getLayerLabel(sourceLayer)})`
@@ -589,9 +674,12 @@ export function getMetaprofileSourceEntries(
   if (has('m6a')) push('m6a', 'm6A', getLayerTitle('m6a'));
   if (has('m5c')) push('m5c', '5mC', getLayerTitle('m5c'));
 
+  // The nucleosome size/segment/regularity/patch layers are drawn by their own lanes, not as interval coverage: a
+  // coverage metaprofile of them would mean nothing (nucpatch would sum high and low patches into one curve).
   const handled = new Set([
     'nuc', 'footprint', 'tf', 'msp', 'fire', 'deam', 'mod', 'm6a', 'm5c',
     'nuc_sr', 'tf_sr', 'tf_consensus', 'tf_cross_consensus', 'deam_opportunity',
+    ...NUC_UNDRAWN_LAYERS,
   ]);
   // layer_type can be the container format ("bam", "bigbed"), not a layer.
   const FILE_TYPES = new Set(['bam', 'bigbed', 'bb', 'cram']);

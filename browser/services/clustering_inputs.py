@@ -68,10 +68,11 @@ def active_peak_regions(peak_regions: List[Any], region_start: int) -> tuple[lis
 
 def prefix_compact_read(read: dict, dataset_key: str) -> dict:
     """Return a shallow copy with a dataset-prefixed ID for joint feature matrices."""
-    original_id = read["id"]
+    original_id = read.get("analysis_id") or read["id"]
     return {
         **read,
         "_original_id": original_id,
+        **({"analysis_id": f"{dataset_key}::{original_id}"} if read.get("analysis_id") else {}),
         "id": f"{dataset_key}::{original_id}",
     }
 
@@ -98,13 +99,21 @@ def collect_assigned_feature_rows(
     cluster_feature_rules: list[dict[str, Any]] | None = None,
     cluster_rule_context: dict[str, Any] | None = None,
     query: AnalysisReadQuery | None = None,
+    metric_cohort: dict | None = None,
 ) -> tuple[list[np.ndarray], list[tuple[str, str]], list[int]]:
-    """Build feature rows for reads that already have cluster assignments."""
+    """Build feature rows for reads that already have cluster assignments.
+
+    ``metric_cohort``: the fit's molecule metric cohort (clustering_features ``fitted_metric_cohort``), so a metric
+    column ranks every dataset's reads against the reads the clustering was fitted on. None: each dataset's reads
+    rank against themselves."""
+    from services.lift.capability import require_for_ids
+    require_for_ids(state, dataset_ids, "clustering")
     include_methylation = cluster_modes_need_methylation(peak_modes)
     include_layers = cluster_modes_need_layers(peak_modes)
     requested_layers = cluster_modes_requested_layers(peak_modes)
     query = query or AnalysisReadQuery.from_request(
         state,
+        capability="clustering",
         chrom=chrom,
         start=start,
         end=end,
@@ -138,7 +147,7 @@ def collect_assigned_feature_rows(
             continue
 
         assigned_ids = set(ds_assignments.keys())
-        reads_to_use = [read for read in working_set.reads if read["id"] in assigned_ids]
+        reads_to_use = [read for read in working_set.reads if read_matches_id_filter(read, assigned_ids)]
         if not reads_to_use:
             continue
 
@@ -147,6 +156,8 @@ def collect_assigned_feature_rows(
             feature_kwargs["cluster_feature_rules"] = cluster_feature_rules
         if cluster_rule_context is not None:
             feature_kwargs["cluster_rule_context"] = cluster_rule_context
+        if metric_cohort:
+            feature_kwargs["metric_cohort"] = metric_cohort
         features, read_ids, _, _ = extract_features_from_compact(
             # Saved footprint-class features look reads up by dataset and chromosome.
             [prefix_compact_read({**read, '_consensus_dataset_id': ds_id, '_consensus_chrom': query.chrom}, ds_id)

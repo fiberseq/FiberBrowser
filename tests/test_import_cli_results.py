@@ -26,7 +26,7 @@ def _bam(path):
             read = pysam.AlignedSegment(header); read.query_name = f'molecule_{i}'
             read.query_sequence = 'AYGT'*50; read.reference_id = 0; read.reference_start = 100 + i
             read.mapping_quality = 60; read.cigarstring = '200M'; read.set_tag('st', 'CT')
-            read.set_tag('MA', '200;msp:1-200;tf:61-80'); bam.write(read)
+            read.set_tag('MA', '200;msp.:1-200;tf.:61-80'); bam.write(read)
     pysam.index(str(path))
     return path
 

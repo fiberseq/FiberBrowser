@@ -78,8 +78,10 @@ def diagnose_bam_payload(state, *, bam_path=None, dataset_idx: int = 0, chrom=No
         recommendations = []
         # Nucleosomes/MSPs may be in legacy ns/nl, as/al tags or only in an
         # MA/Ma annotation tag (current fibertools writes only Ma).
-        has_nucleosomes = bool(result.get("has_nucleosomes") or result.get("has_ma_nucleosomes"))
-        has_msps = bool(result.get("has_msps") or result.get("has_ma_msps"))
+        # An MA/Ma group with no intervals means the calling ran and found none: not "run it".
+        has_nucleosomes = bool(result.get("has_nucleosomes") or result.get("has_ma_nucleosomes")
+                               or result.get("has_ma_nucleosome_calls"))
+        has_msps = bool(result.get("has_msps") or result.get("has_ma_msps") or result.get("has_ma_msp_calls"))
         if not has_nucleosomes and not has_msps:
             recommendations.append(
                 "No nucleosome (ns/nl) or FIRE/accessibility (as/al) tags found. "
@@ -123,6 +125,26 @@ def diagnose_bam_payload(state, *, bam_path=None, dataset_idx: int = 0, chrom=No
                 "SEQ frame, the FiberHMM v1.0 convention; reads whose MA has FiberHMM >= 2.13.2 footprint groups "
                 "(nuc./msp./tf.) use molecular frame. If reverse-strand footprints look mirrored, keep the "
                 "producer's @PG/@CO header lines."
+            )
+        from services.graph_lift import REPAIR_COMMAND, lift_summary_text
+        lift = result.get("graph_lift") or {}
+        if lift:
+            result["graph_lift_text"] = lift_summary_text(lift)
+        if lift.get("unrepaired"):
+            recommendations.append(
+                f"Lifted through a pangenome graph (@PG {', '.join(lift['unrepaired'])}) without fiberhmm-lift's "
+                "repair: supplementary alignments lost 0x800 and show as extra reads (FiberBrowser hides only "
+                "those fiberhmm-lift's stash tag Yf marks as supplementary), hard clips were dropped, MD/NM/SA still describe the source assembly and st:Z was not swapped on reads that "
+                f"changed strand. Repair it: {REPAIR_COMMAND}."
+            )
+        conflicts = int(result.get("st_strand_conflicts") or 0)
+        if conflicts:
+            recommendations.append(
+                f"{conflicts} of {result.get('st_strand_reads', 0)} sampled DAF reads have an st:Z strand tag that "
+                "disagrees with the R/Y deamination marks in SEQ. FiberBrowser, like FiberHMM, takes the strand "
+                "from st (these reads are flagged in the read tooltip)"
+                + ("; the lift left st unswapped on reads that changed strand, which fiberhmm-lift's repair fixes."
+                   if lift.get("unrepaired") else ".")
             )
         result["recommendations"] = recommendations
 

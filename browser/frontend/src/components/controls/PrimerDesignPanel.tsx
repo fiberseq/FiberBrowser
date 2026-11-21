@@ -171,6 +171,7 @@ export function PrimerDesignPanel({ isFullView }: Props) {
     blastSetupMessage,
     blastWarning,
     blastTool,
+    buildFastaLocal,
     buildBlastDbFromFasta,
     handlePickBlast,
     selectBlastDb,
@@ -666,6 +667,9 @@ export function PrimerDesignPanel({ isFullView }: Props) {
   const modeLabel = primer.mode === 'standard' ? 'Standard PCR' : primer.mode === 'dafc' ? '3C' : '4C';
   const blastDbName = primer.configBlastDb ? primer.configBlastDb.split('/').pop() : null;
   const hasFastaReady = hasFasta || !!primer.configFasta;
+  // Build needs a local genome FASTA: loaded plasmid maps alone count as "FASTA ready" for design (they are
+  // designed on from memory and checked against the chosen database) but give Build nothing to build from.
+  const canBuildBlastDb = buildFastaLocal === undefined ? hasFastaReady : !!buildFastaLocal;
   // Without a database the banner offers Browse (and Build once a FASTA is loaded).
   const needsBlastSetup = !primer.configBlastDb;
   const targetSummary = primer.mode === 'dafc'
@@ -719,7 +723,7 @@ export function PrimerDesignPanel({ isFullView }: Props) {
                 <button type="button" onClick={handlePickBlast} className="text-rose-700 hover:underline dark:text-rose-300" title="Choose a different local BLAST database">
                   change
                 </button>
-                {hasFastaReady && (
+                {canBuildBlastDb && (
                   <button
                     type="button"
                     onClick={() => buildBlastDbFromFasta(true)}
@@ -788,9 +792,13 @@ export function PrimerDesignPanel({ isFullView }: Props) {
         ) : needsBlastSetup || (blastSetupMessage && !primer.configBlastDb) ? (
           <div className="flex flex-wrap items-center gap-2 rounded border border-rose-200 bg-rose-50 px-2 py-1.5 dark:border-rose-900/40 dark:bg-rose-950/20 flex-shrink-0">
             <span className="min-w-[12rem] text-[11px] text-rose-700 dark:text-rose-300 flex-1 leading-snug">
-              {blastSetupMessage || (hasFastaReady ? 'No BLAST DB selected. Build one from the loaded FASTA or browse to an existing DB before designing primers.' : 'No BLAST DB selected. Browse to an existing DB, or load a FASTA to build one.')}
+              {blastSetupMessage || (canBuildBlastDb
+                ? 'No BLAST DB selected. Build one from the loaded FASTA or browse to an existing DB before designing primers.'
+                : hasFastaReady
+                  ? "No BLAST DB selected. Browse to your genome's BLAST database (for example dm6): primers on a plasmid map are checked against it for off-target binding. No database of the plasmid is needed."
+                  : 'No BLAST DB selected. Browse to an existing DB, or load a FASTA to build one.')}
             </span>
-            {hasFastaReady && (
+            {canBuildBlastDb && (
               <AnalysisButton
                 theme="rose"
                 variant="soft"

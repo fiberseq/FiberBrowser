@@ -1,4 +1,8 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { onScreenStateKeys } from '../../utils/exportReadScopes';
+import { foldedInShownGraph } from '../../stores/graphMembership';
+import { qnameOfId, recordKey } from '../../utils/recordKeys';
+import { clusterAssignmentForRead } from '../tracks/read-track/readFilter';
 import { useShallow } from 'zustand/react/shallow';
 import { useBrowserStore } from '../../stores/browserStore';
 import { fetchReadStats, type ReadStatsRegion, type ReadStatsResponse } from '../../api/readStats';
@@ -14,7 +18,7 @@ import { TableTab } from './read-stats/TableTab';
 import type { ReadStatsDisplayRow } from './read-stats/types';
 import { useAnalysisSettingsKey } from '../../hooks/useAnalysisSettingsKey';
 import {
-  capRequest, clusterOfScope, idsForScope, MAX_READ_STATS_READS, scopeOptions, summarizeByCluster,
+  capRequest, clusterOfScope, idsForScope, MAX_READ_STATS_READS, readStatsMissingCount, scopeOptions, summarizeByCluster,
   type ReadStatsScope,
 } from '../../utils/readStatsScope';
 import { ReadStatsScopePicker } from './read-stats/ReadStatsScopePicker';
@@ -104,9 +108,15 @@ export function ReadStatsPanel({ isFullView }: Props) {
   // from before are hidden at once, and fetched again once the server has the
   // new settings (the quality sync bumps refreshGeneration when it lands).
   const baseAnalysisSettingsKey = useAnalysisSettingsKey();
-  // Min footprints is sent with the request (the reads it hid, by reason, are in the summary).
+  // Min footprints, the duplicate / QC-fail toggles and the footprint-quality gate are sent with the request
+  // (the reads they hid, by filter, are in the summary): a change fetches again even when the reads shown
+  // stay the same.
   const minFootprints = useBrowserStore(s => s.minFootprints);
-  const analysisSettingsKey = `${baseAnalysisSettingsKey}|minfp:${minFootprints}`;
+  const showDuplicateReads = useBrowserStore(s => Boolean(s.showDuplicateReads));
+  const showQcFailReads = useBrowserStore(s => Boolean(s.showQcFailReads));
+  const minFpQuality = useBrowserStore(s => s.minFpQuality || 0);
+  const analysisSettingsKey = `${baseAnalysisSettingsKey}|minfp:${minFootprints}|dup:${Number(showDuplicateReads)}`
+    + `|qcfail:${Number(showQcFailReads)}|fpq:${minFpQuality}`;
   const stateKeyToDatasetId = useMemo(() => {
     const map: Record<string, string> = {};
     for (const p of panels) {
@@ -126,21 +136,20 @@ export function ReadStatsPanel({ isFullView }: Props) {
   // minimized, not in a collapsed row, not behind a maximized dataset panel.
   const collapsedRows = useBrowserStore(s => s.collapsedRows);
   const fullViewPanelId = useBrowserStore(s => s.fullViewPanelId);
-  const panelStateKeys = useMemo(() => {
-    const datasetPanels = panels.filter(p => p.contentType === 'dataset' && p.datasetId);
-    const maximized = datasetPanels.find(p => p.id === fullViewPanelId);
-    const onScreen = maximized
-      ? [maximized]
-      : datasetPanels.filter(p => !p.collapsed && !collapsedRows.has(p.layoutRow ?? 0));
-    return [...new Set(onScreen.map(p => p.stateKey ?? p.datasetId!))];
-  }, [panels, collapsedRows, fullViewPanelId]);
+  // (A member folded into a shown graph is on screen: its reads are in the host's band, at the host's locus.)
+  const panelStateKeys = useMemo(() => onScreenStateKeys({ panels, collapsedRows, fullViewPanelId } as never),
+    [panels, collapsedRows, fullViewPanelId]);
+  const locusPanel = useCallback((sk: string) => {
+    const own = panels.find(p => p.contentType === 'dataset' && (p.stateKey ?? p.datasetId) === sk);
+    return own?.collapsed ? foldedInShownGraph(own, panels) ?? own : own;
+  }, [panels]);
   // Panels of one dataset at one locus show the same reads.
   const identityOf = useCallback((sk: string) => {
-    const panel = panels.find(p => p.contentType === 'dataset' && (p.stateKey ?? p.datasetId) === sk);
+    const panel = locusPanel(sk);
     const v = panel?.viewportOverride;
     const at = v && (v.chrom !== chrom || v.start !== start || v.end !== end) ? `${v.chrom}:${v.start}-${v.end}` : 'main';
     return `${stateKeyToDatasetId[sk] || sk}@${at}`;
-  }, [panels, stateKeyToDatasetId, chrom, start, end]);
+  }, [locusPanel, stateKeyToDatasetId, chrom, start, end]);
 
   // The selection per panel, in the panel's read order.
   const selectedByKey = useMemo(() => {
@@ -183,13 +192,15 @@ export function ReadStatsPanel({ isFullView }: Props) {
   // Reads are looked up where they are shown: the main view's go in the
   // request, each panel at another locus adds its own region. Panels showing
   // the same reads are merged first, then the request is capped.
+  // Lifted datasets (linear or graph rows) are described too (graph features): footprints and marks from their lifted
+  // rows, alignment fields from each record's own source record (its bounds on the sample's assembly).
   const scoped = useMemo(() => {
     const result: Record<string, string[]> = {};
     const regions = new Map<string, ReadStatsRegion>();
     for (const [sk, orderedIds] of Object.entries(scopeIds)) {
       if (orderedIds.length === 0) continue;
       const dsId = stateKeyToDatasetId[sk] || sk;
-      const panel = panels.find(p => p.contentType === 'dataset' && (p.stateKey ?? p.datasetId) === sk);
+      const panel = locusPanel(sk);
       const v = panel?.viewportOverride;
       const elsewhere = v && (v.chrom !== chrom || v.start !== start || v.end !== end) ? v : null;
       let target = result;
@@ -208,7 +219,7 @@ export function ReadStatsPanel({ isFullView }: Props) {
       appendUniqueReadIds(target[dsId], orderedIds);
     }
     return capRequest(result, [...regions.values()]);
-  }, [scopeIds, stateKeyToDatasetId, panels, chrom, start, end]);
+  }, [scopeIds, stateKeyToDatasetId, locusPanel, chrom, start, end]);
   const readIdsByDataset = scoped.main;
   const extraRegions = scoped.regions;
   const scopeTotal = scoped.total;
@@ -217,18 +228,29 @@ export function ReadStatsPanel({ isFullView }: Props) {
   // only when each dataset has one clustered panel on screen, so a read's
   // cluster is not ambiguous between panel copies clustered on their own.
   const clusteredKeyByDataset = useMemo(() => {
-    const out = new Map<string, string>();
+    const out = new Map<string, string[]>();
     for (const sk of panelStateKeys) {
       if (!Object.keys(clusterAssignments[sk] ?? {}).length) continue;
       const ds = stateKeyToDatasetId[sk] || sk;
-      if (out.has(ds)) return null;
-      out.set(ds, sk);
+      out.set(ds, [...(out.get(ds) ?? []), sk]);
+    }
+    // Several clustered panels of one dataset: only its haplotype panels (MAT, PAT: disjoint reads; graph features
+    // review), never copies clustered on their own, where a read's cluster would be ambiguous.
+    const hapOf = (sk: string) => panels.find(p => (p.stateKey ?? p.datasetId) === sk)?.liftHap ?? null;
+    for (const keys of out.values()) {
+      const haps = keys.map(hapOf);
+      if (keys.length > 1 && (haps.some(h => !h) || new Set(haps).size < haps.length)) return null;
     }
     return out;
-  }, [panelStateKeys, clusterAssignments, stateKeyToDatasetId]);
+  }, [panelStateKeys, clusterAssignments, stateKeyToDatasetId, panels]);
   const clusterOf = useCallback((datasetId: string, readId: string) => {
-    const sk = clusteredKeyByDataset?.get(datasetId);
-    return sk ? clusterAssignments[sk]?.[readId] : undefined;
+    // By identity: a lifted read's label may be under its record key (a graph run).
+    const asRead = recordKey(readId) ? { id: qnameOfId(readId), analysis_id: readId, live_lift: true } : readId;
+    for (const sk of clusteredKeyByDataset?.get(datasetId) ?? []) {
+      const c = clusterAssignmentForRead(clusterAssignments[sk] ?? {}, asRead);
+      if (c !== undefined) return c;
+    }
+    return undefined;
   }, [clusteredKeyByDataset, clusterAssignments]);
 
   const requestedReadOrder = useMemo(() => {
@@ -362,7 +384,12 @@ export function ReadStatsPanel({ isFullView }: Props) {
 
   const readStatsTsvRows = useCallback(() => {
     if (!result) return;
-    const cols = ['read_id', 'dataset_id', 'aligned_span', 'footprint_count', 'avg_footprint_size', 'accessibility_pct', 'methyl_count', 'methyl_pct', 'mapq', 'strand', 'viewer_order', 'call_status'];
+    const base = ['read_id', 'dataset_id', 'aligned_span', 'footprint_count', 'avg_footprint_size', 'accessibility_pct', 'methyl_count', 'methyl_pct', 'mapq', 'strand', 'call_status'];
+    // The nucleosome columns when any read has them (molecule scalars of the nuc module).
+    const nuc = ['nrl', 'regularity', 'gap_cv', 'lambda_acc', 'n_short', 'n_mono', 'n_multi', 'n_cant_tell', 'reg_fraction',
+      'disordered_fraction', 'undetermined_fraction', 'n_missing'];
+    const hasNuc = sortedRows.some(r => nuc.some(c => (r as unknown as Record<string, unknown>)[c] != null));
+    const cols = [...base, ...(hasNuc ? nuc : []), 'viewer_order'];
     return [
       cols,
       ...sortedRows.map(r =>
@@ -486,7 +513,11 @@ export function ReadStatsPanel({ isFullView }: Props) {
     + extraRegions.reduce((n, r) => n + Object.keys(r.read_ids_by_dataset).filter(d => !(d in readIdsByDataset)).length, 0);
   const groupNoun = scope === 'selection' ? 'selected reads' : scope === 'shown' ? 'reads shown' : `reads in ${scopeOption.label}`;
   const foundCount = result?.found_count ?? result?.per_read.length ?? 0;
-  const missingCount = result ? Math.max(0, requestedCount - foundCount) : 0;
+  // Not found: the reads the server says are missing. Reads a read filter hid (uncalled, Min footprints, QC-fail,
+  // duplicates) are not listed either, but the summary counts them as hidden, by reason.
+  const missingCount = !result ? 0 : result.missing_read_ids_by_dataset
+    ? readStatsMissingCount(result.missing_read_ids_by_dataset)
+    : Math.max(0, requestedCount - foundCount);
   // One line under the title: which dataset (and panels) the reads are
   // from, plus how many were not found, only when some were not.
   const sourceKeys = Object.keys(scopeIds).filter(sk => scopeIds[sk]?.length);
@@ -640,6 +671,8 @@ export function ReadStatsPanel({ isFullView }: Props) {
             isBam={result.is_bam}
             width={containerWidth}
             narrow={narrow}
+            scopeText={`${scopeOption.label.toLowerCase()}: ${Math.min(scopeTotal, MAX_READ_STATS_READS).toLocaleString()} reads${scoped.truncated ? ` (the first of ${scopeTotal.toLocaleString()})` : ''}`}
+            locus={{ chrom, start, end, genome: null }}
           />
         )}
       </AnalysisPanelShell>

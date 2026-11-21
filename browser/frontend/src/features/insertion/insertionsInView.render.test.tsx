@@ -33,7 +33,7 @@ describe('insertions in view requests', () => {
     root = createRoot(container);
     useBrowserStore.setState({
       chrom: 'chr1', start: 10_000, end: 20_000,
-      datasets: [{ id: 'bam1', data_type: 'bam' }], readTrackStatus: {},
+      datasets: [{ id: 'bam1', data_type: 'bam', signal_tags: true }], readTrackStatus: {},
       signalFilters: {},
     } as any);
   });

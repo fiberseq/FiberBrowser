@@ -13,6 +13,10 @@ import pytest
 
 from conftest import auth_headers
 
+# These synthetic reads carry no footprint calls: the tests ask for all reads ("All reads, including uncalled").
+pytestmark = pytest.mark.usefixtures("all_reads_including_uncalled")
+
+
 # A dm6 DddB amplicon BAM (integration tier only): FIBERBROWSER_TEST_DM6_BAM.
 _DM6_BAM = os.environ.get("FIBERBROWSER_TEST_DM6_BAM", "").strip()
 DM6_AMPLICONS = Path(_DM6_BAM) if _DM6_BAM else Path("/nonexistent")
@@ -505,7 +509,9 @@ def test_a_targeted_dataset_is_found_from_its_index(workspace, tmp_path, monkeyp
     state.add_dataset("cap", str(bam), "cap")
 
     def no_full_scan(*a, **k):
-        if k.get("read_cap") != rd.PRECHECK_READS:
+        # The first sample, and each index region's bounded check (at most min_reads reads inside it).
+        bounded_check = bool(k.get("read_cap")) and len(a) > 4 and a[3] is not None and a[4] is not None
+        if k.get("read_cap") != rd.PRECHECK_READS and not bounded_check:
             raise AssertionError("read every read")
         return real_scan(*a, **k)
     real_scan = rd._scan
@@ -587,3 +593,116 @@ def test_a_stretch_that_cannot_be_refined_is_still_a_region(workspace, tmp_path,
     assert body["method"] == "index" and len(body["regions"]) == 1, body
     r = body["regions"][0]
     assert r["start"] % bip.WINDOW_BP == 0 and abs(r["start"] - 1_300_000) < 3 * bip.WINDOW_BP and r["reads"] > 100
+
+
+def test_regions_follow_the_duplicate_and_qcfail_toggles(workspace, tmp_path):
+    """3.1.0 audit: the scan applied the uncalled rule but not the read policy, so duplicate and QC-fail
+    reads (QC-fail ones even uncalled: exempt from that rule) were counted with both toggles off. They are
+    hidden unless shown, as on the read track, and each setting is its own cache entry."""
+    from array import array
+    client, state = workspace
+    bam = _load(state, tmp_path)
+    flagged = str(tmp_path / "flagged.bam")
+    with pysam.AlignmentFile(str(bam)) as src, pysam.AlignmentFile(flagged, "wb", template=src) as out:
+        for i, read in enumerate(src.fetch()):
+            if 10_000 <= read.reference_start < 10_010 and i % 2:
+                read.is_duplicate = True            # called duplicates in amplicon B
+            elif 30_000 <= read.reference_start < 30_010 and i % 2:
+                read.is_qcfail = True               # uncalled QC-fail reads in amplicon C
+                out.write(read)
+                continue
+            read.set_tag("ns", array("I", [10]))
+            read.set_tag("nl", array("I", [50]))
+            out.write(read)
+    pysam.index(flagged)
+    state.add_dataset("flagged", flagged, "flagged")
+
+    def scan(**params):
+        body = client.get("/api/reads/regions", params={"dataset_id": "flagged", **params}).json()
+        assert body["success"] is True, body
+        return body["scanned_reads"], {r["start"] // 1000: r["reads"] for r in body["regions"]}
+
+    with pysam.AlignmentFile(flagged) as f:
+        n_dup = sum(r.is_duplicate for r in f.fetch())
+        n_qc = sum(r.is_qcfail for r in f.fetch())
+    assert n_dup and n_qc
+    off = scan()
+    assert off[0] == 182 - n_dup - n_qc
+    assert scan(include_duplicates="true")[0] == off[0] + n_dup
+    both = scan(include_duplicates="true", include_qcfail="true")
+    assert both[0] == 182
+    assert scan() == off    # back off: not the cached shown-reads answer
+
+
+def test_index_regions_hold_reads_the_read_panel_shows(workspace, tmp_path, monkeypatch):
+    """3.1.0 re-check 2 (item 1): above PRECHECK_ABOVE, a dataset that is not amplicons takes its regions from
+    the BAM index, which counts every record: with "Hide background" on and every read background, the
+    filtered precheck found nothing but the index published the region anyway. A region is now published only
+    when it holds at least the floor of reads the read panel shows."""
+    import json
+    from array import array
+    from types import SimpleNamespace
+    import services.region_detect as rd
+    client, state = workspace
+    _load(state, tmp_path)
+    monkeypatch.setattr(rd, "PRECHECK_ABOVE", 50)
+    monkeypatch.setattr(rd, "PRECHECK_READS", 20)
+    path = str(tmp_path / "bg.bam")
+    header = {"HD": {"VN": "1.6", "SO": "coordinate"}, "SQ": [{"SN": "chr2L", "LN": 50_000}, {"SN": "chr3R", "LN": 20_000}],
+              "CO": ["FIBERHMM-SIGNAL:v1:" + json.dumps(dict(tag_schema=5))]}
+    with pysam.AlignmentFile(path, "wb", header=header) as out:
+        for i in range(120):    # a tiling stretch (not amplicons) of called background reads
+            seg = pysam.AlignedSegment(out.header)
+            seg.query_name, seg.reference_id, seg.reference_start = f"b{i}", 0, 20_000 + 40 * i
+            seg.cigartuples = [(0, 500)]
+            seg.query_sequence = "A" * 500
+            seg.mapping_quality = 60
+            seg.set_tag("ns", array("I", [10]))
+            seg.set_tag("nl", array("I", [60]))
+            seg.set_tag("bg", 1, value_type="i")
+            out.write(seg)
+    pysam.index(path)
+    state.add_dataset("bg", path, "bg")
+    # The index's view of it: a targeted dataset with one dense stretch of 120 reads.
+    monkeypatch.setattr(rd, "_index_regions", lambda contigs, max_regions: (
+        SimpleNamespace(targeted=True), [("chr2L", 20_000, 25_300, 120, 12.0)]))
+    shown = client.get("/api/reads/regions", params={"dataset_id": "bg"}).json()
+    assert shown["method"] == "index" and len(shown["regions"]) == 1, shown
+    hidden = client.get("/api/reads/regions", params={"dataset_id": "bg",
+                                                      "signal_filters": json.dumps({"hideBackground": True})}).json()
+    assert hidden["success"] is True and hidden["regions"] == [], hidden
+
+
+def test_an_index_region_cut_by_the_record_cap_is_unchecked_not_empty(workspace, tmp_path, monkeypatch):
+    """Release first look 3.1.0: a validation scan stopped by the record cap (not the deadline) before finding the
+    floor of shown reads dropped the region as empty and cached a complete answer. It is now left out as unchecked,
+    the answer is partial, and the note says so."""
+    import json
+    from array import array
+    from types import SimpleNamespace
+    import services.region_detect as rd
+    client, state = workspace
+    _load(state, tmp_path)
+    monkeypatch.setattr(rd, "PRECHECK_ABOVE", 50)
+    monkeypatch.setattr(rd, "PRECHECK_READS", 20)
+    monkeypatch.setattr(rd, "SCAN_RECORD_CAP", 5)     # stops after 5 records, long before the deadline
+    path = str(tmp_path / "capped.bam")
+    header = {"HD": {"VN": "1.6", "SO": "coordinate"}, "SQ": [{"SN": "chr2L", "LN": 50_000}, {"SN": "chr3R", "LN": 20_000}]}
+    with pysam.AlignmentFile(path, "wb", header=header) as out:
+        for i in range(120):
+            seg = pysam.AlignedSegment(out.header)
+            seg.query_name, seg.reference_id, seg.reference_start = f"c{i}", 0, 20_000 + 40 * i
+            seg.cigartuples = [(0, 500)]
+            seg.query_sequence = "A" * 500
+            seg.mapping_quality = 60
+            seg.flag = 0x100 if i < 60 else 0          # secondary records first: never shown
+            seg.set_tag("ns", array("I", [10]))
+            seg.set_tag("nl", array("I", [60]))
+            out.write(seg)
+    pysam.index(path)
+    state.add_dataset("capped", path, "capped")
+    monkeypatch.setattr(rd, "_index_regions", lambda contigs, max_regions: (
+        SimpleNamespace(targeted=True), [("chr2L", 20_000, 25_300, 120, 12.0)]))
+    out = client.get("/api/reads/regions", params={"dataset_id": "capped"}).json()
+    assert out["success"] is True and out["regions"] == [] and out["partial"] is True, out
+    assert "could not be checked" in out["note"], out

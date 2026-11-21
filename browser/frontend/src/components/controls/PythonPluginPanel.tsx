@@ -10,8 +10,13 @@ import { VPlotChart } from '../charts/VPlotChart';
 import { AnalysisButton, AnalysisPanelHeader, AnalysisPanelShell, AnalysisRunSummary, AnalysisStatus } from './shared';
 import { ChartSaveButton } from '../charts/ChartSaveButton';
 import { downloadTextFile, exportTimestamp, formatTsv } from '../../utils/analysisExport';
+import { createContext, useContext } from 'react';
+import { openSuppliedPlot, type SuppliedInput } from '../../features/plots/supplied';
 
-interface PluginChartResponse {
+const PluginContext = createContext<{ plugin: string; chrom: string; start: number; end: number } | null>(null);
+const usePluginContext = () => useContext(PluginContext);
+
+export interface PluginChartResponse {
   chart_type: string;
   title?: string;
   error?: string;
@@ -161,13 +166,71 @@ export function PythonPluginPanel({ isFullView, apiPrefix }: Props) {
             No plugin data returned for this viewport.
           </AnalysisStatus>
         )}
-        {data && <ChartRenderer data={data} width={chartWidth} height={isFullView ? 300 : 180} />}
+        {data && (
+          <PluginContext.Provider value={{ plugin: (apiPrefix ?? 'plugin').split('/').filter(Boolean).pop() ?? 'plugin', chrom, start, end }}>
+            <ChartRenderer data={data} width={chartWidth} height={isFullView ? 300 : 180} />
+          </PluginContext.Provider>
+        )}
       </AnalysisPanelShell>
     </div>
   );
 }
 
+/** A plugin chart as supplied series / matrices for Plots (histogram, profile, heatmap, V-plot); null for the types Plots
+ *  does not draw (donut, table, image, scatter), which stay in this panel. Existing plugin JSON needs no new fields. */
+export function pluginChartToSupplied(data: PluginChartResponse, ctx: { plugin: string; chrom: string; start: number; end: number }): SuppliedInput | null {
+  const name = data.title || `${ctx.plugin} ${data.chart_type}`;
+  const locus = { chrom: ctx.chrom, start: ctx.start, end: ctx.end, genome: null };
+  const origin = `${ctx.plugin} plugin`;
+  const measures = `as the ${ctx.plugin} plugin computed it for ${ctx.chrom}:${(ctx.start + 1).toLocaleString('en-US')}–${ctx.end.toLocaleString('en-US')}`;
+  const ticks = (labels: string[]): [string, string, string] | undefined => (labels.length ? [labels[0], labels[Math.floor((labels.length - 1) / 2)], labels[labels.length - 1]] : undefined);
+  if (data.chart_type === 'histogram' && data.groups?.length) {
+    const ids = [...new Set(data.groups.flatMap(g => g.bars.map(b => b.label)))];
+    const labels = data.groups.map(g => g.label);
+    return { type: 'size-histogram', name, datasets: [], locus,
+      spec: { origin, x0: 0, dx: 1, xLabel: '', yLabel: data.y_label || '', xTicks: ticks(labels), measures },
+      series: ids.map(id => ({ id, title: id, color: data.groups!.flatMap(g => g.bars).find(b => b.label === id)?.color,
+        values: data.groups!.map(g => { const b = g.bars.find(x => x.label === id); return b && Number.isFinite(b.value) ? b.value : null; }) })) };
+  }
+  if (data.chart_type === 'profile' && data.series?.length) {
+    const n = Math.max(1, ...data.series.map(sr => sr.data.length));
+    return { type: 'metaprofile', name, datasets: [], locus,
+      spec: { origin, x0: ctx.start, dx: (ctx.end - ctx.start) / n, xLabel: 'position', yLabel: data.y_label || '', measures },
+      series: data.series.map((sr, i) => ({ id: `${i}:${sr.label}`, title: sr.label, color: sr.color, values: sr.data.map(v => (Number.isFinite(v) ? v : null)) })) };
+  }
+  if ((data.chart_type === 'heatmap' || data.chart_type === 'vplot') && data.matrix?.length) {
+    const vplot = data.chart_type === 'vplot';
+    const sizeMin = data.size_min || 10, sizeBin = data.size_bin || 10, posBin = data.pos_bin || 10;
+    const rows = data.matrix.map((r, i) => ({ label: vplot ? String(sizeMin + i * sizeBin) : data.row_labels?.[i] ?? String(i), values: r.map(v => (Number.isFinite(v) ? v : null)) }));
+    return { type: vplot ? 'vplot' : 'heatmap', name, datasets: [], locus, series: [],
+      spec: { origin, x0: 0, dx: vplot ? posBin : 1, xLabel: vplot ? 'position (bp)' : '', yLabel: vplot ? 'footprint size (bp)' : '', measures,
+        ...(!vplot && data.col_labels?.length ? { xTicks: ticks(data.col_labels) } : {}),
+        matrix: { kind: vplot ? 'vplot' : 'heatmap', x0: 0, dx: vplot ? posBin : 1, valueLabel: 'value (0–1)' } },
+      matrices: [{ id: 'plugin', title: name, rows }] };
+  }
+  return null;
+}
+
+function OpenPluginInPlots({ data }: { data: PluginChartResponse }) {
+  const ctx = usePluginContext();
+  const input = ctx ? pluginChartToSupplied(data, ctx) : null;
+  if (!input) return null;
+  return (
+    <div className="mt-1 flex justify-end">
+      <button type="button" data-testid="plugin-open-in-plots" className="rounded border border-gray-200 px-1.5 py-0.5 text-[10px] text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300"
+        title="Open in Plots: this chart's values exactly (the Gallery, export; Compare between series for lines)." onClick={() => openSuppliedPlot(input)}>Open in Plots</button>
+    </div>
+  );
+}
+
 function ChartRenderer({ data, width, height }: { data: PluginChartResponse; width: number; height: number }) {
+  return <>
+    <ChartBody data={data} width={width} height={height} />
+    {data.chart_type !== 'multi' && <OpenPluginInPlots data={data} />}
+  </>;
+}
+
+function ChartBody({ data, width, height }: { data: PluginChartResponse; width: number; height: number }) {
   switch (data.chart_type) {
     case 'histogram':
       return data.groups ? (

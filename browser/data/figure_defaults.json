@@ -390,9 +390,41 @@
       "color": "#e11d48",
       "label": "GA strand"
     },
+    "fpcls": {
+      "color": "#7c3aed",
+      "label": "Scan · classes"
+    },
+    "nfrmol": {
+      "color": "#64748b",
+      "label": "Scan · NFR scalars"
+    },
+    "nfrvar": {
+      "color": "#0f766e",
+      "label": "Scan · NFR variants"
+    },
     "nuc_cr_split": {
       "color": "#14b8a6",
       "label": "CR · split alternatives"
+    },
+    "nucmol": {
+      "color": "#64748b",
+      "label": "Scan · nuc scalars"
+    },
+    "nucpatch": {
+      "color": "#c8323c",
+      "label": "Scan · regularity patches"
+    },
+    "nucreg": {
+      "color": "#2c8ca0",
+      "label": "Scan · regularity"
+    },
+    "nucseg": {
+      "color": "#15803d",
+      "label": "Scan · arrays"
+    },
+    "nucsz": {
+      "color": "#16a34a",
+      "label": "Scan · nuc sizes"
     },
     "tf_cr_recalled": {
       "color": "#0d9488",
@@ -435,13 +467,21 @@
     "deam_opportunity",
     "fire",
     "footprint",
+    "fpcls",
     "m5c",
     "m6a",
     "mod",
     "msp",
+    "nfrmol",
+    "nfrvar",
     "nuc",
     "nuc_cr_split",
     "nuc_sr",
+    "nucmol",
+    "nucpatch",
+    "nucreg",
+    "nucseg",
+    "nucsz",
     "tf",
     "tf_consensus",
     "tf_cr",

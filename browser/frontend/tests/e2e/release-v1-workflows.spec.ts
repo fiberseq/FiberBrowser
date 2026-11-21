@@ -235,6 +235,8 @@ test.describe('1.0 workflows', () => {
     await page.getByTestId('cluster-run-button').click();
     await expect.poll(() => getState(page, s => Object.values(s.clusterAssignments).reduce((n: number, a: any) => n + Object.keys(a || {}).length, 0)), { timeout: 45_000 })
       .toBeGreaterThan(0);
+    // The preview comes first; the full-scope refinement can still replace it. Wait for the settled clustering.
+    await expect(page.getByTestId('analysis-progress').getByRole('button', { name: 'Stop refinement' })).toHaveCount(0, { timeout: 60_000 });
     await page.waitForTimeout(1600); // the clustering's history step settles
   }
   const clusterState = (page: Page) => getState(page, s => ({

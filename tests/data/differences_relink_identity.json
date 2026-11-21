@@ -1,0 +1,9 @@
+{
+  "historical": "library-a|synthetic|molecule|record-digest|2|primary",
+  "current": "lift-cohort:v1 [\"library-a|synthetic|molecule\",\"synthetic|molecule\",\"record-digest\",2,\"primary\"]",
+  "metadata": {
+    "producer": "live-lift:pre-P2c",
+    "folding": { "molecule": false, "orientation": false },
+    "records": [{ "rawName": "synthetic|molecule", "provenanceGroup": "library-a", "libraryId": "library-a", "recordId": "record-digest", "rowIndex": 2, "placement": "primary" }]
+  }
+}

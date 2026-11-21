@@ -911,6 +911,8 @@ export function FootprintAnalysisPanel({ isFullView }: Props) {
             </p>
           )}
 
+          {/* On a meta-locus the run is fiberhmm-consensus's pooled oriented-BED mode over the view (the server
+              routes a meta:<pool> request there); everything else is the ordinary panel. */}
           <ConsensusTools
             datasetIds={targetDatasetIds}
             peaks={selectedPeakRegions}

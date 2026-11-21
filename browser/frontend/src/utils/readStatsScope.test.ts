@@ -68,20 +68,15 @@ describe('Read Stats groups', () => {
     expect([row.n, row.meanAccessibility, row.meanFootprints, row.meanFootprintSize, row.meanModPct]).toEqual([2, 20, 4, 100, 2]);
   });
 
-  it('gives null (NA) means, not 0, for a cluster with no called read', () => {
+  it('gives NA (null) means for a cluster in which no read has footprint calls', () => {
     const rows = [
       { read_id: 'a', dataset_id: 'ds1', accessibility_pct: null, footprint_count: null, avg_footprint_size: null, methyl_pct: 4 },
-      { read_id: 'c', dataset_id: 'ds1', accessibility_pct: null, footprint_count: null, avg_footprint_size: null, methyl_pct: null },
+      { read_id: 'c', dataset_id: 'ds1', accessibility_pct: 100, footprint_count: 0, avg_footprint_size: 0, methyl_pct: null },
     ];
-    const [row] = summarizeByCluster(rows, (_ds, id) => assignments.ds1[id as 'a'], [1]);
-    expect([row.n, row.meanAccessibility, row.meanFootprints, row.meanFootprintSize, row.meanModPct]).toEqual([2, null, null, null, 4]);
-  });
-
-  it('keeps a called, fully accessible read in the means (100%, 0 footprints, size NA)', () => {
-    const rows = [
-      { read_id: 'a', dataset_id: 'ds1', accessibility_pct: 100, footprint_count: 0, avg_footprint_size: 0, methyl_pct: null },
-    ];
-    const [row] = summarizeByCluster(rows, (_ds, id) => assignments.ds1[id as 'a'], [1]);
-    expect([row.n, row.meanAccessibility, row.meanFootprints, row.meanFootprintSize]).toEqual([1, 100, 0, null]);
+    const clusters: Record<string, number> = { a: 1, c: 2 };
+    const out = summarizeByCluster(rows, (_ds, id) => clusters[id], [1, 2]);
+    expect([out[0].n, out[0].meanAccessibility, out[0].meanFootprints, out[0].meanFootprintSize, out[0].meanModPct]).toEqual([1, null, null, null, 4]);
+    // A called, fully accessible read: known 100% and no footprints.
+    expect([out[1].meanAccessibility, out[1].meanFootprints, out[1].meanFootprintSize]).toEqual([100, 0, null]);
   });
 });

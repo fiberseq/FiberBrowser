@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { useBrowserStore } from '../../../stores/browserStore';
 import { getLayerColor, getCanonicalLayerGroups, type LayerEntry } from '../../../utils/layerColors';
+import { useLayerColorVersion } from '../../../features/layerColours/state';
 
 /**
  * Reusable layer selector for analysis panels.
@@ -37,6 +38,8 @@ export function LayerSelector({
   title,
   showAllFpOption = false,
 }: LayerSelectorProps) {
+  // Re-render when the user's layer colours change (Labels → Layer colours).
+  const layerColorVersion = useLayerColorVersion();
   // Pull canonical layer list from datasets — same dedup + naming as
   // ViewSection (FP/Nuc collapsed, FIRE aliasing internal MSP, TF only when explicit, etc.).
   // If the caller passes availableLayers explicitly, build entries from those
@@ -53,7 +56,7 @@ export function LayerSelector({
       strandRescue: canonical.strandRescue.filter(e => allow.has(e.key)),
       derived: canonical.derived.filter(e => allow.has(e.key)),
     };
-  }, [datasets, availableLayers]);
+  }, [datasets, availableLayers, layerColorVersion]);
   const entries = useMemo(
     () => [...groups.standard, ...groups.tfInference, ...groups.strandRescue, ...groups.derived],
     [groups],

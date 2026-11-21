@@ -118,6 +118,8 @@ def prepare_cluster_sample(state, dataset_id, chrom, start, end, target, seed, *
                        for sq in bam.header.to_dict().get('SQ', [])):
                     circular = True
                     return
+                from services.graph_lift import lift_hidden_predicate
+                lift_hidden = lift_hidden_predicate(bam.header)
                 records = bam.fetch(actual, start, end)
                 try:
                     for index, read in enumerate(records):
@@ -125,6 +127,8 @@ def prepare_cluster_sample(state, dataset_id, chrom, start, end, target, seed, *
                             checkpoint()
                         if read.flag & (4 | 256 | 512 | 2048):
                             continue
+                        if lift_hidden is not None and lift_hidden(read):
+                            continue  # hidden by the read loaders: not a clustering candidate
                         if hide_uncalled and not read_has_footprint_calls(read):
                             continue
                         total += 1

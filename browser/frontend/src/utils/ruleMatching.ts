@@ -7,6 +7,7 @@ import type { ColorRule, Gene, FirePeak, QualityGate } from '../types';
 import type { OrthogonalTrack, OrthogonalTrackViewportData } from '../types/dataset';
 import { getRuleColorForSize } from './ruleColors';
 import { sameChrom } from './chromAliases';
+import { NUC_MARK_ITEM_LAYERS, NUC_Z_MISSING, effectiveLayerQualities, nucPatchOverlay, nucSizeIndex, nucSizeMarkFor, type NucSizeMark } from './nucLayers';
 
 /** Rules on one track can use different percentiles: each gets its own threshold. */
 export const trackThresholdKey = (trackId: string, percentile: number) => `${trackId}@${percentile}`;
@@ -349,19 +350,49 @@ export function qualityGatesPayload(gates: QualityGate[] | null | undefined): Qu
     .map(gate => ({ quality_name: gate.qualityName, min_value: Number(gate.minValue) || 0, max_value: gate.maxValue ?? null }));
 }
 
+/** Does the rule set any nucleosome condition (`nucCoarse`, `zMin`/`zMax`, `nucTf`)? Empty lists and
+ *  null bounds are no condition. */
+export function ruleHasNucConditions(rule: ColorRule): boolean {
+  return (rule.nucCoarse?.length ?? 0) > 0
+    || (rule.zMin != null && Number.isFinite(rule.zMin))
+    || (rule.zMax != null && Number.isFinite(rule.zMax))
+    || typeof rule.nucTf === 'boolean';
+}
+
+/** The rule's nucleosome conditions against an item's `nucsz` mark. No mark never matches. */
+export function nucMarkMatchesRule(rule: ColorRule, mark: NucSizeMark | null | undefined): boolean {
+  if (!mark) return false;
+  if ((rule.nucCoarse?.length ?? 0) > 0 && !rule.nucCoarse!.includes(mark.coarse & 15)) return false;
+  const zMin = rule.zMin != null && Number.isFinite(rule.zMin) ? rule.zMin : null;
+  const zMax = rule.zMax != null && Number.isFinite(rule.zMax) ? rule.zMax : null;
+  if (zMin !== null || zMax !== null) {
+    if (mark.z >= NUC_Z_MISSING) return false;
+    const z = (mark.z - 128) / 20;
+    if (zMin !== null && z < zMin) return false;
+    if (zMax !== null && z > zMax) return false;
+  }
+  if (typeof rule.nucTf === 'boolean' && ((mark.coarse & 16) !== 0) !== rule.nucTf) return false;
+  return true;
+}
+
 /** Check if a single footprint (region-relative coords) matches a rule's conditions.
  *
  *  `qualities` (optional) is a per-interval map `{ qualityName → byteValue }`
  *  built by the caller from `layer.quality_names` / `layer.qualities[qi][li]`.
  *  If the rule has `qualityGates` and no qualities are supplied, the rule
  *  skips — a gated rule cannot match a layer that doesn't expose the
- *  required quality dimension. */
+ *  required quality dimension.
+ *
+ *  `nucMark` (optional) is the item's `nucsz` mark, resolved by the caller
+ *  once per item (`nucSizeMarkFor`). A rule with nucleosome conditions never
+ *  matches an item without one. */
 export function footprintMatchesRule(
   intStart: number, intEnd: number, size: number,
   rule: ColorRule, ctx: RuleMatchContext,
   layerName?: string,
   qualities?: Record<string, number>,
   annotationName?: string,
+  nucMark?: NucSizeMark | null,
 ): boolean {
   if (!rule.enabled) return false;
   // Class-aware: if rule targets specific layers, skip if this footprint's layer doesn't match.
@@ -385,6 +416,10 @@ export function footprintMatchesRule(
       if (gate.maxValue != null && v > gate.maxValue) return false;
     }
   }
+
+  // Nucleosome conditions read the item's own mark, so they are checked
+  // before the match cache (shared by every read in view, keyed by span).
+  if (ruleHasNucConditions(rule) && !nucMarkMatchesRule(rule, nucMark)) return false;
 
   if (rule.conditions.length === 0) return true;
 
@@ -451,9 +486,10 @@ export function footprintMatchesRule(
 export function getMatchingRuleColor(
   intStart: number, intEnd: number, size: number,
   rules: ColorRule[], ctx: RuleMatchContext,
+  nucMark?: NucSizeMark | null,
 ): string | null {
   for (const rule of rules) {
-    if (footprintMatchesRule(intStart, intEnd, size, rule, ctx)) {
+    if (footprintMatchesRule(intStart, intEnd, size, rule, ctx, undefined, undefined, undefined, nucMark)) {
       return getRuleColorForSize(rule, size);
     }
   }
@@ -464,9 +500,10 @@ export function getMatchingRuleColor(
 export function getMatchingRuleId(
   intStart: number, intEnd: number, size: number,
   rules: ColorRule[], ctx: RuleMatchContext,
+  nucMark?: NucSizeMark | null,
 ): string | null {
   for (const rule of rules) {
-    if (footprintMatchesRule(intStart, intEnd, size, rule, ctx)) {
+    if (footprintMatchesRule(intStart, intEnd, size, rule, ctx, undefined, undefined, undefined, nucMark)) {
       return rule.id;
     }
   }
@@ -475,6 +512,7 @@ export function getMatchingRuleId(
 
 export interface CompactReadLike {
   id: string;
+  analysis_id?: string;
   intervals: [number, number, number][];  // [start, end, size]
   /** Per-layer calls (TF, nucleosome, FIRE...) on layered reads. */
   layers?: Record<string, {
@@ -488,11 +526,21 @@ export interface CompactReadLike {
 /** Does any footprint on this read match the rule? Reads the same places the
  * read canvas colours: top-level intervals, the TF layer for every rule, and
  * other layers only for rules that target them. */
-export function readMatchesRule(read: CompactReadLike, rule: ColorRule, ctx: RuleMatchContext): boolean {
+export function readMatchesRule(read: CompactReadLike, rule: ColorRule, ctx: RuleMatchContext, datasetId?: string | null): boolean {
+  let overlay: ReturnType<typeof nucPatchOverlay> | null = null;
+  const patchOverlay = () => (overlay === null ? (overlay = nucPatchOverlay(read.layers?.nucpatch, datasetId)) : overlay);
+  // Nucleosome conditions read each nuc/tf item's nucsz mark.
+  const nucIndex = ruleHasNucConditions(rule) ? nucSizeIndex(read.layers?.nucsz) : null;
+  // The item's molecular length tells overlapping clipped footprints apart (same displayed span).
+  const markFor = (layerName: string, intStart: number, intEnd: number, size?: number) => (
+    nucIndex && NUC_MARK_ITEM_LAYERS.has(layerName) ? nucSizeMarkFor(nucIndex, intStart, intEnd, size) : null
+  );
   // Top-level intervals are the primary 'footprint' layer, as the canvas names
   // them, so a rule targeting only other layers (e.g. TF) skips them.
   for (const [intStart, intEnd, size] of read.intervals) {
-    if (size > 0 && footprintMatchesRule(intStart, intEnd, size, rule, ctx, 'footprint')) return true;
+    if (size > 0 && footprintMatchesRule(
+      intStart, intEnd, size, rule, ctx, 'footprint', undefined, undefined, markFor('footprint', intStart, intEnd, size),
+    )) return true;
   }
   for (const [layerName, layer] of Object.entries(read.layers ?? {})) {
     const intervals = layer?.intervals;
@@ -505,13 +553,13 @@ export function readMatchesRule(read: CompactReadLike, rule: ColorRule, ctx: Rul
       if (size <= 0) continue;
       let qualities: Record<string, number> | undefined;
       if (needsQualities && layer?.quality_names && layer.qualities) {
-        qualities = {};
-        layer.quality_names.forEach((name, q) => {
-          const value = layer.qualities?.[q]?.[i];
-          if (value !== undefined) qualities![name] = value;
-        });
+        // a nucpatch item's geometry/root as the lane draws it (the label overlay when it applies to the row)
+        qualities = effectiveLayerQualities(layerName, layer, i, layerName === 'nucpatch' ? patchOverlay() : undefined);
       }
-      if (footprintMatchesRule(intStart, intEnd, size, rule, ctx, layerName, qualities, layer?.annotation_names?.[i])) {
+      if (footprintMatchesRule(
+        intStart, intEnd, size, rule, ctx, layerName, qualities, layer?.annotation_names?.[i],
+        markFor(layerName, intStart, intEnd, size),
+      )) {
         return true;
       }
     }
@@ -533,6 +581,8 @@ export function computePerClusterEnrichment(
   rules: ColorRule[],
   clusterAssignments: Record<string, number>,
   ctx: RuleMatchContext,
+  /** The dataset the reads were loaded for (their patch-label overlay). */
+  datasetId?: string | null,
 ): Map<string, Map<number, EnrichmentResult>> {
   const enabledRules = rules.filter(r => r.enabled);
   const result = new Map<string, Map<number, EnrichmentResult>>();
@@ -544,7 +594,7 @@ export function computePerClusterEnrichment(
 
   // Process each read
   for (const read of reads) {
-    const cluster = clusterAssignments[read.id];
+    const cluster = clusterAssignments[read.analysis_id ?? read.id];
     if (cluster === undefined) continue;
 
     // For each rule, check if ANY footprint in this read matches
@@ -556,7 +606,7 @@ export function computePerClusterEnrichment(
       const entry = clusterMap.get(cluster)!;
       entry.total++;
 
-      if (readMatchesRule(read, rule, ctx)) entry.matched++;
+      if (readMatchesRule(read, rule, ctx, datasetId)) entry.matched++;
     }
   }
 

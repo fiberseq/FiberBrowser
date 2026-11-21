@@ -52,6 +52,9 @@ export interface MatchedRegionInfo {
 }
 
 export interface FirePeak {
+  /** Stable hub identity; legacy index is dual-written for older builds. */
+  hitId?: string;
+  graph?: Record<string, unknown>;
   /** The accepted map used to call a pooled peak, before projecting its copies. */
   correspondenceId?: string;
   memberPanelId?: string;
@@ -108,6 +111,8 @@ export interface ClusterPreparationSample {
 }
 
 export interface ClusterResponse {
+  record_sources?: Record<string, { contig: string; hap: string }>;
+  cohort?: { records: number; supplementary_rows: number; folded: boolean; excluded_alt: number; alternative_rows: number; hap?: string | null; rows: number; scope?: string };
   assignments: Record<string, number>;
   cluster_counts: Record<number, number>;
   filtered_read_ids: string[];
@@ -218,12 +223,26 @@ export interface ColorRule {
   qualityGates?: QualityGate[];
   /** If true, match only layer intervals carrying a non-empty AN name. */
   requireAnnotationName?: boolean;
+  /**
+   * Nucleosome size conditions (native/nucleosome_panel/DESIGN.md §5.4, §7.1): a nuc/tf item matches through the
+   * read's `nucsz` mark for it (CONTRACTS §11.3). All set conditions must hold; an item without a mark never matches
+   * a rule that sets one.
+   * - `nucCoarse`: coarse codes (nucsz Q1 low 4 bits: 0 can't tell, 1 short, 2 mono, 3 long, 4 multi(2),
+   *   5 multi(3+), 6 edge-truncated); empty or absent: any.
+   * - `zMin` / `zMax`: the density-matched z range (Q4 = 20 z + 128; 255 = missing, which never matches).
+   * - `nucTf`: true only TF calls (or footprints overlapping one: Q1 bit 16), false only nucleosome calls.
+   */
+  nucCoarse?: number[];
+  zMin?: number | null;
+  zMax?: number | null;
+  nucTf?: boolean | null;
   enabled: boolean;
 }
 
 export const CLUSTER_RULE_MODE_PREFIX = 'cluster_rule:';
 
-export type ClusterFeatureRuleTermSource = 'layer' | 'label_rule' | 'footprint_group' | 'footprint_class' | 'transcription_state';
+export type ClusterFeatureRuleTermSource = 'layer' | 'label_rule' | 'footprint_group' | 'footprint_class' | 'transcription_state'
+  | 'molecule_metric' | 'feature_hub';
 export type TranscriptionStateRuleKind = 'pause' | 'pic' | 'elongating';
 
 export type AnalysisRulePeakScope = 'selectedPeaks' | 'allPeaks';
@@ -268,6 +287,13 @@ export interface ClusterFeatureRuleTerm {
   group?: FootprintGroup;
   /** Built-in Pol II state source, matching the Transcription panel definitions. */
   transcriptionState?: TranscriptionStateRuleKind;
+  /** `molecule_metric`: a per-molecule scalar ('nuc.nrl', 'nuc.regularity', 'nfr.openness', ...: the scan
+   * modules' scalar groups nucmol / nfrmol, browser/services/nuc/scalars.py). Missing values never pass. */
+  moleculeMetric?: string;
+  /** `feature_hub`: the hub hits the term reads per-read states at (a snapshot of the selection), and the state
+   * that counts ('1' member / open, '0' not; '.' never counts). */
+  hubHits?: Array<{ setId: string; hitId: string; chrom: string; start: number; end: number; label?: string }>;
+  hubState?: '1' | '0';
 }
 
 export interface ClusterFeatureRule {
@@ -290,7 +316,8 @@ export interface ClusterFeatureRuleSet {
   savedAt?: number;
 }
 
-export type AnalysisSortMetric = 'count' | 'occupancy' | 'rate' | 'accessibility';
+/** `value`: a molecule_metric term's scalar itself (missing values sort last and never pass a filter). */
+export type AnalysisSortMetric = 'count' | 'occupancy' | 'rate' | 'accessibility' | 'value';
 
 export interface AnalysisSortRule {
   id: string;
@@ -312,7 +339,8 @@ export interface AnalysisSortRuleSet {
 }
 
 export type AnalysisFilterMetric = AnalysisSortMetric;
-export type AnalysisFilterOperator = 'gt' | 'gte' | 'lt' | 'lte' | 'eq';
+/** `between`: threshold <= value <= thresholdMax (both inclusive). */
+export type AnalysisFilterOperator = 'gt' | 'gte' | 'lt' | 'lte' | 'eq' | 'between';
 
 export interface AnalysisFilterRule {
   id: string;
@@ -326,6 +354,10 @@ export interface AnalysisFilterRule {
   metric: AnalysisFilterMetric;
   operator: AnalysisFilterOperator;
   threshold: number;
+  /** The upper bound of `between`. */
+  thresholdMax?: number | null;
+  /** 'and': keep only reads that also pass the panel's current filter (rules combined with AND). */
+  combine?: 'replace' | 'and';
 }
 
 export interface AnalysisFilterRuleSet {
@@ -672,6 +704,8 @@ export interface FootprintGroup {
  * whose groups belong to one view). Plugin packs' sources add their own fields (ReadSubsetRule is augmented).
  */
 export interface ReadSubsetRule {
+  liftHap?: string;
+  svEvidenceLevels?: Record<string, 'confirmed' | 'putative' | 'conflicting' | 'ambiguous'>;
   /** patterns, frozen, or a plugin pack's split source (utils/splitPanels.ts registerSplitSourceKind). */
   kind: 'patterns' | 'frozen' | (string & {});
   /** The dataset whose reads the panel shows. */
@@ -742,6 +776,15 @@ export interface PanelConfig {
   haplotypeGroup?: string;       // Panels opened together by a haplotype comparison (closed together)
   haplotypeSide?: 1 | 2;         // Which view of a haplotype comparison this panel belongs to (View 1 = chrom1)
   strand?: 'CT' | 'GA';          // DAF-seq: show only this strand's reads (server-filtered)
+  /** Live lift: show only this haplotype's rows ('MAT'/'PAT'; server-filtered, a rule that follows the view). */
+  liftHap?: string;
+  /** Live lift: the panel's saved layout choice, independent of the dataset's default for newly opened panels. */
+  liftHaplotypeMode?: 'split' | 'pooled';
+  /** Opened with "Open in graph mode" (a per-dataset display preference saved with the session; features/graphPanel/openAsGraph). */
+  openAs?: 'graph';
+  /** Live lift: the haplotype panels one Split by haplotype made share this id (graph features): a graph host's split
+   * siblings are its group's, never another copy's. Absent on panels split before it existed (matched by dataset and view). */
+  liftSplitGroup?: string;
   siteLocked?: boolean;          // own-view panel that pans/zooms with the main view and other locked panels (stores/siteLock.ts)
   /** Its dataset is on another assembly with a reference of its own (its key: `dm6`, `fasta:…`, `contigs:…`); always navigates on its own. */
   genome?: string;

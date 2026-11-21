@@ -88,7 +88,7 @@ def compute_metaprofile(reads: list, view_width: float, rules: list, rctx: Optio
             _add_points(point_layers.setdefault("deam", np.zeros(RESOLUTION)),
                         [d[0] for d in read["deam"]], view_width, bin_size)
 
-        # The read's span: its footprint/gap intervals, widened to every layer/FIRE interval it adds (ReadTrack).
+        # The read's span: its footprint/gap intervals, widened to every layer/FIRE interval it carries (ReadTrack).
         read_start, read_end = np.inf, -np.inf
         intervals = read.get("intervals") or []
         if intervals:

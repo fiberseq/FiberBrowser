@@ -807,17 +807,9 @@ def request_read_policy(body: Optional[dict] = None) -> tuple[bool, bool]:
     without footprint calls unless its "All reads, including uncalled" choice
     (``hide_uncalled=false`` or ``min_footprints=-1``, in the body or the query);
     QC-fail reads are hidden unless ``include_qcfail``."""
-    from services.signal_evidence import parse_hide_uncalled, request_hide_uncalled
+    from services.signal_evidence import body_hide_uncalled
     body = body or {}
-    hide = parse_hide_uncalled(body.get("hide_uncalled"))
-    if hide is None:
-        try:
-            hide = False if int(body.get("min_footprints") or 0) < 0 else None
-        except (TypeError, ValueError):
-            hide = None
-    if hide is None:
-        hide = request_hide_uncalled()
-    return bool(hide), bool(body.get("include_qcfail", False))
+    return body_hide_uncalled(body), bool(body.get("include_qcfail", False))
 
 
 def _call_layer_paths(dataset) -> list[str]:

@@ -63,7 +63,8 @@ describe('command palette registry', () => {
     const items = buildPaletteItems();
     for (const name of APP_COMMANDS) {
       const listed = items.some(item => item.id === `cmd:${name}`);
-      expect(listed, name).toBe(APP_COMMAND_INFO[name] !== null);
+      // An experimental command (its flag off by default: the full-window hub) is left out.
+      expect(listed, name).toBe(APP_COMMAND_INFO[name] !== null && (APP_COMMAND_INFO[name]?.available?.() ?? true));
     }
   });
 
@@ -89,7 +90,8 @@ describe('command palette registry', () => {
     expect(byId.get('cmd:scan-peaks')?.shortcut).toBe('S');
     expect(byId.get('cmd:toggle-genome-map')?.shortcut).toBe('G');
     expect(byId.get('cmd:next-region')?.shortcut).toBe('N');
-    expect(byId.get('cmd:previous-region')?.shortcut).toBe('P');
+    expect(byId.get('cmd:previous-region')?.shortcut).toBe('Shift+N');
+    expect(byId.get('cmd:open-plots')?.shortcut).toBe('P');
     expect(byId.get('cmd:undo')?.shortcut).toMatch(/\+Z$/);
     // Every command a shortcut names exists.
     for (const shortcut of KEYBOARD_SHORTCUTS) {

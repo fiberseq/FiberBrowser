@@ -47,8 +47,9 @@ async function open(page: Page, server: ServerFixture, kind: string) {
 }
 
 async function settled(page: Page, count = 5) {
-  await expect(page.locator('[data-read-track-dataset-id]')).toHaveCount(count);
-  await expect.poll(() => page.locator('[data-read-track-dataset-id]').evaluateAll(tracks =>
+  // Full view keeps the other panels mounted (hidden): count the read tracks shown.
+  await expect(page.locator('[data-read-track-dataset-id]:visible')).toHaveCount(count);
+  await expect.poll(() => page.locator('[data-read-track-dataset-id]:visible').evaluateAll(tracks =>
     tracks.every(t => t.getAttribute('data-read-track-loading') === 'false'
       && Number(t.getAttribute('data-read-track-render-count')) > 0)), { timeout: 60_000 }).toBe(true);
 }

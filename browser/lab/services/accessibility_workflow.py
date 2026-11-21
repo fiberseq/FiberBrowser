@@ -16,12 +16,11 @@ import tempfile
 import threading
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from services.consensus_progress import finish_progress, update_progress
 
-_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix='fiberhmm-accessibility')
+from services.scan.jobs import _EXECUTOR  # shared scan worker; legacy routes keep their job identities
 _INIT_LOCK = threading.Lock()
 SESSION_RUNS_SCHEMA = 'fiberbrowser.accessibility_runs.v1'
 EXPORT_FILES = ('variants.tsv', 'configurations.tsv', 'molecules.tsv.gz', 'coaccess.tsv', 'combos.tsv', 'manifest.json', 'result.json')
@@ -328,7 +327,18 @@ def submit(state, request):
             progress('nfr', 'Finding NFR variants')
             inputs = dict(browser_sources=snapshot, loader_parameters=loader_input, payload_source=job.get('payload_source'),
                           class_job=class_job)
-            result = acc.run_accessibility(payload, params, out, progress, classes=classes, inputs=inputs)
+            from services.scan.legacy_execution import native_inputs, run_prepared
+            scan_inputs, reason = native_inputs(state, request)
+            if scan_inputs:
+                result, execution_scan = run_prepared('nfr', scan_inputs, payload, params, out, progress,
+                    runner=acc.run_accessibility, loader_parameters=loader_input, classes=classes,
+                    inputs=inputs, cancel=job['_cancel'])
+                with lock:
+                    job.update(execution_engine='scan:nfr', execution_scan=execution_scan)
+            else:
+                with lock:
+                    job.update(execution_engine='legacy', execution_note=reason)
+                result = acc.run_accessibility(payload, params, out, progress, classes=classes, inputs=inputs)
             with lock:
                 if job['_cancel'].is_set():
                     raise AccessibilityCancelled('Cancelled before the result was installed')

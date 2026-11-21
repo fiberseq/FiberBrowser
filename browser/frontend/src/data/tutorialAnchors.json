@@ -202,7 +202,7 @@
    "reveal": {
     "expand": "reads-controls-expand"
    },
-   "description": "Pixels per read row (Cmd/Ctrl+scroll over the reads also changes it)."
+   "description": "Pixels per read row (Shift+scroll sizes rows in all panels together)."
   },
   {
    "id": "layer-toggles",
@@ -1265,26 +1265,6 @@
    "description": "Add a BigWig, BigBed or BED track by path, URL or upload."
   },
   {
-   "id": "coacc-matrix",
-   "label": "Co-accessibility matrix",
-   "selector": "[data-testid=\"coacc-matrix\"]",
-   "where": "Co-accessibility panel",
-   "reveal": {
-    "panel": "co-accessibility"
-   },
-   "description": "How often pairs of positions are open on the same molecule."
-  },
-  {
-   "id": "coacc-refresh",
-   "label": "Refresh co-accessibility",
-   "selector": "[data-testid=\"coacc-refresh-button\"]",
-   "where": "Co-accessibility panel",
-   "reveal": {
-    "panel": "co-accessibility"
-   },
-   "description": "Recompute the matrix for the current view."
-  },
-  {
    "id": "regions-add-view",
    "label": "Save view",
    "selector": "[data-tour=\"region-add-view\"]",
@@ -1752,90 +1732,6 @@
    },
    "description": "Where along the gene each read's Pol II sits (centre of mass), by cluster.",
    "needs": "has_selected_gene"
-  },
-  {
-   "id": "coacc-settings-toggle",
-   "label": "Co-accessibility Settings",
-   "selector": "[data-tour=\"coacc-settings-toggle\"]",
-   "where": "Co-accessibility panel",
-   "reveal": {
-    "panel": "co-accessibility"
-   },
-   "description": "Opens the signal, normalization, coverage and track-display settings."
-  },
-  {
-   "id": "coacc-signal",
-   "label": "Signal",
-   "selector": "[data-tour=\"coacc-signal\"]",
-   "where": "Co-accessibility > Settings",
-   "reveal": {
-    "panel": "co-accessibility",
-    "expand": "coacc-settings-toggle"
-   },
-   "description": "What is correlated between positions: accessibility, nucleosome, small footprint, linker or all footprints."
-  },
-  {
-   "id": "coacc-normalization",
-   "label": "Normalization",
-   "selector": "[data-tour=\"coacc-normalization\"]",
-   "where": "Co-accessibility > Settings",
-   "reveal": {
-    "panel": "co-accessibility",
-    "expand": "coacc-settings-toggle"
-   },
-   "description": "Raw co-occurrence, O/E against each position's marginal or against distance, or correlation."
-  },
-  {
-   "id": "coacc-min-coverage",
-   "label": "Min coverage",
-   "selector": "[data-tour=\"coacc-min-coverage\"]",
-   "where": "Co-accessibility > Settings",
-   "reveal": {
-    "panel": "co-accessibility",
-    "expand": "coacc-settings-toggle"
-   },
-   "description": "Cells with fewer reads than this are masked (grey)."
-  },
-  {
-   "id": "coacc-track-display",
-   "label": "Track Display",
-   "selector": "[data-tour=\"coacc-track-display\"]",
-   "where": "Co-accessibility > Settings",
-   "reveal": {
-    "panel": "co-accessibility",
-    "expand": "coacc-settings-toggle"
-   },
-   "description": "Draws the result under the reads as a Heatmap Strip, Arcs, or a Virtual 4C profile."
-  },
-  {
-   "id": "coacc-layer",
-   "label": "Layer chips",
-   "selector": "[data-tour=\"coacc-layer\"]",
-   "where": "Co-accessibility panel",
-   "reveal": {
-    "panel": "co-accessibility"
-   },
-   "description": "Which footprint layer the signal is read from."
-  },
-  {
-   "id": "coacc-metadata",
-   "label": "Reads / bins / coverage",
-   "selector": "[data-testid=\"coacc-metadata\"]",
-   "where": "Co-accessibility panel",
-   "reveal": {
-    "panel": "co-accessibility"
-   },
-   "description": "How many reads, the bin size, median coverage and how much of the matrix is masked."
-  },
-  {
-   "id": "coacc-export",
-   "label": "JSON (Co-accessibility)",
-   "selector": "[data-testid=\"coacc-export-json-button\"]",
-   "where": "Co-accessibility panel header",
-   "reveal": {
-    "panel": "co-accessibility"
-   },
-   "description": "Exports the matrix and its settings; TSV and Python sit next to it."
   },
   {
    "id": "annotations-types",
@@ -2787,6 +2683,119 @@
    "reveal": {},
    "description": "Drag (or arrow keys) to resize the drawer of side panels; double-click for the default width.",
    "shows_when": "side panels are pinned into the drawer and the drawer is open"
+  },
+  {
+   "id": "plots-workspace",
+   "label": "Plots",
+   "selector": "[data-testid=\"workspace-plots\"]",
+   "where": "right edge (icon strip, top)",
+   "reveal": {},
+   "description": "Open the Plots workspace (or press P): metaprofiles, footprint size enrichment, V-plots, size histograms, heatmaps over BED regions and co-accessibility, made from the reads in view; Keep saves a plot to the Gallery. Esc goes back to the reads."
+  },
+  {
+   "id": "coacc-matrix",
+   "label": "Co-accessibility matrix",
+   "selector": "[data-testid=\"plots-coacc-chart\"]",
+   "where": "Plots › Co-accessibility",
+   "reveal": {
+    "panel": "co-accessibility"
+   },
+   "description": "How often pairs of positions are open on the same molecule (a Plots type since 3.1)."
+  },
+  {
+   "id": "coacc-refresh",
+   "label": "Refresh co-accessibility",
+   "selector": "[data-testid=\"plots-coacc-refresh\"]",
+   "where": "Plots › Co-accessibility",
+   "reveal": {
+    "panel": "co-accessibility"
+   },
+   "description": "Recompute the matrix for the current view."
+  },
+  {
+   "id": "coacc-settings-toggle",
+   "label": "More options (co-accessibility settings)",
+   "selector": "[data-testid=\"plots-more-options\"]",
+   "where": "Plots › Co-accessibility",
+   "reveal": {
+    "panel": "co-accessibility"
+   },
+   "description": "Opens the signal, normalization, coverage, layer, scaling and track settings."
+  },
+  {
+   "id": "coacc-signal",
+   "label": "Signal",
+   "selector": "[data-testid=\"plots-coacc-signal\"]",
+   "where": "Plots › Co-accessibility › More options",
+   "reveal": {
+    "panel": "co-accessibility",
+    "expand": "coacc-settings-toggle"
+   },
+   "description": "What is correlated between positions: accessibility, nucleosome, small footprint, linker or all footprints."
+  },
+  {
+   "id": "coacc-normalization",
+   "label": "Normalization",
+   "selector": "[data-tour=\"coacc-normalization\"]",
+   "where": "Plots › Co-accessibility › More options",
+   "reveal": {
+    "panel": "co-accessibility",
+    "expand": "coacc-settings-toggle"
+   },
+   "description": "Raw co-occurrence, O/E against each position's marginal or against distance, or correlation."
+  },
+  {
+   "id": "coacc-min-coverage",
+   "label": "Min reads",
+   "selector": "[data-testid=\"plots-coacc-min\"]",
+   "where": "Plots › Co-accessibility › More options",
+   "reveal": {
+    "panel": "co-accessibility",
+    "expand": "coacc-settings-toggle"
+   },
+   "description": "Cells with fewer reads covering both positions are blank."
+  },
+  {
+   "id": "coacc-track-display",
+   "label": "Track",
+   "selector": "[data-testid=\"plots-coacc-track\"]",
+   "where": "Plots › Co-accessibility › More options",
+   "reveal": {
+    "panel": "co-accessibility",
+    "expand": "coacc-settings-toggle"
+   },
+   "description": "Draws the result under the reads as a heatmap strip, arcs, or a virtual 4C profile."
+  },
+  {
+   "id": "coacc-layer",
+   "label": "Layer",
+   "selector": "[data-testid=\"plots-coacc-layer\"]",
+   "where": "Plots › Co-accessibility › More options",
+   "reveal": {
+    "panel": "co-accessibility",
+    "expand": "coacc-settings-toggle"
+   },
+   "description": "Which footprint layer the signal is read from."
+  },
+  {
+   "id": "coacc-metadata",
+   "label": "Reads / bins / coverage",
+   "selector": "[data-testid=\"plots-coacc-summary\"]",
+   "where": "Plots › Co-accessibility",
+   "reveal": {
+    "panel": "co-accessibility"
+   },
+   "description": "How many reads, the bins, the coverage range and how much of the matrix is masked."
+  },
+  {
+   "id": "coacc-export",
+   "label": "JSON (Co-accessibility)",
+   "selector": "[data-testid=\"plots-coacc-export-json\"]",
+   "where": "Plots › Co-accessibility",
+   "reveal": {
+    "panel": "co-accessibility"
+   },
+   "description": "Exports the matrix and its settings; TSV and Python sit next to it."
   }
  ]
 }

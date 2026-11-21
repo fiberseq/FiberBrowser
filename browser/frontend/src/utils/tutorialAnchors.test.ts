@@ -16,7 +16,8 @@ function sourceFiles(dir: string): string[] {
 }
 
 // Components, and the panel registry (plugins) that names each panel's content type.
-const SOURCE = [...sourceFiles(join(SRC, 'components')), ...sourceFiles(join(SRC, 'plugins'))].map(f => readFileSync(f, 'utf8')).join('\n');
+// features/plots: Plots' own controls (co-accessibility moved there in 3.1).
+const SOURCE = [...sourceFiles(join(SRC, 'components')), ...sourceFiles(join(SRC, 'plugins')), ...sourceFiles(join(SRC, 'features/plots'))].map(f => readFileSync(f, 'utf8')).join('\n');
 const SOURCE_LOWER = SOURCE.toLowerCase();
 
 /** `${prefix}${expr}${suffix}` template attribute values in the components, e.g. `toolbar-group-${testId}`. */

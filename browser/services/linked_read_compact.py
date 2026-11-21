@@ -1,7 +1,6 @@
 """Compact read payload builders for DAF-C linked-region views."""
 from __future__ import annotations
 
-import random
 from typing import Callable, Dict, List, Optional
 
 from services.read_metrics import normalize_sample_seed, stable_seed_int
@@ -103,6 +102,14 @@ def compact_intervals_from_entry(
     ]
 
 
+def _entry_name(entry: Dict, i: int) -> str:
+    """A Micro-C entry's read name (its sampling identity), else its position."""
+    for k in ("read_id", "name", "id", "qname"):
+        if entry.get(k):
+            return str(entry[k])
+    return f"#{entry.get('start', 0)}:{entry.get('end', 0)}:{i}"
+
+
 def microc_compact_response(
     entries: List[Dict],
     ctx: Dict,
@@ -114,10 +121,13 @@ def microc_compact_response(
     if max_reads <= 0 or len(entries) <= max_reads:
         sampled_entries = entries
     else:
-        seed = stable_seed_int(sample_seed, "independent_compact", ctx["chrom"], ctx["start"], ctx["end"])
-        rng = random.Random(seed)
-        sampled_indices = sorted(rng.sample(range(len(entries)), max_reads))
-        sampled_entries = [entries[i] for i in sampled_indices]
+        # The stable sampling rule (3.1.0): smallest keys of (seed, dataset, read name), in the entries' order.
+        from services.stable_sample import lowest_k, seed_int, stable_key
+        s_int = seed_int(sample_seed)
+        ds = str(ctx.get("dataset_id") or "")
+        name = lambda i: str(_entry_name(entries[i], i))
+        keep = set(lowest_k(range(len(entries)), max_reads, key=lambda i: stable_key(s_int, ds, name(i)), ident=name))
+        sampled_entries = [e for i, e in enumerate(entries) if i in keep]
 
     compact_reads = []
     for entry in sampled_entries:
@@ -232,9 +242,12 @@ def sample_linked_reads(
         return valid_reads
 
     from services.read_pins import compact_read_id, with_pinned
-    seed = stable_seed_int(sample_seed, "linked_compact", session_id, regions["x_start"], regions["y_start"])
-    rng = random.Random(seed)
-    indices = sorted(rng.sample(range(len(valid_reads)), max_reads))
+    # The stable sampling rule (3.1.0): smallest keys of (seed, session, read name), in the reads' order.
+    from services.stable_sample import lowest_k, seed_int, stable_key
+    s_int = seed_int(sample_seed)
+    rid = lambda i: str(compact_read_id(valid_reads[i]) or i)
+    keep = set(lowest_k(range(len(valid_reads)), max_reads, key=lambda i: stable_key(s_int, str(session_id), rid(i)), ident=rid))
+    indices = [i for i in range(len(valid_reads)) if i in keep]
     # A molecule gone to by name stays in the sample (services/read_pins.py).
     return with_pinned([valid_reads[i] for i in indices], valid_reads, compact_read_id)
 

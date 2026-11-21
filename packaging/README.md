@@ -15,6 +15,19 @@ How FiberBrowser is distributed; users start at [docs/install.md](../docs/instal
 
 ## Release build
 
+**The tracked frontend build.** Every release artifact (the wheel, the Mac app, the WSL distribution) ships the
+committed `browser/frontend/dist`; nothing rebuilds it. Before tagging a release, rebuild it
+(`cd browser/frontend && npm ci && npm run build`) and commit it. `packaging/check_frontend_dist.py` fails when
+the dist is older than the frontend source (git history: a later commit to `src/`, `public/`, `index.html`, the
+package files or the build configs, or uncommitted source changes). The release workflows run it on `v*` tags,
+and `macos/build_app.sh` and `windows/build_wsl_distro.sh` run it before building this checkout
+(`FB_ALLOW_STALE_DIST=1` skips it, for a test build only). `FIBERBROWSER_RELEASE_CHECK=1 pytest
+tests/test_check_frontend_dist.py` runs the same check on this tree.
+
+- **3.1.0:** the dev line's tracked dist dates from 16 Oct 2026 (before the feature hub, Plots and the 3.1
+  cleanup). It must be rebuilt and committed for 3.1.0; e2e runs before that need a scratch build
+  (`FIBERBROWSER_FRONTEND_DIST`).
+
 The Mac app and WSL distribution build the same complete source tree, including
 NFRs and Synchronise regions. The build and update channel are `public`.
 `FB_FLAVOR=lab` is accepted by older build wrappers as an alias; it produces the
@@ -159,13 +172,13 @@ and open remain available for manual installation.
 For example, from the repository root (replace the version/build artifacts):
 
 ```sh
-python3 tools/make_update_manifest.py --channel public --version 3.0.8 \
+python3 tools/make_update_manifest.py --channel public --version 3.0.2 \
   --build-info build/macos/dist/FiberBrowser.app/Contents/Resources/fiberbrowser-build.json \
   --build-info build/windows/context/build.json \
   --out build/fiberbrowser-update-public.json \
-  build/macos/dist/FiberBrowser-3.0.8-arm64.dmg \
-  build/macos/dist/FiberBrowser-3.0.8-arm64.zip \
-  build/windows/FiberBrowser-3.0.8-Setup.exe
+  build/macos/dist/FiberBrowser-3.0.2-arm64.dmg \
+  build/macos/dist/FiberBrowser-3.0.2-arm64.zip \
+  build/windows/FiberBrowser-3.0.2-Setup.exe
 ```
 
 The Mac updater checks sha256, stages beside the running bundle, runs

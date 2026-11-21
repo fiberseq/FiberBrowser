@@ -512,8 +512,15 @@ def main():
     for gid in genomes:
         cache_metadata(gid, args.cache_dir, include_jaspar=args.jaspar)
         if args.download:
+            # --download asked for these files: a large one goes ahead with a warning line (no size cap;
+            # services/http_download.py), the browser's prompts are for downloads started from the UI.
+            from services.http_download import download_policy, format_bytes
+
+            def _large(url, size, threshold):
+                print(f"  WARNING: large download, {format_bytes(size)} (over {format_bytes(threshold)}): {url}")
             try:
-                download_genome_files(gid, GENOME_REGISTRY[gid], genome_dir)
+                with download_policy(confirmed=True, on_large=_large):
+                    download_genome_files(gid, GENOME_REGISTRY[gid], genome_dir)
             except RuntimeError as exc:
                 failures.append(str(exc))
 

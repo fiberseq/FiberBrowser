@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import Request, APIRouter, Query, Depends
+from fastapi import Request, APIRouter, Query, Depends, HTTPException
 from typing import Optional
 
 from state.dependencies import get_state
@@ -69,15 +69,18 @@ async def filter_by_analysis_rule(
     spanning: bool = Query(False),
     state=Depends(get_state)):
     """Filter reads by a reusable analysis-rule metric and scope."""
-    return await asyncio.to_thread(
-        filter_reads_by_analysis_rule_for_request,
-        state,
-        req,
-        chrom=chrom,
-        start=start,
-        end=end,
-        spanning=spanning,
-    )
+    try:
+        return await asyncio.to_thread(
+            filter_reads_by_analysis_rule_for_request,
+            state,
+            req,
+            chrom=chrom,
+            start=start,
+            end=end,
+            spanning=spanning,
+        )
+    except ValueError as error:   # a rule the request can't evaluate (a hub hit whose scan is closed, a missing metric)
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 @router.post("/api/sort_reads")
@@ -100,6 +103,8 @@ async def sort_reads(
     - 'similarity': Hierarchical cluster ordering (clusters only)
     - 'projection': Along the t-SNE map: neighbours on the map end up next
       to each other (clusters only; `projection` gives the map's features)
+    - 'value': a per-molecule scalar (`molecule_metric`: nucmol / nfrmol); reads without one last
+    - 'feature_hub': the number of the given hub hits where the read is in the given state
     """
     # Every mode loads the working set (and a t-SNE map can take seconds): off the event loop.
     from services.background_work import Cancelled, cancelled_response, run_background
@@ -108,6 +113,8 @@ async def sort_reads(
             state, req, chrom=chrom, start=start, end=end, spanning=spanning)
     except Cancelled:
         return cancelled_response()
+    except ValueError as error:   # a rule the request can't evaluate (a hub hit whose scan is closed, a missing metric)
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 @router.post("/api/filter_by_transcription_state")

@@ -1,0 +1,60 @@
+{
+ "description": "Record keys (DESIGN_GRAPH_PRIMARY \u00a73.1) derived from row identities: shared by tests/test_record_keys.py and recordKeys.test.ts.",
+ "cases": [
+  {
+   "note": "record cohort id, row 0",
+   "id": "lift-cohort:v1 [\"lib#0|m1/ccs\",\"m1/ccs\",\"abc:0\",0,\"primary\"]",
+   "record_key": "lift-record:v1 [\"lib#0|m1/ccs\",\"m1/ccs\",\"abc:0\"]"
+  },
+  {
+   "note": "same record, row 1 and an alternative placement",
+   "id": "lift-cohort:v1 [\"lib#0|m1/ccs\",\"m1/ccs\",\"abc:0\",1,\"alt:3\"]",
+   "record_key": "lift-record:v1 [\"lib#0|m1/ccs\",\"m1/ccs\",\"abc:0\"]"
+  },
+  {
+   "note": "fold_orientation_rows (orientation null)",
+   "id": "lift-cohort:v1 [\"lib#0|m1/ccs\",\"m1/ccs\",\"abc:0\",null,\"primary\"]",
+   "record_key": "lift-record:v1 [\"lib#0|m1/ccs\",\"m1/ccs\",\"abc:0\"]"
+  },
+  {
+   "note": "fold_molecule (record null)",
+   "id": "lift-cohort:v1 [\"lib#0|m1/ccs\",\"m1/ccs\",null,null,\"primary\"]",
+   "record_key": "lift-record:v1 [\"lib#0|m1/ccs\",\"m1/ccs\",null]"
+  },
+  {
+   "note": "pipes in a group label and the QNAME",
+   "id": "lift-cohort:v1 [\"grp|x|q|1\",\"q|1\",\"100-200\",0,\"primary\"]",
+   "record_key": "lift-record:v1 [\"grp|x|q|1\",\"q|1\",\"100-200\"]"
+  },
+  {
+   "note": "non-ASCII group label",
+   "id": "lift-cohort:v1 [\"Gr\\u00fcn|q2\",\"q2\",\"d:1\",0,\"primary\"]",
+   "record_key": "lift-record:v1 [\"Gr\\u00fcn|q2\",\"q2\",\"d:1\"]"
+  },
+  {
+   "note": "a record key is its own key",
+   "id": "lift-record:v1 [\"lib#0|m1/ccs\",\"m1/ccs\",\"abc:0\"]",
+   "record_key": "lift-record:v1 [\"lib#0|m1/ccs\",\"m1/ccs\",\"abc:0\"]"
+  },
+  {
+   "note": "a QNAME",
+   "id": "m1/ccs",
+   "record_key": null
+  },
+  {
+   "note": "a prefixed cluster id",
+   "id": "MAT::lift-cohort:v1 [\"lib#0|m1/ccs\",\"m1/ccs\",\"abc:0\",0,\"primary\"]",
+   "record_key": null
+  },
+  {
+   "note": "a malformed identity",
+   "id": "lift-cohort:v1 [1,2]",
+   "record_key": null
+  },
+  {
+   "note": "an identity whose encoding is not canonical",
+   "id": "lift-cohort:v1 [\"a|q\", \"q\", \"r\", 0, \"primary\"]",
+   "record_key": null
+  }
+ ]
+}

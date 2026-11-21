@@ -1,5 +1,30 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTestStore } from './helpers';
+import { serializeState } from '../historySlice';
+
+describe('history baselines during the restore window', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it.each(['pushSnapshot', 'pushSerializedSnapshot'] as const)('%s records the first navigation checkpoint', push => {
+    const store = createTestStore();
+    store.setState({ _lastRestoreTime: Date.now(), start: 100, end: 200 });
+    const state = store.getState();
+    if (push === 'pushSnapshot') state.pushSnapshot('Navigate', { kind: 'navigation' });
+    else state.pushSerializedSnapshot('Navigate', serializeState(state), { kind: 'navigation' });
+    expect(store.getState()._historyStack).toHaveLength(1);
+    expect(store.getState()._historyPointer).toBe(0);
+    expect(store.getState()._historyStack[0].state).toMatchObject({ start: 100, end: 200 });
+  });
+
+  it('still suppresses checkpoints while history is paused', () => {
+    const store = createTestStore();
+    store.setState({ _historyPaused: true, _lastRestoreTime: Date.now() });
+    store.getState().pushSnapshot('Navigate', { kind: 'navigation' });
+    expect(store.getState()._historyStack).toEqual([]);
+    expect(store.getState()._historyPointer).toBe(-1);
+  });
+});
 
 describe('seedHistoryBaseline', () => {
   it('keeps the checkpoint when the action result is pushed right after it', async () => {

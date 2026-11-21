@@ -3,7 +3,10 @@
  * '1' member, '0' evaluated and not a member, '.' not evaluated (or a read name whose molecules disagree).
  */
 import { fetchJson } from './sharedFetch';
-import type { FeatureRef } from '../stores/featureStore';
+import { featureKindDef, type FeatureRef } from '../stores/featureStore';
+
+/** A ref of a hub set (fiberhmm-scan sets: `hub:<16 hex>`): its states come from the scan provider. */
+export const isHubSource = (source: string): boolean => source.startsWith('hub:');
 
 export interface FeatureStateInfo {
   kind: FeatureRef['kind']; source: string; id: string; dataset_id: string | null;
@@ -21,8 +24,13 @@ export interface FeatureStates {
   by_dataset: Record<string, Record<string, string>>;
 }
 
+/** A feature ref as the states providers take it (also /api/plots/differential's refs). Per-dataset kinds (footprint
+ *  classes, SVs) carry their dataset; a hub set's ref may name one to restrict to it. */
+export const stateRefBody = (f: FeatureRef) => ({ kind: f.kind, source: f.source, id: f.id, ...(f.hubHit ? { hub_hit: f.hubHit } : {}),
+  ...(f.datasetId && (featureKindDef(f.kind)?.perDataset || isHubSource(f.source)) ? { dataset_id: f.datasetId } : {}) });
+
 export const getFeatureStates = (features: FeatureRef[]) => fetchJson<FeatureStates>('/api/features/states', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ features: features.map(f => ({ kind: f.kind, source: f.source, id: f.id, ...(f.kind === 'fp-class' ? { dataset_id: f.datasetId } : {}) })) }),
+  body: JSON.stringify({ features: features.map(stateRefBody) }),
 });

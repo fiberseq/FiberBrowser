@@ -77,7 +77,10 @@ async function fillWizard(page: Page, files: ReturnType<typeof inputs>) {
   await page.getByTestId('daf-run-auto-open').uncheck();
   await page.getByTestId('daf-run-options').click();
   await page.getByTestId('daf-run-opt-dedup').selectOption('off');
+  // The MAPQ is a shown setting (0 by default) and the run plan names it (owner, 20 Nov 2026).
+  await expect(page.getByTestId('daf-run-opt-mapq')).toHaveValue('0');
   await expect(page.getByTestId('daf-run-preview')).toContainText('sample-A');
+  await expect(page.getByTestId('daf-run-plan-options')).toContainText('MAPQ 0, duplicates off');
 }
 
 test.describe('New DAF-seq run', () => {
@@ -94,11 +97,12 @@ test.describe('New DAF-seq run', () => {
     await expect(card).toHaveAttribute('data-job-status', 'done', { timeout: 30_000 });
     await expect(card.getByTestId('daf-run-job-steps')).toContainText('Aligning reads');
     await expect(card.getByTestId('daf-run-job-summary')).toContainText('Reads aligned');
-    await expect(card).toContainText('Options: duplicates off');
+    await expect(card).toContainText('Options: MAPQ 0, duplicates off');
 
     // The argv reached the pipeline as separate items (no shell), with the option.
     const job = (await (await page.request.get(`${server.baseUrl}/api/pipeline/jobs`)).json()).jobs[0];
     expect(job.command).toContain('--dedup off');
+    expect(job.command).toContain('--min-mapq 0');   // always passed explicitly
     expect(job.outdir).toBe(files.out);
 
     // State-aware QC (fiberhmm-qc 3.0): the run's efficiency and background from outputs.json.

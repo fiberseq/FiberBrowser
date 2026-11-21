@@ -9,6 +9,15 @@ beforeEach(() => useBrowserStore.setState({ ...baseline, chrom: 'chr1', start: 1
 afterEach(() => { cancelProgressiveAnalysis(); useBrowserStore.setState(baseline); });
 
 describe('progressive analysis ownership', () => {
+  it.each(['selectedPeaks', 'selectedFeatures', 'clusterPeakMode'] as const)('whole-view refinement stops when %s changes', field => {
+    const run = beginProgressiveAnalysis('cluster', ['ds']);
+    run.refine();
+    const changes = { selectedPeaks: new Set([1]), selectedFeatures: [{ kind: 'hub', id: 'hit' }], clusterPeakMode: 'nuc' };
+    useBrowserStore.setState({ [field]: changes[field] } as never);
+    expect(run.signal.aborted).toBe(true);
+    expect(run.commit(() => { throw Error('stale whole-view result'); })).toBe(false);
+    run.dispose();
+  });
   it('intersects displayed IDs with the full scope, including empty scopes', () => {
     expect(displayedScope(['a', 'a', 'b'], ['b', 'c'])).toEqual(['b']);
     expect(displayedScope(['a'], [])).toEqual([]);

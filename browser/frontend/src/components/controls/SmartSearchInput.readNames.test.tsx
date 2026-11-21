@@ -87,3 +87,21 @@ describe('read names in the locus box', () => {
     expect(fetchJson).not.toHaveBeenCalled();
   });
 });
+
+describe('pasting several lines into the locus box (release audit 3.1.0)', () => {
+  function paste(text: string) {
+    const input = host!.querySelector('[data-testid="location-search-input"]') as HTMLInputElement;
+    const event = new Event('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'clipboardData', { value: { getData: () => text } });
+    act(() => { input.dispatchEvent(event); });
+    return input;
+  }
+  it('a DNA sequence or FASTA record becomes the sequence; a read-name list stays comma separated', () => {
+    type('');
+    expect(paste('GATTACAG\nGCTTCAAGT').value).toBe('GATTACAGGCTTCAAGT');
+    type('');
+    expect(paste('>oligo\ngattacag\ngcttcaagt\n').value).toBe('GATTACAGGCTTCAAGT');
+    type('');
+    expect(paste(`${A}\n${A}x`).value).toBe(`${A}, ${A}x`);
+  });
+});

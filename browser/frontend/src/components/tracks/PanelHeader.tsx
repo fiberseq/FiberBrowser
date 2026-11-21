@@ -22,6 +22,7 @@ import { StrandChip } from './StrandChip';
 import { useReadStatusStore } from '../../stores/readStatusStore';
 import { compactReadStatus } from './read-track/readCounts';
 import { panelTitle } from '../../utils/panelTitle';
+import { foldIn, isHost } from '../../features/graphPanel/hostMode';
 
 const HEADER_HEIGHT = 28;
 
@@ -181,7 +182,15 @@ export function PanelHeader({ panel, panelIndex, isSelected, narrow, width, inse
   // Another panel shows this dataset (a copy at another site, a duplicate):
   // closing this one only closes the panel, never the dataset.
   const hasSiblingPanel = Boolean(panel.datasetId) && panels.some(p => p.id !== panel.id && p.contentType === 'dataset' && p.datasetId === panel.datasetId);
+  const graphHost = panels.find(p => p.id === panel.graphMemberOf);
+  const foldsOnClose = isHost(graphHost) && graphHost.graphView?.handoff?.shown !== 'linear';
   const closePanel = () => {
+    // A pop-out is a live graph member: closing its window folds it back, keeping its reads and state in the host.
+    // Actual member removal still goes through removePanel (DESIGN_GRAPH_PRIMARY §4.4).
+    if (foldsOnClose) {
+      foldIn(graphHost!.id, [panel.id]);
+      return;
+    }
     // The last panel of a split closes the split: the panel it came from shows again (and an expanded
     // Carriers panel's alt dataset closes with it), never left folded away with the dataset still open.
     const groupId = panel.readSubset?.groupId;
@@ -208,8 +217,8 @@ export function PanelHeader({ panel, panelIndex, isSelected, narrow, width, inse
   const actions: HeaderAction[] = [
     {
       key: 'close', icon: <X size={14} />, tour: 'panel-close', danger: true, testId: `panel-close-${panel.id}`,
-      label: hasSiblingPanel || !panel.datasetId ? 'Close panel' : 'Close dataset',
-      title: hasSiblingPanel || !panel.datasetId ? 'Close this panel' : 'Close dataset: remove it from the browser (the file stays on disk; Undo brings it back)',
+      label: foldsOnClose ? 'Close pop-out' : hasSiblingPanel || !panel.datasetId ? 'Close panel' : 'Close dataset',
+      title: foldsOnClose ? 'Close this pop-out and fold it back into the graph' : hasSiblingPanel || !panel.datasetId ? 'Close this panel' : 'Close dataset: remove it from the browser (the file stays on disk; Undo brings it back)',
       onSelect: closePanel,
     },
     {

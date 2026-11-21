@@ -24,6 +24,9 @@ async function restore(session: Record<string, unknown>, pathMapping?: Record<st
     if (failedDatasets || failedOverlays || failedAnnotations || importResults?.fasta_error || importResults?.contact_map_error || packNote) {
       setError([
         failedDatasets ? `${failedDatasets} dataset${failedDatasets === 1 ? '' : 's'} failed` : '',
+        // Live lift turned off on this server: say how to open them (services/lift/registration.py).
+        ...((importResults?.datasets_failed ?? []) as Array<{ error?: string }>)
+          .map(f => f.error ?? '').filter(e => e.includes('FIBERBROWSER_LIVE_LIFT')).slice(0, 1),
         failedOverlays ? `${failedOverlays} overlay${failedOverlays === 1 ? '' : 's'} failed` : '',
         failedAnnotations ? `${failedAnnotations} annotation file${failedAnnotations === 1 ? '' : 's'} failed` : '',
         importResults?.fasta_error ? `FASTA: ${importResults.fasta_error}` : '',
@@ -76,7 +79,12 @@ export function SessionRestoreHost() {
         }
       }
       if (check && (check.missing > 0 || check.changed > 0)) {
-        return new Promise<SessionRestoreOutcome>(resolve => setPending({ session, check: check!, resolve }));
+        // A newer restore supersedes one still waiting in the relink dialog: the older one is settled (not restored),
+        // never left pending (its count would block other work for good).
+        return new Promise<SessionRestoreOutcome>(resolve => setPending(prev => {
+          prev?.resolve({ restored: false });
+          return { session, check: check!, resolve };
+        }));
       }
       return restore(session);
     });

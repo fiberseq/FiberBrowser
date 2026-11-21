@@ -100,6 +100,7 @@ def features(state, chrom):
     return {row.gene_name: (int(row.start), int(row.end)) for row in rows.itertuples()}
 
 
+@pytest.mark.usefixtures("all_reads_including_uncalled")  # synthetic reads without footprint calls
 def test_renamed_contig_is_linked_and_reads_resolve(tmp_path, state):
     seq = _seq(1)
     map_path = write_map(tmp_path / "pRenamed.gb", "pRenamed", seq)

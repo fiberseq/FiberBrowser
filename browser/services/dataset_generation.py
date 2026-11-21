@@ -23,3 +23,23 @@ def bump_dataset_generation(state: Any, dataset_id: str) -> None:
         except Exception:
             return
     gens[dataset_id] = gens.get(dataset_id, 0) + 1
+
+
+def bump_layer_epochs(state: Any, dataset_id: str, names) -> None:
+    """A change of the dataset's rows carrying these layers alone (``invalidate_dataset_layer_caches``): loads that
+    started before it (and name one of them) must not write their rows into a cache, nor be joined by later loads."""
+    epochs = getattr(state, "_layer_epochs", None)
+    if not isinstance(epochs, dict):
+        epochs = {}
+        try:
+            setattr(state, "_layer_epochs", epochs)
+        except Exception:
+            return
+    per = epochs.setdefault(dataset_id, {})
+    for name in names:
+        per[name] = per.get(name, 0) + 1
+
+
+def layer_epochs(state: Any, dataset_id: str) -> dict:
+    epochs = getattr(state, "_layer_epochs", None)
+    return dict(epochs.get(dataset_id) or {}) if isinstance(epochs, dict) else {}

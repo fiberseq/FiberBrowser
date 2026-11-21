@@ -17,6 +17,10 @@ from state import runtime_state
 from state.browser_state import BrowserState
 from services import panel_genomes
 
+# These synthetic reads carry no footprint calls: the tests ask for all reads ("All reads, including uncalled").
+pytestmark = pytest.mark.usefixtures("all_reads_including_uncalled")
+
+
 MAIN_LEN = 5_000
 FLY_LEN = 6_000
 

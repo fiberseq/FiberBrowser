@@ -153,9 +153,9 @@ for (const dark of [false, true]) {
       const [r, g, b] = c.startsWith('color(') ? m.slice(0, 3).map(v => v * 255) : m.slice(0, 3);
       return Math.max(r, g, b) - Math.min(r, g, b) < 12;
     };
-    // Cluster (no peaks selected) and Filter (no filter rule) can't run on a fresh load.
+    // Filter (no filter rule) can't run on a fresh load; Cluster with no peaks selected clusters the whole view.
     const blocked = looks.filter(l => l.blocked);
-    expect(blocked.map(l => l.id).sort()).toEqual(['cluster-run-button', 'filter-run-button']);
+    expect(blocked.map(l => l.id).sort()).toEqual(['filter-run-button']);
     for (const l of looks) expect(grey(l.color), `${l.id} ink ${l.color}`).toBe(false);
     for (const l of blocked) {
       expect(l.opacity, `${l.id} faded`).toBeLessThan(1);

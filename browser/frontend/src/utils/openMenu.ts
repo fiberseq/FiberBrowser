@@ -9,7 +9,7 @@ import { KEYBOARD_SHORTCUTS, shortcutForCommand, type KeyboardShortcut } from '.
 
 /** Open data · then make or check data. */
 export const OPEN_MENU_GROUPS: readonly (readonly AppCommandName[])[] = [
-  ['open-file', 'library', 'load-by-path', 'connect-cluster'],
+  ['open-file', 'library', 'load-by-path', 'connect-cluster', 'open-meta-locus'],
   ['new-daf-run', 'dataset-qc'],
 ];
 
@@ -21,6 +21,8 @@ export interface OpenMenuEntry {
   enabled: boolean;
   /** Why it is grayed out: not offered here, or not now. */
   reason: string | null;
+  /** A Preview feature's id: the item carries its badge. */
+  preview?: string;
 }
 
 /**
@@ -36,9 +38,9 @@ export function openMenuEntries(shortcuts: readonly KeyboardShortcut[] = KEYBOAR
     const shortcut = shortcutForCommand(command, shortcuts);
     if (info.available && !info.available()) {
       const reason = info.unavailableReason?.() ?? null;
-      return reason ? [{ command, label: info.label, shortcut, enabled: false, reason }] : [];
+      return reason ? [{ command, label: info.label, shortcut, enabled: false, reason, ...(info.preview ? { preview: info.preview } : {}) }] : [];
     }
     const reason = info.disabledReason?.() ?? null;
-    return [{ command, label: info.label, shortcut, enabled: reason === null, reason }];
+    return [{ command, label: info.label, shortcut, enabled: reason === null, reason, ...(info.preview ? { preview: info.preview } : {}) }];
   })).filter(group => group.length > 0);
 }

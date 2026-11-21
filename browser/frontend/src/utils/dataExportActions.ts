@@ -4,6 +4,12 @@
  * made one way wherever it is asked for.
  */
 import type { BrowserState } from '../stores/browserStore';
+import { META_EXPORT_COLUMNS, isMetaChrom } from '../features/metaLocus/metaChrom';
+import { metaBedComment } from '../features/metaLocus/metaLocusStore';
+import type { MetaReadProvenance } from '../features/metaLocus/types';
+import { qnameOfId, recordKey } from './recordKeys';
+import { nucszByteIndex } from './nucLayers';
+import { clusterAssignmentForRead } from '../components/tracks/read-track/readFilter';
 import { exportSession } from '../api/session';
 import { getCompactReadsAll } from '../api/readOperations';
 import { fetchReadStats, type PerReadStats } from '../api/readStats';
@@ -154,7 +160,7 @@ export function downloadPeaksBed(state: BrowserState, selectedOnly = false): str
   const prefix = selectedOnly ? 'selected_peaks' : 'peaks';
   for (const file of files) {
     const reference = files.length > 1 ? `${safeFilenamePart(file.genome)}_` : '';
-    downloadTextFile(file.bed, `${prefix}_${reference}${viewFileStem(referencePlaces(state, file.genome, file.places))}.bed`, TSV);
+    downloadTextFile(metaBedComment(state.chrom) + file.bed, `${prefix}_${reference}${viewFileStem(referencePlaces(state, file.genome, file.places))}.bed`, TSV);
   }
   const n = files.reduce((sum, f) => sum + f.count, 0);
   return savedFiles(files.length, `${n.toLocaleString()} ${selectedOnly ? 'selected ' : ''}peak${n === 1 ? '' : 's'}`);
@@ -202,7 +208,7 @@ export function formatClusterRegionsBed(state: BrowserState): string {
 
 export function downloadClusterRegionsBed(state: BrowserState): void {
   if (state.clusterPeakRegions.length === 0) return;
-  downloadTextFile(formatClusterRegionsBed(state), `cluster_regions_${placesFileStem(spans(clusterRegionRows(state)), state)}.bed`, TSV);
+  downloadTextFile(metaBedComment(state.chrom) + formatClusterRegionsBed(state), `cluster_regions_${placesFileStem(spans(clusterRegionRows(state)), state)}.bed`, TSV);
 }
 
 /** The views "Current region" saves: the selected panels', else every one on screen (as Highlight > View). */
@@ -251,7 +257,7 @@ export function downloadViewportBed(state: BrowserState): string {
   if (files.length === 0) throw new Error('No dataset panel on screen');
   for (const file of files) {
     const reference = files.length > 1 ? `${safeFilenamePart(file.genome)}_` : '';
-    downloadTextFile(file.bed, `region_${reference}${viewFileStem(file.views)}.bed`, TSV);
+    downloadTextFile(metaBedComment(state.chrom) + file.bed, `region_${reference}${viewFileStem(file.views)}.bed`, TSV);
   }
   const n = files.reduce((sum, f) => sum + f.views.length, 0);
   return savedFiles(files.length, `${n} region${n === 1 ? '' : 's'}`);
@@ -287,7 +293,7 @@ export function formatHighlightsBed(highlights: BrowserState['highlights']): Arr
 export function downloadHighlightsBed(state: BrowserState): string {
   const files = formatHighlightsBed(state.highlights);
   const stamp = exportTimestamp();
-  for (const { genome, bed } of files) downloadTextFile(bed, `highlights_${safeFilenamePart(genome)}_${stamp}.bed`, TSV);
+  for (const { genome, bed } of files) downloadTextFile(metaBedComment(state.chrom) + bed, `highlights_${safeFilenamePart(genome)}_${stamp}.bed`, TSV);
   return files.length > 1 ? `Saved ${files.length} BED files, one per reference` : 'Saved';
 }
 
@@ -417,11 +423,89 @@ export async function downloadWorkingSetTsv(state: BrowserState): Promise<string
   return `Saved ${reads.toLocaleString()} read${reads === 1 ? '' : 's'}${blocks.length > 1 ? ` from ${blocks.length} regions` : ''}`;
 }
 
+// --- Nucleosome footprints -------------------------------------------------------
+
+export const NUC_FOOTPRINT_COLUMNS = [
+  'dataset_id', 'read_id', 'reference', 'chrom', 'start', 'end', 'molecular_length',
+  'coarse_class', 'posterior', 'z', 'tf',
+] as const;
+
+/** nucsz byte 1 codes (low 4 bits), named as the nuc.size.* cluster modes are. */
+const NUC_COARSE_NAMES = ['cant_tell', 'short', 'mono', 'long', 'multi2', 'multi3', 'edge_truncated'];
+
+/**
+ * One row per `nucsz` mark (one per nucleosome or TF footprint) of the blocks' reads. The bytes are read by
+ * position (coarse, posterior, z; a four-byte layer from FiberHMM before 3.2.0 has a named-class byte second, which
+ * is skipped: named classes were removed): posterior = byte / 255, z = (byte - 128) / 20 with 255 missing, TF = bit 16
+ * of the coarse byte.
+ */
+export function formatNucFootprintsTsv(blocks: WorkingSetBlock[]): { tsv: string; rows: number; reads: number } {
+  const rows: unknown[][] = [[...NUC_FOOTPRINT_COLUMNS]];
+  let reads = 0;
+  for (const block of blocks) {
+    for (const [datasetId, dataset] of Object.entries(block.datasets)) {
+      for (const read of dataset.reads ?? []) {
+        const layer = read.layers?.nucsz;
+        if (!layer?.intervals?.length) continue;
+        reads += 1;
+        const byte = (k: number, i: number): number | undefined => {
+          const v = layer.qualities?.[k]?.[i];
+          return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+        };
+        const at = nucszByteIndex(layer.qualities?.length ?? 0);
+        layer.intervals.forEach(([start, end, size], i) => {
+          const coarse = byte(at.coarse, i) ?? 0;
+          const posterior = byte(at.posterior, i);
+          const z = byte(at.z, i);
+          rows.push([
+            datasetId, qnameOfId(read.id), block.reference ?? '', block.chrom,
+            block.regionStart + start, block.regionStart + end,
+            Number.isFinite(size) && size > 0 ? size : end - start,
+            NUC_COARSE_NAMES[coarse & 15] ?? `code_${coarse & 15}`,
+            posterior == null ? '' : Number((posterior / 255).toFixed(4)),
+            z == null || z === 255 ? '' : (z - 128) / 20,
+            coarse & 16 ? 1 : 0,
+          ]);
+        });
+      }
+    }
+  }
+  return { tsv: formatTsv(rows), rows: rows.length - 1, reads };
+}
+
+/** Datasets with a nucleosome size layer (a scan's annotated BAM, or a live nucleosome run). */
+export function nucFootprintDatasetIds(state: Pick<BrowserState, 'datasets'>): Set<string> {
+  return new Set(state.datasets.filter(d => (d.available_layers as Record<string, unknown> | undefined)?.nucsz).map(d => d.id));
+}
+
+/**
+ * The nucleosome footprints of the target panels' reads (the selected panels', else every panel on screen), one
+ * request per view as the working-set export makes them.
+ */
+export async function downloadNucFootprintsTsv(state: BrowserState): Promise<string> {
+  const withLayer = nucFootprintDatasetIds(state);
+  const views = shownPanelViews(state);
+  const blocks: WorkingSetBlock[] = [];
+  for (const view of views) {
+    const datasetIds = [...new Set(view.panelIds
+      .map(id => state.panels.find(p => p.id === id)?.datasetId)
+      .filter((id): id is string => !!id && withLayer.has(id)))];
+    if (datasetIds.length === 0) continue;
+    const response = await getCompactReadsAll<{ datasets: Record<string, { reads?: Array<any> }> }>(workingSetParams(state, view, datasetIds));
+    blocks.push({ datasets: response.datasets ?? {}, chrom: view.chrom, regionStart: view.start, reference: view.genomeKey });
+  }
+  if (blocks.length === 0) throw new Error('No panel on screen shows a dataset with nucleosome size classes');
+  const table = formatNucFootprintsTsv(blocks);
+  downloadTextFile(table.tsv, `nucleosome_footprints_${placesFileStem(views, state)}_${exportTimestamp()}.tsv`, TSV);
+  return `Saved ${table.rows.toLocaleString()} footprint${table.rows === 1 ? '' : 's'} from ${table.reads.toLocaleString()} read${table.reads === 1 ? '' : 's'}`;
+}
+
 // --- Reads --------------------------------------------------------------------
 
 /** One read name per line (each once), as samtools view -N and most tools take them. */
 export function formatReadNames(groups: ReadScopeGroup[]): string {
-  const names = [...new Set(groups.flatMap(g => g.readIds))];
+  // Cohort identities and record keys (lifted rows, graph rows) are written as the QNAME they name.
+  const names = [...new Set(groups.flatMap(g => g.readIds).map(qnameOfId))];
   return names.length ? names.join('\n') + '\n' : '';
 }
 
@@ -440,9 +524,11 @@ export async function copyReadNames(groups: ReadScopeGroup[]): Promise<number> {
 }
 
 export const READ_TABLE_COLUMNS = [
-  'read_id', 'dataset_id', 'reference', 'chrom', 'cluster', 'aligned_span', 'read_length', 'ref_start', 'ref_end', 'strand', 'mapq',
+  'read_id', 'dataset_id', 'reference', 'chrom', 'cluster', 'aligned_span', 'read_length', 'ref_start', 'ref_end', 'ref_contig', 'strand', 'mapq',
   'footprint_count', 'nucleosome_count', 'subnuc_count', 'avg_footprint_size', 'median_footprint_size',
-  'accessibility_pct', 'methyl_count', 'methyl_pct', 'viewer_order',
+  'accessibility_pct', 'call_status', 'methyl_count', 'methyl_pct',
+  'nrl', 'regularity', 'gap_cv', 'lambda_acc', 'n_short', 'n_mono', 'n_multi', 'n_cant_tell', 'reg_fraction',
+  'disordered_fraction', 'undetermined_fraction', 'n_missing', 'viewer_order',
 ] as const;
 
 /**
@@ -455,6 +541,8 @@ export async function buildReadTable(
   state: BrowserState,
   groups: ReadScopeGroup[],
 ): Promise<{ tsv: string; rows: number; truncated: boolean; total: number }> {
+  // Lifted datasets are described too (graph features): their ref_start/ref_end are on the sample's own assembly,
+  // on ref_contig (empty for native reads, whose bounds are on chrom).
   const total = groups.reduce((n, g) => n + g.readIds.length, 0);
   let budget = MAX_READ_STATS_READS;
   const regions = new Map<string, { chrom: string; start: number; end: number; genome?: string; groups: ReadScopeGroup[] }>();
@@ -467,11 +555,26 @@ export async function buildReadTable(
     if (!regions.has(key)) regions.set(key, { chrom: g.chrom, start: g.start, end: g.end, genome: g.genome, groups: [] });
     regions.get(key)!.groups.push(take);
   }
-  const rows: unknown[][] = [[...READ_TABLE_COLUMNS]];
+  // A read's label in its group's panel, else in its dataset's haplotype panels (MAT and PAT of one dataset share a
+  // group; their reads are disjoint), by identity (a graph run's labels are record keys; graph features review).
+  const clusterOfRead = (stateKey: string, datasetId: string, readId: string) => {
+    const asRead = recordKey(readId) ? { id: qnameOfId(readId), analysis_id: readId, live_lift: true } : readId;
+    const keys = [stateKey, ...state.panels.filter(p => p.contentType === 'dataset' && p.datasetId === datasetId && p.liftHap)
+      .map(p => p.stateKey ?? p.datasetId!)];
+    for (const k of keys) {
+      const c = clusterAssignmentForRead(state.clusterAssignments[k] ?? {}, asRead);
+      if (c !== undefined) return c;
+    }
+    return undefined;
+  };
+  // A meta-locus region: each row also names its read's real locus (site, strand, real span), next to the virtual one.
+  const anyMeta = [...regions.values()].some(r => isMetaChrom(r.chrom));
+  const rows: unknown[][] = [[...READ_TABLE_COLUMNS, ...(anyMeta ? META_EXPORT_COLUMNS : [])]];
   let order = 0;
   for (const region of regions.values()) {
     const byDataset: Record<string, string[]> = {};
     for (const g of region.groups) byDataset[g.datasetId] = [...new Set([...(byDataset[g.datasetId] ?? []), ...g.readIds])];
+    const sites = isMetaChrom(region.chrom) ? await metaSitesOfReads(region, Object.keys(byDataset)) : null;
     const response = await fetchReadStats(region.chrom, region.start, region.end, state.spanningOnly, byDataset, state.analysisSampleSeed,
       region.genome ? { genome: region.genome } : undefined);
     const statsOf = new Map<string, PerReadStats>();
@@ -487,14 +590,40 @@ export async function buildReadTable(
           ...r,
           chrom: region.chrom,
           reference: genomeKeyFor(region.genome, state),
-          cluster: state.clusterAssignments[g.stateKey]?.[readId] ?? '',
+          // A lifted row's label is under its cohort identity or its record key (a graph run): the read track's rule.
+          cluster: clusterOfRead(g.stateKey, g.datasetId, readId) ?? '',
           viewer_order: ++order,
         };
-        rows.push(READ_TABLE_COLUMNS.map(c => values[c] ?? ''));
+        const row = READ_TABLE_COLUMNS.map(c => values[c] ?? '');
+        if (anyMeta) {
+          const meta = sites?.get(`${g.datasetId}\t${readId}`);
+          // The read's own real span (meta.real), with its site's strand, index and name.
+          const real = meta?.real;
+          row.push(...(meta && real?.reference_start != null && real.reference_end != null
+            ? [real.chrom ?? meta.chrom ?? '', real.reference_start, real.reference_end, meta.strand ?? '', meta.site ?? '', meta.site_name ?? '']
+            : META_EXPORT_COLUMNS.map(() => '')));
+        }
+        rows.push(row);
       }
     }
   }
   return { tsv: formatTsv(rows), rows: rows.length - 1, truncated: total > MAX_READ_STATS_READS, total };
+}
+
+/** The sites of a meta-locus region's reads (their provenance), by dataset and read id. */
+async function metaSitesOfReads(region: { chrom: string; start: number; end: number }, datasetIds: string[]): Promise<Map<string, MetaReadProvenance>> {
+  const params = new URLSearchParams({
+    chrom: region.chrom, start: String(region.start), end: String(region.end), dataset_ids: datasetIds.join(','),
+    max_reads: '0', include_methylation: 'false', include_layers: 'false', include_layer_qualities: 'false', include_metaprofile: 'false',
+  });
+  const out = new Map<string, MetaReadProvenance>();
+  try {
+    const response = await getCompactReadsAll<{ datasets: Record<string, { reads?: Array<{ id: string; meta?: MetaReadProvenance }> }> }>(params);
+    for (const [datasetId, d] of Object.entries(response.datasets ?? {})) {
+      for (const r of d.reads ?? []) if (r.meta) out.set(`${datasetId}\t${r.id}`, r.meta);
+    }
+  } catch { /* the table is written without them */ }
+  return out;
 }
 
 export async function downloadReadTable(state: BrowserState, groups: ReadScopeGroup[], slug: string): Promise<string> {
@@ -505,14 +634,16 @@ export async function downloadReadTable(state: BrowserState, groups: ReadScopeGr
     : `Saved ${table.rows.toLocaleString()} reads`;
 }
 
-/** One BAM per dataset and region (POST /api/reads/export_bam). */
-export async function downloadReadBams(groups: ReadScopeGroup[]): Promise<string> {
+/** One BAM per dataset and region (POST /api/reads/export_bam; a lifted dataset's reads on its source assembly:
+ * POST /api/lift/export_bam, from the source windows the region lifts from). */
+export async function downloadReadBams(groups: ReadScopeGroup[], lifted: ReadonlySet<string> = new Set()): Promise<string> {
   const notes: string[] = [];
   let files = 0;
   for (const g of groups) {
     // A panel on another assembly: its reference (topology, contig names; services/panel_genomes.py).
     const query = g.genome ? `?panel_genome=${encodeURIComponent(g.genome)}` : '';
-    const response = await fetchApiResponse(`/api/reads/export_bam${query}`, {
+    const route = lifted.has(g.datasetId) ? '/api/lift/export_bam' : `/api/reads/export_bam${query}`;
+    const response = await fetchApiResponse(route, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ dataset_id: g.datasetId, chrom: g.chrom, start: g.start, end: g.end, read_ids: g.readIds }),
@@ -527,6 +658,8 @@ export async function downloadReadBams(groups: ReadScopeGroup[]): Promise<string
     files += 1;
     const missing = Number(response.headers.get('x-fiberbrowser-missing') ?? 0);
     if (missing > 0) notes.push(`${missing} read${missing === 1 ? '' : 's'} of ${g.datasetId} not found`);
+    const source = response.headers.get('x-fiberbrowser-source-contigs');
+    if (source) notes.push(`${g.datasetId} on its source assembly (${source.split('+').join(', ')})`);
   }
   return `Saved ${files} BAM${files === 1 ? '' : 's'} (index with samtools index)${notes.length ? `; ${notes.join('; ')}` : ''}`;
 }

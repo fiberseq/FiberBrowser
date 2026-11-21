@@ -40,21 +40,24 @@ export, sessions and workspaces.
 
 | Document | What it covers |
 |----------|----------------|
-| [Updates and the FiberHMM FiberBrowser runs](updates.md) | Which FiberHMM runs (apps: bundled by default; pip/source runs), Check for Updates, the update channels and manifests, signing in to GitHub, privacy, publishing an update. |
+| **[What's new in 3.1](whats-new.md)** | The Plots workspace, the meta-locus, live lift, Differences, graph mode, the hub, nucleosomes, sequence search, and what changed since 3.0. Start here when upgrading. |
+| [Updates and the FiberHMM FiberBrowser runs](updates.md) | **Install and restart**, manual downloads, pip updates, which FiberHMM runs, update channels and private channels. |
 | [Installing FiberBrowser](install.md) | The Mac app, pip/pipx, extras, conda, Docker, the Chrome/Edge app, menu shortcuts, and releasing (maintainers). |
 | **[User guide](guide.md)** | The illustrated guide: every step of the guided tour on the bundled demos (DddA-seq reads at the NAPA promoter; H1 Fiber-seq reads around an insertion for the Variants steps) with a screenshot, then footprint classes and saved classes, co-occupancy, DAF-seq strands, haplotype comparison, figure export, sessions and workspaces. |
 | [Tutorial](tutorial.md) | A written walkthrough of the guided tour on the bundled demos, section by section: what to do and what you should see, including the structural-variant demo (Variants panel, haplotype split, SVs, the expanded insert and its CTCF site). |
 | [Reference](reference.md) | Every CLI flag and environment variable, the access token and workspaces, supported file formats and remote files, BAM tags and layer toggles, the dataset catalog, screen layout, panels, online genomes, and keyboard shortcuts. |
 | [Deploying on a server](deployment/index.md) (optional) | One config file for a server; a shared lab server with sign-in; an Open OnDemand app for clusters; FiberBrowser on a cluster just for you. |
 | [A public server](deployment/public-server.md) | Publishing your datasets on the web for anyone (or reviewers): the catalog, BigBed and remote data, Docker Compose or systemd behind Caddy, sizing, limits, and the security design. |
-| [Changelog](../CHANGELOG.md) | What changed in each release, and upgrading from 2.17. |
-| [What 3.0 includes](release-scope.md) | Supported features (including the Variants panel), and the Preview features (insert-expanded panels behind **Show preview features**; the footprint-class section, labelled): their badges, known limitations and what graduates them. |
+| [Changelog](../CHANGELOG.md) | Changes in 3.1, earlier releases and upgrading from 2.17. |
+| [What 3.1 includes](release-scope.md) | Supported features (including the Variants panel), and the Preview features (insert-expanded panels and the meta-locus behind **Show preview features**; the footprint-class section, labelled): their badges, known limitations and what graduates them. |
 | [Identify](identify.md) | What Identify reports about an insertion: candidates with their evidence, **Ambiguous** and **No confident match**, and the thresholds. |
 
 ## Workflows
 
 | Document | What it covers |
 |----------|----------------|
+| [Plots](workflows/plots.md) | The full-window Plots workspace (**P**): metaprofiles, size enrichment, V-plots, size histograms, heatmaps over BED region sets, co-accessibility, comparisons, summaries with bootstrap intervals, Follow / Pin and the Gallery. |
+| [Meta-locus](workflows/meta-locus.md) (Preview) | **Open BED as meta-locus…**: the reads of every site in a BED file pooled into one virtual locus; working set, **More reads**, **Resample**, **Keep workspace full**, **Find more like this**, limits. |
 | [A DAF-seq run, from raw reads](workflows/daf-seq-quick-run.md) | **New DAF-seq run**: FASTQ reads (e.g. a Plasmidsaurus zip) + a genome or plasmid map → aligned and called footprints with their QC (deamination CDF, periodicity), without a command line. |
 | [The Library](workflows/library.md) | Your datasets in one place: files you open, finished DAF-seq runs and watched folders, with chemistry, genome or plasmid, QC verdicts and FiberHMM re-run advisories; search, tags, groups, open with the right reference, export a group as a `--catalog`. |
 | [DAF-seq](workflows/daf-seq.md) | Loading DAF-seq BAMs, deamination and 5mC layers, strand panels (CT / GA, split by strand), missing-layer troubleshooting. |
@@ -63,8 +66,19 @@ export, sessions and workspaces.
 | [Open data from a link](workflows/open-from-links.md) | For portal and dashboard authors: open remote BAM/bigBed/bigWig files at a locus with one link (`?session=` JSON, `?hub=` track hubs, `fiberbrowser://`), confirmed by the user; pre-signed URLs; the security model and public-server settings. |
 | [FiberHMM variant and SV layers](workflows/fiberhmm-variant-layers.md) | The `fiberhmm_var` and `fiberhmm_sv` bigBeds: reads grouped by allele at VCF sites (ambiguous DAF bases kept apart), allele marks and SV events on read rows, split-read links, lift through a UCSC chain. |
 | [fibertools and FIRE outputs](workflows/fibertools-fire-data.md) | Opening `ft`/FIRE results: per-fiber bigBeds as reads, FIRE peaks and percent-accessible/coverage bigWigs as tracks, ft-tagged BAMs. |
+| [Find a sequence in the genome](workflows/sequence-search.md) | Paste DNA in the locus box or **Tools → Find sequence**: exact / IUPAC hits on both strands for short queries, BLAST for longer ones, click a hit to go there, hits as a track or BED. |
 | [Plasmids and circular genomes](workflows/plasmids.md) | Opening a map with its BAMs in one step (renamed or rotated references are matched by sequence), aligning reads to a plasmid, the circular map in the Regions panel. |
 | [Clustering and transcription states](workflows/clustering-and-transcription-states.md) | Peaks, clustering, merging, subcluster branches, snapshots, cluster focus, and per-molecule Pause / PIC / Elongating calls. |
+| [Setting up live lift and graph mode](workflows/pangenome-setup.md) | What to install: lift maps and graph packages from [graphlift](https://github.com/mtcicero26/graphlift), the graph helper, preview features, and the `scripts/unified_demo.py` launcher. |
+| [Live lift](workflows/live-lift.md) | Reads aligned to a sample's own assembly drawn on this genome without realigning: maps, **Add live lift…** and **View on another assembly…**, MAT/PAT panels, **Open as**, supplementaries, hatching, settings, exports. |
+| [Linked panels](workflows/linked-panels.md) | A lifted panel and its source view on the sample's assembly: the ribbon, shared hover, shared navigation, several matches. |
+| [Differences](workflows/differences.md) | The Differences row: click to expand an insertion, ⌘/Ctrl-click or right-click to inspect, the menu, the table, the inspector and the insertion lens. |
+| [Feature hub and scans](workflows/feature-hub.md) | Scan, open scans, choose scopes and page through hits. Lifted and graph hits, **Use as**, **Associate**, **Overlay**, embedded scans in sessions and read-only scans of other files. |
+| [Nucleosomes](workflows/nucleosome-panel.md) | Single-fibre regularity for every panel side by side: the score, high- and low-regularity patches, shared geometries (click to highlight, select, save), charts, the association with a site, layers and rule terms. |
+| [Structural variants](workflows/structural-variants.md) | Carrier evidence levels (confirmed, putative, conflicting, ambiguous), the SVs tab, the native Differences row, highlights and the conflicting-clip settings. |
+| [Graph mode](workflows/graph-mode.md) | Haplotype lanes, pop-outs, clustering and repeats, site sort, layers on graph rows, **Host only**, exports and the linear hand-off. |
+| [Opening sessions from 3.0.x](workflows/session-migration.md) | Saved analyses and curation, hub conversion, pinned carts, embedded scans, missing files and sharing with older builds. |
+| [Navigation and speed](workflows/navigation-speed.md) | Cached pans, **Performance mode**, display and analysis sampling, Back/Forward, retries and scan costs. |
 | [Haplotype comparison](workflows/haplotype-comparison.md) | Compare two haplotypes/loci side by side; cluster each view separately or co-cluster matched domains. |
 | [Footprint classes](workflows/footprint-classes.md) | Short pointer to the Footprints panel's class-finding workflow (illustrated in the [guide](guide.md#24-footprint-classes)). |
 | [Motifs at NFR variants](lab/workflows/nfr-motifs.md) | NFR analysis: motif sites per NFR variant as nested evidence (open from NFR shape, footprinted given open from Find classes), p-value motif scoring shared with the Footprints panel, profiles, ChIP-Atlas, conservation, and analyses pooled over many NFRs. |
@@ -77,6 +91,7 @@ export, sessions and workspaces.
 | [Plugins](plugins.md) | Adding a custom analysis panel with a Python plugin. |
 | [Local Copilot](copilot.md) | The optional on-device assistant in the Tutorial panel: setup, use, troubleshooting. |
 | [Browser API guide](browser_api_guide.md) | The browser's mental model, API safety model, HTTP endpoint cookbook and Python client map, shared by the UI, the Python client and the Copilot planner. |
+| [Documentation screenshots](images/README.md) | Images needed by each release workflow page and the coordinator's capture commands. |
 
 ## Methods and data
 

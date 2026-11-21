@@ -27,6 +27,7 @@ from services.read_route_helpers import (
     log_read_diagnostic as _log_read_diagnostic,
     query_bool as _query_bool,
     query_int as _query_int,
+    unwrap_query_default,
     should_log_read_request as _should_log_read_request,
 )
 from services.analysis_query import AnalysisReadQuery
@@ -34,7 +35,7 @@ from services.analysis_query import AnalysisReadQuery
 import asyncio
 import time
 from functools import partial
-from services.background_work import Cancelled, cancelled_response
+from services.background_work import Cancelled, cancelled_response, dataset_identity, run_background, start_held
 from services.read_work import run_read_work
 
 router = APIRouter(tags=["reads"])
@@ -69,6 +70,7 @@ async def get_reads_compact(
     cluster_focus: Optional[str] = Query(None, description="Comma-separated cluster IDs to focus on"),
     filter_ids: Optional[str] = Query(None, description="Comma-separated read IDs (base IDs) to filter to before sampling"),
     filter_set: Optional[str] = Query(None, description="A read-name set registered with POST /api/read_sets (a subset too large for filter_ids); narrowed by filter_ids if both"),
+    include_mismatches: bool = Query(True, description="Compute live-lift X markers only when the mismatch layer is requested"),
     include_cigar: bool = Query(False, description="Include CIGAR events (mismatches, insertions, deletions) for visualization"),
     include_duplicates: bool = Query(False, description="Include BAM 0x400 / BigBed isDuplicate reads (hidden by default)"),
     include_qcfail: bool = Query(False, description="Include SAM QC-fail reads (0x200)"),
@@ -83,12 +85,15 @@ async def get_reads_compact(
     strand: Optional[str] = Query(None, pattern="^(CT|GA|ct|ga|both|BOTH)?$",
                                   description="DAF-seq: only reads from this strand (CT or GA), by their deamination marks"),
     pin_ids: Optional[str] = Query(None, description="Comma-separated read IDs the display sample keeps when they are in view (a read gone to by name)"),
+    lift_hap: Optional[str] = Query(None, description="Live lift: only this haplotype's rows (MAT/PAT or a map haplotype key; a split panel's rule)"),
     min_sv_len: int = Query(50, description="Smallest deletion/insertion/clip (bp) reported in each read's `sv` events and the `sv_summary`"),
     include_sv_seq: bool = Query(False, description="Add the first 1,000 inserted bases to each `sv` insertion event"),
+    sv_conflict_options: Optional[str] = Query(None, description="Advanced SV clip conflict thresholds (JSON)"),
     include_sv_summary: bool = Query(True, description="Add `sv_summary`: SV clusters across the reads in view"),
     full_working_set: bool = Query(False, description="Load every read in view: no display sample on deep BAM views (`working_sampling` says when one applies)"),
     viewport_start: Optional[int] = Query(None, description="Visible start when prefetching a containing read span"),
     viewport_end: Optional[int] = Query(None, description="Visible end when prefetching a containing read span"),
+    insertion_ids: Optional[str] = Query(None, description="Expanded live-lift insertion IDs; annotations are composed on demand"),
     prefetch: bool = Query(False, description="Speculative read cache fill; yields to navigation and analyses"),
     prefetch_batch: bool = Query(False, description="Warm annotation dependencies used by the multi-dataset display"),
     prefetch_sample_level: Optional[int] = Query(None, ge=0, le=24, description="Keep the visible view's sampling level while warming its neighbors"),
@@ -104,7 +109,6 @@ async def get_reads_compact(
     Display shows a representative sample.
     """
     from services.read_sets import combine_filter
-    from services.read_route_helpers import unwrap_query_default
     try:
         # (called directly in tests: an unset Query is its default)
         filter_ids = combine_filter(state, unwrap_query_default(filter_ids, None), unwrap_query_default(filter_set, None))
@@ -145,6 +149,7 @@ async def get_reads_compact(
         cluster_focus=cluster_focus,
         filter_ids=filter_ids,
         include_cigar=include_cigar,
+        include_mismatches=_query_bool(include_mismatches, True),
         include_duplicates=include_duplicates, include_qcfail=include_qcfail,
         hide_terminal_gaps=hide_terminal_gaps,
         terminal_gap_threshold=terminal_gap_threshold,
@@ -156,12 +161,15 @@ async def get_reads_compact(
         sample_seed=sample_seed,
         strand=strand,
         pin_ids=pin_ids,
+        lift_hap=unwrap_query_default(lift_hap, None),
         min_sv_len=min_sv_len,
         include_sv_seq=include_sv_seq,
         include_sv_summary=include_sv_summary,
+        sv_conflict_options=unwrap_query_default(sv_conflict_options, None),
         full_working_set=full_working_set,
         viewport_start=unwrap_query_default(viewport_start, None),
         viewport_end=unwrap_query_default(viewport_end, None),
+        insertion_ids=unwrap_query_default(insertion_ids, None),
     )
     from services.read_stream import MEDIA_TYPE as STREAM_TYPE, stream_reads_response
     if request is not None and STREAM_TYPE in request.headers.get("accept", ""):
@@ -174,6 +182,34 @@ async def get_reads_compact(
     except Cancelled:
         return cancelled_response()
     return await asyncio.to_thread(reads_response, payload, request)
+
+
+# How long a full set started by a first paint runs before the browser's background=true request joins it.
+FIRST_PAINT_HOLD_S = 5.0
+# How long a full set keeps running after its client went (a panel re-asking at once rejoins it; a view
+# navigated away from stops after this).
+FULL_SET_LINGER_S = 2.0
+# Decode worker processes per dataset for a first paint's drawn reads, within the profile's decode workers
+# (FIBERBROWSER_FIRST_PAINT_WORKERS; default 0: in the request's thread, which measured faster on a busy
+# machine because spawning the workers costs more than it saves for ~1,100 reads).
+def _first_paint_workers() -> int:
+    import os
+    try:
+        return max(0, int(os.environ.get("FIBERBROWSER_FIRST_PAINT_WORKERS", "0")))
+    except ValueError:
+        return 0
+
+
+def _background_key(state, request, dataset_id: str) -> tuple:
+    """One background build per dataset and request (its query, less the transport flags), the dataset's identity,
+    the quality filters in force and how the contig's reads are loaded."""
+    from services.read_quality_filters import active_quality_filters
+    from services.working_sets import read_load_token
+    params = () if request is None else tuple(sorted(
+        (k, v) for k, v in request.query_params.multi_items() if k not in ("first_paint", "background")))
+    chrom = request.query_params.get("chrom") if request is not None else None
+    return ("compact_all", id(state), dataset_id, dataset_identity(state, [dataset_id]), params,
+            repr(active_quality_filters(state)), repr(read_load_token(state, chrom)) if chrom else None)
 
 
 @router.get("/api/reads/compact_all")
@@ -204,7 +240,10 @@ async def get_reads_compact_all(
     sample_seed: Optional[str] = Query(None, description="Seed for reproducible sampling paths"),
     pin_ids: Optional[str] = Query(None, description="Comma-separated read IDs the display sample keeps when they are in view (a read gone to by name)"),
     min_sv_len: int = Query(50, description="Smallest deletion/insertion/clip (bp) in `sv` events and `sv_summary` (served at no less than 50 here)"),
+    sv_conflict_options: Optional[str] = Query(None, description="Advanced SV clip conflict thresholds (JSON)"),
     include_sv_summary: bool = Query(True, description="Add each dataset's `sv_summary`"),
+    first_paint: bool = Query(False, description="A cold deep view: decode and return only the reads drawn (`first_paint` in a dataset's payload says it is partial; services/first_paint.py)"),
+    background: bool = Query(False, description="Build each dataset on the background pool, shared by identical requests and stopped when every client has gone (the full set after a first paint)"),
     request: Request = None,
     state=Depends(get_state)):
     """
@@ -212,8 +251,14 @@ async def get_reads_compact_all(
     Returns {datasets: {dataset_id: {reads, metaprofile, ...}}}
 
     This significantly reduces HTTP overhead when viewing multiple datasets.
+
+    A first paint (``first_paint=true``) answers a cold deep view with the
+    reads the display draws, the same ones the full payload draws; the browser
+    then asks again with ``background=true`` for the whole set.
     """
     t0 = time.time()
+    first_paint = _query_bool(first_paint, False)
+    background = _query_bool(background, False)
     infer_legacy_layers = _query_bool(infer_legacy_layers, True)
     include_duplicates = _query_bool(include_duplicates, False)
     include_qcfail = _query_bool(include_qcfail, False)
@@ -222,6 +267,7 @@ async def get_reads_compact_all(
     requested_layers = normalize_requested_layers(layer_names)
     query = AnalysisReadQuery.from_request(
         state,
+        capability="compact_all",
         chrom=chrom,
         start=start,
         end=end,
@@ -248,7 +294,10 @@ async def get_reads_compact_all(
     # Track current viewport
     update_current_viewport(state, chrom, start, end)
     
-    def _build_dataset(dataset_id: str, dataset_query, dataset_min_footprints: int):
+    def _build_dataset(dataset_id: str, dataset_query, dataset_min_footprints: int, first_paint_set=None):
+        from services.lift.capability import is_lifted
+        # Live-lift datasets: no metaprofile and no SV summary in v1 (services/lift/capability.py).
+        lifted = is_lifted(state.datasets.get(dataset_id))
         return compact_all_dataset_result(
             state=state,
             query=dataset_query,
@@ -268,7 +317,8 @@ async def get_reads_compact_all(
             fill_gap_size=fill_gap_size,
             min_fp_quality=min_fp_quality,
             min_footprints=dataset_min_footprints,
-            include_metaprofile=include_metaprofile if dataset_min_footprints == min_footprints else False,
+            include_metaprofile=(include_metaprofile if dataset_min_footprints == min_footprints else False)
+            and not lifted,
             profile_max_reads=profile_max_reads,
             coverage_sample=coverage_sample,
             hide_terminal_gaps=hide_terminal_gaps,
@@ -278,16 +328,52 @@ async def get_reads_compact_all(
             include_duplicates=include_duplicates, include_qcfail=include_qcfail,
             sample_seed=sample_seed,
             min_sv_len=min_sv_len,
-            include_sv_summary=include_sv_summary,
+            include_sv_summary=include_sv_summary and not lifted,
+            sv_conflict_options=unwrap_query_default(sv_conflict_options, None),
+            first_paint=first_paint_set,
         )
+
+    def _first_paint_set(dataset_id: str):
+        """The reads decoded for a partial first response, or None (decode the whole view)."""
+        from services.first_paint import ineligible_reason, plan_first_paint, view_is_cached
+        from services.read_endpoint import needs_direct_read_load
+        dataset = state.get_dataset(dataset_id)
+        direct = dataset is not None and needs_direct_read_load(
+            dataset, min_fp_quality=min_fp_quality, hide_terminal_gaps=hide_terminal_gaps,
+            terminal_gap_threshold=terminal_gap_threshold, include_duplicates=include_duplicates, include_qcfail=include_qcfail,
+            ml_threshold=ml_threshold, include_methylation=include_methylation)
+        reason = ineligible_reason(state, dataset, chrom=chrom, start=start, end=end, spanning=spanning,
+                                   max_reads=max_reads, downsample=downsample, coverage_sample=coverage_sample,
+                                   direct=direct)
+        if reason is not None:
+            return None
+        build_options = dict(include_layers=include_layers, requested_layers=requested_layers,
+                             include_layer_qualities=include_layer_qualities)
+        if view_is_cached(state, query, dataset_id, **build_options):
+            return None  # a cached view answers in full, as before
+        def start_full_set():
+            # The full set starts now, on the decode worker processes, while this thread decodes the drawn reads.
+            # The browser's background=true request joins it; the hold lapses if no request comes.
+            # (none once the request has left: a cancelled request does not wait for this thread)
+            holds.add(lambda: start_held(_background_key(state, request, dataset_id), _process_full_set, dataset_id,
+                                         wait_for_reads=False))
+        decode_workers = int(getattr(state, "performance", {}).get("decode_workers", 1) or 1)
+        return plan_first_paint(state, query, dataset_id, chrom=chrom, start=start, end=end, max_reads=max_reads,
+                                build_options=build_options, fill_gap_size=fill_gap_size, pins=pins,
+                                on_partial=start_full_set,
+                                workers=min(_first_paint_workers(), decode_workers // max(1, len(dataset_ids))))
 
     from services.read_pins import parse_pin_ids, pinned_reads
     pins = parse_pin_ids(pin_ids if isinstance(pin_ids, str) else None)
 
-    def _process_dataset(dataset_id: str):
-        """Process a single dataset — runs in thread pool for parallel I/O."""
+    def _process_dataset(dataset_id: str, full_set: bool = False):
+        """Process a single dataset — runs in thread pool for parallel I/O.
+        ``full_set``: always every read (the full set after a first paint)."""
         from services.background_work import interactive_read
         with interactive_read(), pinned_reads(pins):
+            plan = _first_paint_set(dataset_id) if first_paint and not background and not full_set else None
+            if plan is not None:
+                return _build_dataset(dataset_id, query, min_footprints, first_paint_set=plan)
             result = _build_dataset(dataset_id, query, min_footprints)
             # Min footprints hid every read in view: say how many (short reads).
             hidden_by_min_footprints_for_dataset(
@@ -296,13 +382,40 @@ async def get_reads_compact_all(
             )
         return result
 
+    def _process_full_set(dataset_id: str):
+        """A view's full set after its first paint: decoded on the decode worker processes, which the view's
+        datasets share."""
+        from services.read_route_helpers import full_set_on_workers
+        decode_workers = int(getattr(state, "performance", {}).get("decode_workers", 1) or 1)
+        token = full_set_on_workers.set(max(2, decode_workers // max(1, len(dataset_ids))) if decode_workers > 1 else 0)
+        try:
+            return _process_dataset(dataset_id, full_set=True)
+        finally:
+            full_set_on_workers.reset(token)
+
     # Even one dataset must run off the event loop: otherwise a cold load
     # blocks navigation, status and the disconnect notification itself.
     dataset_ids = query.dataset_ids
+    from services.background_work import HoldGroup
+    holds = HoldGroup()
     try:
-        task_results = await run_read_work(request, [partial(_process_dataset, did) for did in dataset_ids])
+        if background:
+            task_results = await asyncio.gather(*(
+                # The view's own reads: no waiting for other reads in flight (the other datasets' builds).
+                run_background(request, _background_key(state, request, did), _process_full_set, did,
+                               wait_for_reads=False, linger_s=FULL_SET_LINGER_S)
+                for did in dataset_ids))
+        else:
+            task_results = await run_read_work(request, [partial(_process_dataset, did) for did in dataset_ids])
     except Cancelled:
+        holds.release()
         return cancelled_response()
+    except BaseException:
+        holds.release()
+        raise
+    loop = asyncio.get_running_loop()
+    for hold in holds.close():
+        loop.call_later(FIRST_PAINT_HOLD_S, hold.release)
 
     results = {}
     for result in task_results:
@@ -469,6 +582,8 @@ async def quality_filter_impact_endpoint(payload: dict, request: Request, state=
         if isinstance(f, dict) and f.get("enabled", True)
     ]
     dataset_ids = payload.get("dataset_ids") or list(getattr(state, "dataset_order", []) or [])
+    from services.lift.capability import require_for_ids
+    require_for_ids(state, dataset_ids, "quality_impact")
     # Counting loads every read in view; beyond read-level zoom it is skipped.
     if not chrom or end <= start or end - start > QUALITY_IMPACT_MAX_BP:
         return {"success": True, "filters": quality_filter_impact([], filters), "available": {}, "skipped": end - start > QUALITY_IMPACT_MAX_BP}

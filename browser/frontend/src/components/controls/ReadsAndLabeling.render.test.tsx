@@ -5,6 +5,8 @@ import { useBrowserStore } from '../../stores/browserStore';
 import '../../plugins/builtinPanels';
 import { ColormapEditorInline } from './ColormapEditor';
 import { ReadDisplayToolbarControls } from './ReadDisplayToolbarControls';
+import { getLayerLabel } from '../../utils/layerColors';
+import { registerLayerColours, resetAllLayerColors, setLayerColorOverride } from '../../features/layerColours/state';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -67,6 +69,26 @@ describe('Reads toolbar and Labeling display options', () => {
     const names = grid.querySelectorAll('[data-testid="unmatched-layer-name"]');
     expect(names.length).toBeGreaterThan(1);
     for (const name of names) expect(name.parentElement!.className).toBe('contents');
+  });
+
+  // Audit (final 3.1.0): a recoloured inference layer's Display-options swatch repaints at once (it was cached with
+  // the datasets, so tf_sr stayed purple until a remount).
+  it('Display options swatches follow a layer colour change', async () => {
+    registerLayerColours();
+    useBrowserStore.setState({ datasets: [{ id: 'ds1', available_layers: { nuc: true, tf: true, tf_sr: true } }] } as any);
+    await act(async () => { root.render(<ColormapEditorInline />); });
+    const swatchFor = () => {
+      const grid = container.querySelector('[data-testid="unmatched-layer-opacity"]')!;
+      const names = [...grid.querySelectorAll('[data-testid="unmatched-layer-name"]')];
+      const name = names.find(n => n.textContent === getLayerLabel('tf_sr')) ?? null;
+      return name ? (name.previousElementSibling as HTMLElement).style.background : null;
+    };
+    const before = swatchFor();
+    expect(before).not.toBeNull();
+    await act(async () => { setLayerColorOverride('tf_sr', '#ff0000'); });
+    expect(swatchFor()).toBe('rgb(255, 0, 0)');
+    await act(async () => { resetAllLayerColors(); });
+    expect(swatchFor()).toBe(before);
   });
 
   // M9/L10 pattern in Labeling: delete controls are icons from the set, not "×".

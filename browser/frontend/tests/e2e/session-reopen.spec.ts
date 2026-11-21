@@ -14,7 +14,7 @@ import { mkdtempSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { ChildProcess } from 'node:child_process';
-import { test as base, expect } from '@playwright/test';
+import { test as base, expect } from './fixtures/nativeDialogs';
 import { DEMO_FIXTURE, pickRandomPort, startServer, type ServerProcess } from './fixtures/server';
 
 const test = base;

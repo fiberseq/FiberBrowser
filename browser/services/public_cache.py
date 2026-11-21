@@ -52,6 +52,7 @@ _NOT_STATE = frozenset({
     "_signal_counts_cache",
     "_current_chrom", "_current_start", "_current_end",
     "_public_cache_generation", "_public_cache_busy",
+    "_sv_reference_identity",
     # The last peak scan: every view change runs one, and only the analysis
     # routes (filtering, clustering) read it, never a CACHEABLE route
     # (tests/test_public_protection.py checks who reads it).

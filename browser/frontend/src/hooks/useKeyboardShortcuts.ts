@@ -4,6 +4,7 @@ import { seedHistoryBaseline } from '../stores/historySlice';
 import { findChromInfo } from '../utils/chromAliases';
 import { useEphemeralStore } from '../stores/ephemeralStore';
 import { resetViewUndoably } from '../utils/resetView';
+import { runWorkspaceKeyAction, useWorkspaceStore, workspaceKeyAction } from '../features/plots/workspace';
 
 interface KeyboardShortcutsOptions {
   onScanPeaks?: () => void;
@@ -162,6 +163,17 @@ function queueKeyboardPan(direction: -1 | 1): void {
   }, KEYBOARD_PAN_FALLBACK_RESET_MS);
 }
 
+/** Pan the main view a quarter of its width (Plots: no read-track drag offset). */
+export function panPlain(direction: -1 | 1): void {
+  const state = useBrowserStore.getState();
+  const width = Math.max(3, state.end - state.start);
+  const maxEnd = findChromInfo(state.chroms, state.chrom)?.size ?? Number.POSITIVE_INFINITY;
+  let start = Math.max(0, Math.round(state.start + direction * width * 0.25));
+  if (Number.isFinite(maxEnd) && start + width > maxEnd) start = Math.max(0, maxEnd - width);
+  if (start === state.start) return;
+  state.setViewport(state.chrom, start, start + width);
+}
+
 function adjustReadRowHeight(direction: -1 | 1): void {
   const state = useBrowserStore.getState();
   const current = state.readRowHeight === 'auto' ? 1 : state.readRowHeight;
@@ -201,6 +213,23 @@ export function useKeyboardShortcuts(options: KeyboardShortcutsOptions = {}) {
 
       const s = useBrowserStore.getState();
 
+      // Workspaces: P toggles Plots, H the Feature hub; in Plots, Esc goes back to the browser and the keys that act
+      // on the reads behind it (reset, scan, cluster focus, row height) do nothing.
+      const workspace = useWorkspaceStore.getState().view;
+      const workspaceAction = workspaceKeyAction(e, workspace);
+      if (workspaceAction) {
+        e.preventDefault();
+        runWorkspaceKeyAction(workspaceAction);
+        return;
+      }
+      // In a workspace (Plots, the hub), ← / → pan the shared locus directly (the read tracks are covered, so no drag offset to wait on).
+      if (workspace !== 'browser' && !e.altKey && !e.metaKey && !e.ctrlKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+        if (s.navigationMode === 'perPanel') return;
+        e.preventDefault();
+        panPlain(e.key === 'ArrowLeft' ? (s.isReversed ? 1 : -1) : (s.isReversed ? -1 : 1));
+        return;
+      }
+
       // Undo/Redo — Cmd+Z / Cmd+Shift+Z (or Ctrl on non-Mac)
       // Shift makes e.key 'Z'.
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
@@ -214,8 +243,10 @@ export function useKeyboardShortcuts(options: KeyboardShortcutsOptions = {}) {
       }
 
       // Each panel navigates: the main view's pan/zoom keys would move a view
-      // no panel shows (each panel has its own locus box).
-      if (s.navigationMode === 'perPanel' && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', '+', '=', '-'].includes(e.key)) {
+      // no panel shows (each panel has its own locus box). Back / Forward
+      // (Alt+← / Alt+→) still work: they undo the panels' own jumps too.
+      if (s.navigationMode === 'perPanel' && !(e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight'))
+        && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', '+', '=', '-'].includes(e.key)) {
         return;
       }
 
@@ -287,14 +318,13 @@ export function useKeyboardShortcuts(options: KeyboardShortcutsOptions = {}) {
         case '9': {
           e.preventDefault();
           const clusterIndex = parseInt(e.key) - 1;
-          for (const key of clusterFocusKeys(s)) {
-            const assignments = s.clusterAssignments[key];
-            if (!assignments) continue;
-            const clusterIds = new Set(Object.values(assignments));
-            if (clusterIds.has(clusterIndex)) {
-              s.setClusterFocus(key, new Set([clusterIndex]));
-            }
-          }
+          const keys = clusterFocusKeys(s).filter(key => Object.values(s.clusterAssignments[key] ?? {}).includes(clusterIndex));
+          if (!keys.length) break;
+          // One undo step for every panel it focuses (it took one per panel: stabilize 3, item 2), coalesced as one
+          // panel's focus is (quick presses make one step).
+          seedHistoryBaseline(s, 'Before cluster focus', 'filtering');
+          for (const key of keys) s.setClusterFocus(key, new Set([clusterIndex]), { record: false });
+          useBrowserStore.getState().pushSnapshot('Set cluster focus', { kind: 'filtering', coalesceKey: 'cluster-focus:keys', coalesceMs: 800 });
           break;
         }
 

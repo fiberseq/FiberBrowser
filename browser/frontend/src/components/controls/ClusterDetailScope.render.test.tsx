@@ -119,6 +119,15 @@ beforeEach(() => {
 });
 afterEach(() => { act(() => root.unmount()); host.remove(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
+it('shows the persisted whole-view scope without a transient run result', async () => {
+  setRunResult('cluster', null);
+  const s = useBrowserStore.getState();
+  useBrowserStore.setState({ clusterWindowPeaks: { scope: 'whole-view', regions: s.clusterPeakRegions,
+    byKey: { napa: s.clusterPeakRegions }, views: { napa: { chrom: s.chrom, start: s.start, end: s.end, genome: null } } } });
+  await act(async () => { root.render(<ClusterDetailPanel />); });
+  expect(host.querySelector('[data-testid="cluster-detail-scope"]')?.textContent).toBe('whole view (no peaks selected)');
+});
+
 it('offers Open as panels only for saved groups, not projected feature identifiers', async () => {
   const s = useBrowserStore.getState();
   s.upsertMatchedGroup({ id: 'saved', name: 'Saved group', regions: [{ index: 0, chrom: s.chrom, start: s.start, end: s.start + 100,

@@ -8,6 +8,8 @@ import { readStatsHiddenText } from './readStatsScope';
 import { fetchFootprintSizes } from '../api/clustering';
 import { readsKeptByFilters } from './datasetReadsLocus';
 import { coverageRequestKey } from '../components/tracks/read-track/useReadTrackData';
+import { queryReads } from '../features/graphPanel/api';
+import { getLinkedReadsImageUrl } from '../api/dafc';
 
 const counts: SignalCounts = { total: 10, kept: 10, hidden: 0, background: 0, detectable: 0, unclassified: 0,
   unscored: 0, unknown: 10, structure_scored: 0 };
@@ -54,13 +56,27 @@ describe('Min footprints and uncalled reads: requests and counts', () => {
     expect(signalFilterUrl('https://example.org/x')).toBe('https://example.org/x');
   });
 
+  it('graph-mode read requests and linked-read images carry the setting (they bypass sharedFetch)', async () => {
+    const fetchMock = stubFetch({ ok: true });
+    const q = { registrationId: 'r', revisions: { package: 'p', graph: 'g', db: 'd', maps: 'm' }, requestId: 'q', panelId: 'p',
+      generation: 1, datasets: [], paths: [] } as never;
+    await queryReads(q);
+    expect(urlOf(fetchMock.mock.calls[0]).searchParams.get('hide_uncalled')).toBeNull();
+    expect(new URL(getLinkedReadsImageUrl('s', 'x', 100, 2), 'http://x').searchParams.get('hide_uncalled')).toBeNull();
+    useBrowserStore.getState().setMinFootprints(MIN_FOOTPRINTS_ALL_READS);
+    await queryReads(q);
+    expect(urlOf(fetchMock.mock.calls[1]).searchParams.get('hide_uncalled')).toBe('false');
+    expect(new URL(getLinkedReadsImageUrl('s', 'x', 100, 2), 'http://x').searchParams.get('hide_uncalled')).toBe('false');
+  });
+
   it('coverage requests and their keys carry the setting', async () => {
-    expect(coverageRequestKey('ds', 'chr1', 0, 100, 10, false, false, true))
-      .not.toBe(coverageRequestKey('ds', 'chr1', 0, 100, 10, false, false, false));
-    expect(coverageRequestKey('ds', 'chr1', 0, 100, 10)).toBe(coverageRequestKey('ds', 'chr1', 0, 100, 10, false, false, true));
+    // Dev line: the live-lift options sit before the QC-fail and uncalled settings.
+    expect(coverageRequestKey('ds', 'chr1', 0, 100, 10, false, undefined, false, true))
+      .not.toBe(coverageRequestKey('ds', 'chr1', 0, 100, 10, false, undefined, false, false));
+    expect(coverageRequestKey('ds', 'chr1', 0, 100, 10)).toBe(coverageRequestKey('ds', 'chr1', 0, 100, 10, false, undefined, false, true));
     const fetchMock = stubFetch({ coverage: [], max: 0 });
     await getCoverage('chr1', 0, 1000, 10, 'ds');
-    await getCoverage('chr1', 0, 1000, 10, 'ds', undefined, false, false, false);
+    await getCoverage('chr1', 0, 1000, 10, 'ds', undefined, false, undefined, false, false);
     expect(urlOf(fetchMock.mock.calls[0]).searchParams.get('hide_uncalled')).toBe('true');
     expect(urlOf(fetchMock.mock.calls[1]).searchParams.get('hide_uncalled')).toBe('false');
   });

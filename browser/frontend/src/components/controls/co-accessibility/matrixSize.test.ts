@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { coaccMatrixSize } from '../CoAccessibilityPanel';
+import { coaccMatrixSize } from './CoaccMatrixView';
 
 describe('co-accessibility matrix size (L14)', () => {
   it('takes the panel width instead of a 400 px cap', () => {

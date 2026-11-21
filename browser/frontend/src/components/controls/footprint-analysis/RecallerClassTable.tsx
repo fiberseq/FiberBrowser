@@ -12,6 +12,7 @@ import {
   tierEdge, tierLoose, tierSum, type DiscrepancyFlag, type RecallerChannel, type RecallerClassRow, type RecallerTier, type Weighting,
 } from '../../../utils/recallerTable';
 import { ClassPrevalenceChart } from '../../charts/ClassPrevalenceChart';
+import { TierBar } from '../shared/TierBar';
 import { downloadTextFile, exportTimestamp } from '../../../utils/analysisExport';
 import { nextSavedClassId, restoreRemovedGroups, savedClassGroups } from '../../../utils/savedClasses';
 
@@ -309,17 +310,9 @@ export function PrevalenceLegend({ color = CHANNEL_COLOR.CT }: { color?: string 
 /** One channel's prevalence as a thin bar: solid exact matches, lighter + sharing one edge, faint + other
  * footprints over the site; grey where the channel does not support the class (see PrevalenceLegend). */
 export function PrevalenceBar({ r, color, title }: { r: RecallerStrand | undefined; color: string; title: string }) {
-  const w = (v: number | null | undefined) => `${Math.min(100, 100 * (v ?? 0))}%`;
   const faded = !r?.supported;
-  return (
-    <span className="relative block h-1.5 w-full rounded-sm bg-gray-100 dark:bg-gray-800" title={title} data-testid="recaller-bar">
-      {r && <>
-        {r.supported && <span className="absolute left-0 top-0 block h-full rounded-sm" style={{ width: w(tierLoose(r)), backgroundColor: color, opacity: .2 }} />}
-        {r.supported && <span className="absolute left-0 top-0 block h-full rounded-sm" style={{ width: w(tierEdge(r)), backgroundColor: color, opacity: .45 }} />}
-        <span className="absolute left-0 top-0 block h-full rounded-sm" style={{ width: w(r.prevalence), backgroundColor: faded ? '#94a3b8' : color, opacity: faded ? .5 : .95 }} />
-      </>}
-    </span>
-  );
+  return <TierBar value={r?.prevalence} edge={r?.supported ? tierEdge(r) : null} loose={r?.supported ? tierLoose(r) : null}
+    color={color} solidColor={faded ? '#94a3b8' : undefined} faded={faded} title={title} testId="recaller-bar" />;
 }
 
 export const channelColor = (c: { strand: string }) => CHANNEL_COLOR[c.strand] ?? '#475569';

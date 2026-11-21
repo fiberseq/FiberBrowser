@@ -133,6 +133,8 @@ def apply_mode(state, mode='auto', browser_tier=None, *, invalidate=True) -> dic
                 if cache is not None:
                     cache.clear()
         ensure_caches(state, limits)
+        from services.compact_read_loader import configure_sv_memo
+        configure_sv_memo((16 if effective == 'low' else 96) * MIB)
         from services.byte_cache import configure_shared_caches
         configure_shared_caches(limits['cache_bytes'])
         from services.background_work import configure_workers
@@ -173,6 +175,8 @@ def release_caches(state):
             cache = getattr(state, attr, None)
             if cache is not None:
                 cache.clear()
+    from services.compact_read_loader import clear_sv_memo
+    clear_sv_memo()
 
 
 def diagnostics(state) -> dict:

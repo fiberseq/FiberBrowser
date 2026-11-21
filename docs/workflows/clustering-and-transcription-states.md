@@ -85,7 +85,8 @@ branch or delete it with its children.
 
 Press **1**–**9** to focus a cluster (**0** clears the focus; **Escape** clears
 focus and peak selection). The analysis panels (Footprints, Transcription, Read
-Stats, Co-accessibility) then use only the reads in the focused clusters.
+Stats) and co-accessibility in [Plots](plots.md) then use only the reads in the
+focused clusters.
 Clicking a colour in the cluster bar selects that cluster and opens the
 **Clusters** panel.
 

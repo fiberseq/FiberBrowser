@@ -1,5 +1,594 @@
 # Changelog
 
+## 3.1.0 — 2026-11-20
+
+FiberBrowser 3.1.0 requires **FiberHMM 3.2.0 or later**
+(`fiberhmm[consensus]>=3.2.0,<4`): scans, the feature hub, the Nucleosomes
+panel and graph mode / live lift use FiberHMM's `scan`, `nuc`, `assoc` and lift
+modules, which are new in 3.2.0. The apps bundle FiberHMM 3.2.0, and their
+FiberHMM updater refuses older releases. Meta-locus, live lift and graph mode
+ship as **Preview** features.
+
+3.1.0 is the next release after 3.0.8 and includes every fix released in
+3.0.2–3.0.8 (their entries are kept below). The sections here list what is new
+since 3.0.1. See [What's new](docs/whats-new.md) for an illustrated
+introduction and [the docs index](docs/index.md) for the workflows.
+
+### Decided before release
+
+- **New runs pass their MAPQ.** The New run wizard has a Minimum MAPQ setting
+  (0 by default) and always passes it to FiberHMM as `--min-mapq`, so a
+  different FiberHMM default can't change a run silently. The run plan and the
+  job card show it ("MAPQ 0"), as a Library re-call shows its recorded MAPQ.
+- **One Preview badge per panel.** A lifted panel outside graph mode shows the
+  badge on its live-lift chip only, not again on its Linear ⇄ Graph toggle. The
+  toggle keeps its badge where it is the panel's only preview marker.
+- **Read Stats leaves out reads that fail Min footprints** on BAM datasets, as
+  the read track does: they are not listed or counted in the distributions, and the summary
+  counts them as hidden, with the reason. Uncalled reads follow "All reads,
+  including uncalled" as before. Hidden reads are no longer reported as "not
+  found in this view".
+- **No named nucleosome classes.** Named classes (small, hexasome, octasome,
+  chromatosome) need an absolute control, so they are gone from colour rules,
+  hovers and the Nucleosome footprints export (which keeps its other columns).
+  Size classes, z and posterior stay. A FiberHMM 3.1 BAM that still carries the
+  named byte is read without it. A saved session, preset or labeling file whose
+  rules use named classes loads with those conditions dropped (the rest of each
+  rule stays) and says how many were dropped.
+- **Layer colours you choose.** Labels → Layer colours (or right-click a layer
+  toggle → Change colour…) sets the colour of any layer, built-in or an extra
+  MA-tag group. The read track, metaprofiles, cluster views, Plots, graph mode,
+  the insertion lens and exported figures all use it, and the built-in
+  Nucleosome, Accessibility and Subnucleosome rules follow it while they keep
+  their stock colours. The colours are saved with the session; "Save as my
+  default colours" keeps them for every session, and a session's own colours
+  win. A colour very close to another layer's gets a soft warning, also under
+  simulated colour-vision deficiency.
+- **Plots: Compare in the main row.** Compare sits next to Group by instead
+  of under More options, and is disabled, with the reason, when the plot has
+  fewer than two groups. With Compare on, "Summary of the comparison" gives one
+  value per comparison for metaprofiles and size histograms (A − B or
+  log2(A/B) of the two sides' summaries, with a paired bootstrap interval); for
+  size enrichment and V-plots the summary is off while comparing and says so.
+- **Cluster metaprofile legends are complete.** Every card lists every channel
+  on show, and a cluster without a layer shows it hollow ("no … in this
+  cluster"), so the cards' plot areas line up.
+- **Recent and pinned genomes.** Reference & Tracks lists the genomes you
+  loaded (a local FASTA with its annotation, or an online genome), most recent
+  first, with pinned ones above them. One click reopens a genome with its
+  annotation; a missing file is shown greyed out. When the loaded reference
+  does not fit the data, the mismatch banner offers the pinned or recent genome
+  that fits it ("Switch to dm6 (matches your data)"), and one click switches;
+  nothing switches on its own. On a lab server the list is per
+  member and only holds paths inside the member's folders; public servers
+  don't have it.
+
+### Fixed before release
+
+A release audit of 3.1.0 fixed these, each with a regression test:
+
+- **Reference at start-up:** a server started with `--fasta` keeps that
+  reference; neither a remembered FASTA nor a crash-recovery restore loads
+  another genome over it, and the page says in one line when a saved reference
+  was not restored. Without `--fasta`, the data's genome wins over a remembered
+  FASTA of another assembly. Loading the genome whose sequence is already open
+  now loads its missing annotation instead of doing nothing, and an annotation
+  from another genome can be reset to the reference's genes (Reference &
+  Tracks, or the new "Gene annotation mismatch" banner). Genes are no longer
+  served from a 5-minute browser cache after the annotation changes. Opening
+  the desktop app with a file no longer reopens the last session over it.
+- **Full-UI export:** a read load that fails while the capture is being drawn
+  is reported in the Export dialog ("Could not load reads … export again"); the
+  image of the placeholders is no longer saved.
+- **MA tags are read as FiberHMM 3.2.0 reads them.** A tag FiberHMM rejects
+  (a section head without a strand character, `nuc:…` rather than `nuc.:…`, a
+  read length that is not a number, or an interval that is not `start-length`)
+  carries no calls and draws no layers, and the read counts as uncalled. Beside
+  such an `MA`, a valid fibertools `Ma` is used.
+- **Plots:** scale-regions profiles no longer hang on fractional bin widths;
+  BED Compare uses raw counts; size histograms bin each footprint by its whole
+  size, and a footprint cut by the window or the fetch is not counted as having
+  its midpoint inside; methylation densities are per bp,
+  and Count stays raw marks; Random N applies to selected-feature heatmaps;
+  windows near a contig start keep all their bins.
+- **Metaprofiles** count a read once per bin per channel, with coverage across
+  every call it carries, on the server, in projections of loaded reads, in
+  exported figures and in Plots alike (as 3.0.8 does).
+- **Meta-locus:** Read Stats resolves meta-locus reads, including sites near a
+  contig start; signal filters reach the cached and parallel decodes; sites
+  near a contig start sit at the anchor; restoring a session keeps exactly its
+  saved reads and seed 0; a missing BED on restore says so and returns to the
+  last real locus; Cancel always ends the build; uploaded BEDs reopen on lab
+  servers; crash recovery reopens the pool.
+- **Sequence search:** every paired reference is searched, each with its own
+  BLAST database; long minus-strand BLAST hits show their 5' bases; hits from
+  another genome can't be opened or added; Cancel before the search starts
+  cancels it; long repetitive scans stop on Cancel; pasted multi-line or FASTA
+  sequence is recognised; hits tracks save and load on lab servers.
+- **Lab servers:** meta-locus pools, sequence searches and Identify jobs are
+  private to each member and workspace; the BED readers open the path the
+  confinement check approved; the legacy hub route is local-only.
+- **Downloads and updates:** an HTTPS download never follows a redirect to a
+  non-HTTPS scheme, and every redirect hop of a FiberHMM update must be HTTPS.
+- **Sessions and recovery:** crash recovery keeps Plots (Gallery and builder),
+  native molecule provenance and the meta-locus; a session's meta-locus BED is
+  checked and can be relinked.
+- **Graph mode and Differences** follow the signal filters, the quality
+  filters and the workspace read settings, and cache by them.
+- **Read paths:** Regions, window fitting and the top-window search follow the
+  duplicate and QC-fail toggles and the signal filters; lifted Read Stats
+  applies the options it reports; Read Stats counts MA-only calls after the
+  quality filters; a large annotation download asks first and then finishes,
+  also on the public route and in copies of the reference.
+- **Nucleosomes and hub:** regularity and geometry results follow the open
+  scans; opening a session cancels nucleosome jobs; hub results are adopted
+  however the job reports completion; a FiberHMM without `fiberhmm.scan` gets
+  a clear "needs FiberHMM 3.2.0" message.
+
+### Plots workspace
+
+- **Plots** is a full-window workspace beside the browser: **Plots** at the top
+  of the icon strip on the right edge, or **P**, opens it; **P**, **Esc** or
+  **Back to browser** goes back. ⌘K has **Open Plots** and **New plot from
+  current view**. The reads keep their scroll, filters and clusters underneath.
+- Each plot is a Type × Source × Where × Group by, with an optional Compare.
+  Types: **Metaprofile** (with size bands and a split by state at the anchor),
+  **Size enrichment**, **V-plot**, **Size histogram**, **Heatmap** (one row per
+  region) and **Co-accessibility**. Where: the current view, selected
+  features, BED region sets, or random reads from the whole file (size
+  histogram). Group by none, dataset, cluster, selected classes or read
+  groups. Compare: A − B or log2 ratio. **Summary across groups** reduces each
+  group to one number with a seeded bootstrap or Wilson interval. Every
+  random step uses the plot's seed. See [Plots](docs/workflows/plots.md).
+- **Follow** plots recompute 300 ms (a setting) after the view stops moving and
+  say **Updating…** meanwhile, with the old numbers greyed and blanked;
+  **Pin** keeps a locus. Every plot says the locus it was computed for.
+- Plots inside Plots: the locus with back / forward, pan and zoom, ← / → keys,
+  and a mini read strip (drag to pan, click to jump). Clicking a plot cell
+  moves the shared locus there.
+- Name and save plots with the session, duplicate them, and export the whole
+  plot as PNG, SVG, PDF or TSV.
+- **Plot these clusters** in the Clusters panel and **Open in Plots** in
+  Footprint sizes, the cluster profiles, peak rules, Read Stats and the
+  Footprints panel open the matching plot.
+- **Previous saved region** is now **Shift+N** (P opens Plots); **N** still
+  steps to the next region.
+
+### Co-accessibility moved into Plots (3.1.0)
+
+- The **Co-accessibility panel** is now the **Co-accessibility** plot type in
+  Plots, with everything the panel had: signal and layer, normalisation (raw,
+  O/E, O/E by distance, correlation), linear / log / sqrt scaling, the panel's
+  colormaps (fall, hot, red, blues) beside the others, bin size, minimum reads,
+  per dataset or pooled, the reads of the targeted panels with their cluster
+  focus and read filters, the genes along the edge and the panel's orientation,
+  the run summary (reads, bins, coverage, masked share, seed), Refresh, and
+  **JSON**, **TSV** and **Python** exports. The track under the reads (heatmap
+  strip, arcs, virtual 4C) is set from the plot. Matrices stay square.
+- Every old entry point opens Plots on a co-accessibility plot of the view:
+  ⌘K **Co-accessibility**, the track menu, Footprints › Co-occupancy, Export
+  data, links, scripts and `open_panel('co-accessibility')`. A session saved
+  with the panel open restores the plot in Plots. `/api/coacc/*` is unchanged.
+
+### Plots heatmap: one row per region
+
+- **Heatmap** is the standard per-region heatmap: one row per region (the
+  selected features, or BED regions read in chunks with progress, seeding and
+  minus-strand flipping), its signal across the window (anchor ± flank, or
+  scaled regions), with the metaprofile drawn on top on the same x axis.
+  Compare shows the groups in the profile and the per-region A − B or log2 in
+  the heatmap.
+- Sort rows by the mean signal in a window (the whole window by default), the
+  signal at the centre, **k-means clusters** of the rows (seeded; row blocks
+  with a profile per cluster), BED order, or a BED column (score). **Save
+  cluster as BED set** turns clusters into BED region sets that other plots
+  take as groups. The header says what it measures, e.g. "Accessibility per
+  region, 1,000 BED regions ±1 kb, sorted by mean; seed 1".
+- The reads × position mode over the view is retired (it redrew the read
+  track). Old cards and sessions in that mode open as stored, with a note.
+
+### Plots: steps run from where they are needed
+
+- An empty plot that needs a step offers a button that runs it, behind Plots,
+  and the plot picks up the result: **Scan peaks**, **Scan and select peaks**,
+  **Find classes** (in this view), **Find geometries** (the Nucleosomes
+  analysis), **Cluster reads**. Read groups need a choice and open Footprints
+  › Classes, and say so.
+
+### Plots Gallery: keep what you want
+
+- Plots no longer adds a Gallery card for every change. Each open plot has one
+  **Current** card, updated in place as you change it or pan. **Keep** (Save
+  this plot to the Gallery) freezes a copy with its data, browser state and
+  seed; **Duplicate** and choosing a card for **Compare** keep too. Open a kept
+  card, change it and **Keep** again for a version under it (**Replace
+  original** stays). Closing a plot drops its Current card, with **Undo**.
+- Sessions from before keep their starred cards; the other auto-saved cards
+  load into a collapsed **Older auto-saved** group with **Clear all**.
+
+### Meta-locus (preview)
+
+- **Open BED as meta-locus…** (Open ▾, ⌘K) pools a BED file's sites (e.g.
+  every promoter, TSS ± 10 kb) into one virtual locus with a seeded working set
+  of reads: browse, cluster and plot it like any locus. **More reads**,
+  **Resample** and the seed set what is on show; **Keep workspace full** refills
+  clusters from the pool; **Open this site** and **Find more like this** on a
+  read. Sessions and links keep the pool. A Preview feature (on by default;
+  **Show preview features** hides it): views that need one real genome position
+  are left out on the meta contig, and a read in several sites counts once per
+  site. See
+  [What 3.1 includes](docs/release-scope.md#meta-locus).
+
+### Feature hub workspace hidden for now
+
+- The full-window Feature hub workspace is behind **Settings › Read Display ›
+  Experimental: Feature hub workspace** (off by default) while it is reworked.
+  The docked Feature hub panel works as before. The **Differential features**
+  plot type waits for it too: hidden with the flag off (a session or card that
+  has one shows its stored result, read-only).
+
+### Y scales, read filters and fixes (3.1.0)
+
+- **Own or shared y for sets of small plots.** Cluster Overview cards and
+  Profiles, the Hub overlay facets, pooled and member peak profiles, and
+  Footprints › Sizes (several selected footprints) take one control: **Own y**
+  (default) or **Shared y**, and where it applies **Enrichment** against a
+  baseline (all reads in the region, own flank mean or dataset mean) as %,
+  ratio or log2. Own-y cards show their max.
+- **Metaprofiles stay within 0–1.** A read counts once per bin per layer, rule
+  or FIRE, however many of its calls meet in the bin, and its coverage spans
+  every call it adds. Cluster profiles could reach 1.33 before. The read track,
+  cluster profiles and Plots share one binning.
+- **Read Stats applies the read track's filters**: colour-rule quality
+  filters, minimum footprint quality and the duplicate and QC-fail toggles. The
+  summary says what each filter hid or removed.
+- **Reads without footprint calls are hidden on every path** that reads BAM
+  records itself (read images, Variants, SV splits, the insertion lens, DAF-C,
+  graph mode, Differences, autozoom, random windows), and Plots' random reads.
+  The dense loader, DAF-C, autozoom and lift difference reads also follow the
+  duplicate and QC-fail toggles.
+- **Signal read filters (bg/me) show only for datasets that carry signal
+  tags.** A saved signal filter stays in the session and takes effect when a
+  tagged dataset loads.
+- **Downloads have no size cap and ask first above a warning size** (Settings
+  › App, 4 GB by default). HTTPS downloads never follow a redirect to HTTP, and
+  a genome download cancelled while indexing never opens the next mirror.
+- Peak-scan smoothing gives identical results on x86 and Apple Silicon (float64
+  sums; pairs with FiberHMM's matching change).
+- Release builds check that the bundled frontend is rebuilt from the current
+  sources.
+
+### Fixed (also released in 3.0.4)
+
+- **The FIRE filter applies only to FIRE scores.** FiberHMM's own MSP score
+  (`fiberhmm-apply --scores`, written as `aq`) is no longer hidden by the
+  default FIRE filter. fibertools 0.13 FIRE files are filtered like older
+  ones. FiberBrowser decides per file, from the reads first and the `@PG`
+  header only when the reads can't tell.
+- **Primer design works on a loaded plasmid map** (SnapGene .dna, GenBank or
+  EMBL), with or without a genome open. Primers are checked against the BLAST
+  database you choose, where any hit counts as off-target, and against the
+  plasmid itself for a single binding site. 3C designs with one locus on the
+  genome and one on a plasmid use a database per locus (3.0.4 refuses them).
+- **Building a primer BLAST database works in more places:** for a genome
+  opened from the online genome picker, and for paths that contain a space.
+  When it cannot build, the message says what to do.
+
+### Added (also released in 3.0.4)
+
+- **FIRE on/off and threshold in the toolbar.** The Quality group has a FIRE
+  switch, an `aq` slider with its FDR, presets for FDR 5, 10 and 20%, and an
+  on/off box for each other filter. Turning FIRE off keeps the threshold.
+- **The accessibility layer is called FIRE** in files with FIRE scores, and
+  Accessibility otherwise (layer toggles, menus, hover, Footprint sizes).
+
+### Added (also released in 3.0.2)
+
+- **QC-fail reads are hidden by default, like duplicates.** Reads with the SAM
+  QC-fail flag (`0x200`) are left out of the read panels and analyses,
+  including the DAF strand-swap chimeras FiberHMM 3.0.3+ flags
+  (`xc:Z:strand_swap`). **Quality → Show QC-fail reads (incl. FiberHMM
+  chimeras)** (toolbar Quality group, and Reads & Display → Read Filters)
+  shows them again, with an amber body and a QC or chimera label in the hover
+  and Read Stats. The panel header counts hidden QC-fail reads, chimeras
+  separately. Sessions save the switch; older sessions open with it off.
+  Requires `fiberhmm>=3.0.3`. Nucleosomes, the feature hub (overlays,
+  associations), scans and Differences follow the same toggle. Turning QC-fail
+  or duplicate reads on or off resets an SV split's groups, so an exported
+  cluster-assignment TSV lists only the reads shown.
+- **FiberHMM updates between app releases.** Settings > FiberHMM & Updates
+  offers **Update FiberHMM to X.Y.Z** when PyPI has a newer FiberHMM 3 than
+  the app bundles. FiberBrowser checks the wheel's SHA-256, requirements and
+  features, installs it outside the signed app and restarts with your session.
+  Running jobs keep the FiberHMM they started with; **Use bundled FiberHMM**
+  goes back, and a damaged update falls back to the bundled one at startup.
+- **Install and restart fixes:** the macOS install helper's quoting (it
+  stopped before replacing the app), relaunch rollback, Windows rollback of the
+  app environment; the Mac updater requires FiberBrowser's Team ID. The Mac
+  app's loky workers and `fiberhmm-*` commands find the backend again. Library
+  re-calls carry the chimera mode once; app and WSL builds drop build paths
+  from their package metadata.
+
+### Footprint size enrichment plots
+
+- **Clusters › Charts › V-Plot** is now **Footprint sizes**, with two views
+  you switch between in one click. **Size enrichment** is the default: each
+  footprint fills the positions it covers, and each size row is divided by its
+  mean across the window, coloured by log2 enrichment centred on 0 (1x). **V-plot**
+  counts each footprint at its midpoint.
+- No clustering needed: without clusters there is one plot per dataset from
+  all reads in view, side by side on one scale. With clusters there is one plot
+  per cluster, or per dataset.
+- Ways in: **Footprint size enrichment here** on the read menu, **Sizes**
+  beside **Cluster** in the toolbar, ⌘K (*size enrichment*, *footprint
+  sizes*, *V-plot*) and the empty Clusters panel.
+- The source is chosen from the layers the Layers toolbar lists, with its
+  names and colours (Nuc, TF, Accessibility, footprint classes and other
+  interval layers), plus **All footprints**, the default: the Nuc and TF
+  layers together, each footprint once. Before, the plot drew the calls
+  alone, which in FiberHMM output are only the nucleosome-sized footprints.
+- Gaussian smoothing has its own sigma for size and for position, in bp
+  (0 = off). Older sessions' single smoothing value, in bins, maps onto it.
+- Normalise per size row, per position, by observed / expected, or show
+  counts. A minimum-footprints guard leaves rows or positions blank.
+- A log2 ratio of two plots, a note when plots rest on very different read
+  counts, PNG / SVG / PDF per plot, and **Export TSV** with the settings in
+  the header. The settings are saved with the session.
+- Colormaps: comparisons (the log2 ratio of two plots) default to the
+  diverging RdBu, centred on 0 (blue lower, red higher, white equal); single
+  plots to a sequential map, magma for Size enrichment (log2 or linear) and
+  viridis, as V-plots have always used, for the V-plot. **Colormap** and
+  **Reverse** under More settings (and beside the ratio picker) choose Magma,
+  Viridis, Inferno, Plasma, Cividis, Greys or RdBu; Size enrichment, V-plot
+  and the ratio each keep their own pick. A diverging colormap keeps 0 at its
+  white middle. The colour bar and the PNG, SVG and PDF downloads follow it;
+  it is saved with the session.
+- `/api/cluster/vplot` gains `group_by`, `dataset_ids`, `normalization`, `layer: all_footprints`,
+  `sigma_size_bp`, `sigma_pos_bp` and `raw_values`; requests without them are
+  answered as before. The Python client gains
+  `get_footprint_size_enrichment()`.
+
+### Live lift and linked source views
+
+- **Open ▾ → Add live lift…** draws a BAM aligned to another assembly on this
+  genome, without realigning. It accepts graphlift maps and UCSC chains.
+  **View on another assembly (live lift)…** starts from a BAM panel and
+  suggests matching maps. A source assembly FASTA is optional.
+- **Open as** offers **Graph**, **One panel per haplotype** and **Pooled**.
+  Graph is the default when a registered package binds the dataset. Otherwise
+  haplotypes open as separate panels. Reads keep their filters, selections,
+  clusters and source alignment information.
+- **Open MAT source view** (or another haplotype) opens the same molecules on
+  their own assembly. A ribbon shows corresponding sequence; hover and
+  navigation follow both views, including reversed matches. Links are saved
+  with sessions.
+- Coverage hatching marks sequence a haplotype lacks. Insertion ticks are
+  optional: **Off**, **Ticks** or **Ticks with size**. Supplementaries can
+  have their own rows, fold onto the primary row or be hidden. Separate
+  settings control how records enter analyses.
+- Native and lifted panels can share clustering. **BAM subset** exports the
+  source-assembly records with their tags. Unsupported analyses explain which
+  input to use. Live lift is enabled locally by default; lab servers must
+  enable it, and public servers do not offer it.
+
+### Differences and structural variants
+
+- The **Differences** row replaces the SV row. Lifted panels show assembly
+  differences by haplotype and optional read-supported edits. Native panels
+  show structural variants in their reads. Arrows jump between differences.
+- Click an insertion to expand its sequence across panels. Matching haplotype
+  insertions share a column; shorter alleles keep their own length. Native
+  reads can join with **Associate native layout**. This matches position and
+  length and does not establish allele identity.
+- Cmd/Ctrl-click or **Inspect…** opens the inspector. It shows assembly and
+  read evidence, carriers, reference molecules and uninformative records.
+  With a matching source FASTA, it can compare consensus and assembly,
+  confirm an insertion and copy its sequence. **Identify** reports candidate
+  sequence matches and their evidence. The insertion lens provides a separate
+  view of an insertion's reads.
+- Carrier evidence distinguishes confirmed, putative, conflicting and ambiguous
+  support. Highlights, filtering, grouping and splits follow that evidence.
+  Saved SV splits and expanded insertions from 3.0.x still restore.
+- Read-difference analysis, SNP scans, conflicting clips and consensus no longer
+  apply MAPQ 20 by default. **Read analysis MAPQ ≥**, **MapQ ≥** and
+  **Min elsewhere MAPQ** still let you set a minimum.
+- Reconstruction jobs respect memory budgets and cancellation. Failed
+  insert-expanded builds offer **Retry**. Inspector comparisons remain stable
+  while browsing, and pooled-panel Identify uses the selected carrier.
+
+### Graph mode
+
+- View a dataset on graph lanes, one per haplotype or assembly, with a read
+  band per panel. Switch with **Linear ⇄ Graph** or **View as graph**. Native
+  BAMs can also open as graphs when a package binds their contig.
+- Pop out haplotypes as lifted panels, source views or both. **Pop out paths…**
+  chooses several at once. Fold them back, or add other datasets to the graph.
+  Selection and cluster labels follow the molecules across these views.
+- **Scan** finds peaks on graph columns. **Cluster** uses shared sequence and
+  can refine within carriers of inserted sequence. **Not a carrier** requires
+  complete evidence; unresolved sequence is left out with a reason.
+- Right-click a read for **Sort by this graph column** or **Sort by rule at
+  this column**, including inserted sites. Uncovered sites sort last. Rules
+  needing reference annotations are disabled there.
+- **Graph run options** offers **Exclude repeat columns** or **Repeat columns
+  by occurrence**, and **Refine within carriers** or **Drop carrier-only
+  features**. **Graph regions and carriers…** reports the parts used.
+- Layers on graph rows include scan classes and states, custom annotations,
+  nucleosome size and segment layers, 5mC and deamination marks. Split pieces
+  retain annotation names, molecular sizes and quality values.
+- Wide or unresolved views switch to linear. The default thresholds are 50 kb
+  out and 40 kb back. **Stay linear** pauses the return. **Linear view of a
+  host → Host only** keeps folded members hidden; popped-out panels stay open.
+  Bands show density strips and counts when not every molecule fits.
+- Register packages with **Open ▾ → Register graph package…**. Dataset graph
+  mode does not need preview features; the standalone **Graph view** panel
+  does. The macOS app includes the helper; pip offers `fiberbrowser[graph]`.
+
+### Feature hub and scans
+
+- **Hub** lists classes, NFRs, nucleosome patches, peaks, SNPs, SVs, Differences
+  and graph bubbles. Compare dataset and haplotype values, expand provenance,
+  filter by prevalence, strength, q or declared scores, and find matched hits.
+- Choose a view, BED regions, genes, anchors, a whole scan or genome scan files.
+  Results are filtered and sorted before paging. Selection survives page
+  changes. **Select shown** replaces it with the current page.
+- **Open scan…** binds a scan by file contents. Bound scans join per-record
+  states. Stale scans offer **Re-scan…**. Scans of other files remain read-only:
+  browse their hits and values without applying their states to loaded reads.
+- **Scan…** runs `fp`, `nfr`, `nuc` and `peaks` over view grid units, a BED file
+  or genes, with progress, cancellation and a command line equivalent. View
+  commands use `--genome --zones`. Matching completed units are reused.
+- Live-lift scans can pool complete lifted records in the target frame. They
+  refuse truncated, hard-clipped, folded or noncolinear evidence. Source-frame
+  scans can still be made from the source BAM and opened here.
+- Source-assembly hits lift onto this genome with their source positions and
+  lift status retained. Inserted hits attach at their junction. Graph paths
+  that lack the sequence say **absent**. Hits draw on carrier graph columns;
+  Shift-click selects them. M4 can also lift their callable territory with a
+  graphlift sidecar and `liftbed`.
+- **Use as** supports anchors, cluster regions, filters, state-pattern splits,
+  highlights, saved regions and conditional analysis. BED6 and value exports
+  preserve coordinates, counts and provenance.
+- **Associate** tests co-occurrence (M1), conditional responses (M2),
+  within-molecule rates (M3), and overlap and distance (M4). Four presets fill
+  the builder. Results show limits, effects, intervals, group differences,
+  pairs or anchors, and exports. M2 supports dataset-specific calibration and
+  held-out NFR discovery. M3 can compare state sets from compatible scans.
+  M4 group contrasts are conservative and can miss differences; distance
+  p-values are descriptive.
+- **Overlay** aligns many loci at an anchor, edge or scaled span. Profiles,
+  facets and a sampled pile show marked and measured molecules per panel or
+  graph path. Missing alleles and unresolved or repeated graph positions stay
+  unmeasured. Loaded MA layers and bound scan states are supported. Export TSV
+  or SVG, or send patches from Nucleosomes with **Overlay…**.
+- Rare peaks now use local openness of at least 8% with minimum local coverage,
+  independent of the window's read count. Scan grid units count supplementary
+  records. The older window peak rule remains available for BED/region scans.
+- Genome-wide footprint-class scans are slow: about 154 hours on four workers
+  at 30×. Use region scans for `fp`, or `nuc`, `nfr` and `peaks` genome-wide.
+  Staged and oriented class workflows still use the legacy engine.
+
+### Nucleosomes
+
+- The **Nucleosomes** panel scores how regular each molecule's nucleosome
+  array is (FiberHMM's spectral regularity score over sliding windows, against
+  each dataset's random-packing reference), for every panel, strand split,
+  haplotype and graph path side by side. **Analyse this view** computes the
+  calls a view lacks; **Auto-Analyse** starts it on first open by default.
+- **Geometries** (the default tab): a summary per series and the patch
+  geometries the series share (high- and low-regularity patches called per
+  molecule). Click a geometry to highlight its molecules, shift-click to use it
+  in Cluster, Sort and Filter, star it to save it. **Charts**: score
+  distribution, score along the region, local repeat length, score against m6A
+  density, m6A autocorrelation, patch lengths. **Near a site** splits molecules
+  by the state of an open region or TF site. See
+  [Nucleosomes](docs/workflows/nucleosome-panel.md).
+- The **Regularity** and **Patches** layers draw on the reads; **Nuc
+  regularity** clusters reads on their scores.
+- **Size classes** and **Array segments** draw on linear and graph reads.
+  Nucleosome conditions and molecule metrics work in colour rules, Filter,
+  Sort and Cluster. Read Stats adds columns; **Nucleosome footprints** exports
+  per-footprint values. Sizes are coarse calls and density-matched z; there are
+  no named classes (hexasome, octasome and so on), which would need an absolute
+  control.
+
+### Sessions and updates
+
+- Sessions from 3.0.x retain frozen class and NFR runs, curation, selections,
+  peak modes, branches and saved clusterings. Their hits also appear in the
+  hub. Saved cart items are marked **Pinned**. Restore does not rerun analyses.
+- Sessions keep hub scopes and selection, anchors, association runs and the
+  last overlay result. Small browser scans are embedded up to 25 MiB total
+  uncompressed; larger scans remain references. Missing scans offer reopening
+  or re-scanning. Graph run options and site-sort provenance travel with panels.
+- Packaged apps offer **Install and restart** for supported signed updates.
+  Downloads and signatures are verified, the session is saved, and a helper
+  installs after exit and reopens it. Manual download and pip updates remain
+  available. See [Updates](docs/updates.md).
+
+### Navigation and fixes
+
+- **Find sequence in genome.** Paste DNA into the locus box (or open **Tools →
+  Find sequence**) to list where it is in the loaded genome: an exact / IUPAC
+  scan of both strands for short queries, BLAST with the primer designer's
+  genome database for longer ones. Click a hit to go there, highlighted; add
+  the hits as a track or export them as BED. See
+  [Find a sequence](docs/workflows/sequence-search.md).
+- **Variants and structural variants from FiberHMM's extract files** (also in
+  3.0.6). A bigBed sample with `fiberhmm-extract`'s `fiberhmm_var` and
+  `fiberhmm_sv` files gets the Variants panel's allele grouping, the SV tab and
+  SV splits, and allele / SV marks on read rows, without the BAM; they follow
+  the read track's read set. Grouping by a SNP and an SV together and SV-SNP
+  linkage still need the BAM. Not offered on live-lift datasets, graph-mode
+  hosts or linked source-assembly panels.
+- **Reads without footprint calls are hidden by default** (also in 3.0.6).
+  Min footprints never shows a read the caller skipped, at any threshold
+  (0 and its automatic relax included); its last choice, **All reads,
+  including uncalled**, shows them. The read track and Read Stats say which
+  filter hid how many reads. Nucleosomes and the feature hub apply the same
+  rule before FiberHMM's engines see the reads.
+- **Read Stats: reads without footprint calls are "not called"** (also in
+  3.0.6). A read the caller skipped (no `MA`/`Ma` call group with calls, no
+  `ns`/`nl` or `as`/`al` list pair) shows NA / "not called" instead of
+  0 footprints and 100% accessible, and is left out of the footprint and
+  accessibility means; a called, fully accessible read still counts. Means are
+  NA when no read in scope or in a cluster is called. Read tables gain a
+  `call_status` column.
+- **Read Stats counts calls carried only in `MA`/`Ma` tags** (also in 3.0.7).
+  Reads from current FiberHMM or fibertools `Ma` files without `ns`/`nl`
+  lists get their footprint counts, sizes and accessibility from the tag.
+- **Extra layers get distinct colours** (also in 3.0.7). Layers without a
+  curated colour (`tf2`, `nuc_a`, scan products) take colours from a
+  twelve-colour palette over the loaded set, the same for the same layers in
+  any load order, in the read track, the default metaprofile and headless
+  figures. A colour you pick for a default-metaprofile source is kept,
+  including in 3.0.7 sessions (`autoColor`).
+- **Default metaprofile follow-ups** (also in 3.0.7). Headless figures fetch
+  the profiles they draw for the followed sources; a `footprint` source keeps
+  following after a `nuc` dataset loads; turning **Follow active layers** back
+  on restores a layer source removed by hand and keeps extra ones; colour-rule
+  sources are computed for cluster profiles while the metaprofile track is
+  hidden; notebook
+  `set_track_cart` resubmits keep picked colours.
+- ONT reads with Dorado's scalar `ns:i` tag are no longer dropped: a scalar
+  `ns` is not a footprint list, so those reads now show in every view
+  (also released in 3.0.5). `ns`/`nl` and `as`/`al` count only as list pairs
+  everywhere (read loader, FIRE overlay, DAF-C); string-valued tags are
+  ignored. Library call counts include reads with fibertools `Ma` or
+  `as`/`al` calls and no longer count uncalled Dorado reads.
+- Native pans and outward zooms reuse compatible cached interiors and fetch
+  newly exposed edges. Live lift and graph mode reuse decoded records. Actual
+  speed depends on the window, data, cache and connection.
+- **Performance mode** controls memory, workers and sampling. Low memory caps
+  analysis working sets at 2,000 reads; Standard and High performance allow
+  full sets, subject to a separate Analysis cap.
+- Back and Forward follow typed loci, saved regions, Differences jumps and
+  **Zoom to read**, including per-panel navigation. Composite split, cluster,
+  merge, delete and focus actions use one undo step.
+- Graph pop-outs retain labels for folded and supplementary records. Source
+  views opened in succession reach their mapped locations. Reload no longer
+  adds an empty panel for a source-view BAM.
+- Automatic peak scans that stop at the time limit show a retry note beside
+  **Scan**. Graph zoom keeps the position under the pointer.
+- Fixed concurrent BAM loads that could hang, stale split and export requests,
+  SV projection crashes, minus-strand insertion marks and circular DAF
+  consensus. Scan layers obey quality filters on sampled and cached paths.
+- FiberHMM and fibertools MA annotations display in DAF-C reads and contacts.
+  Repaired lifted BAMs retain source strand and provenance. Records marked as
+  source supplementaries are hidden rather than counted twice.
+- **New run** accepts an aligned, indexed BAM when minimap2 is not installed.
+  FiberHMM calls such a BAM in place, so the wizard shows a warning instead of
+  refusing the run. FASTQ, unaligned or unindexed BAMs and several BAMs per
+  sample still require minimap2.
+- Legacy footprint tags on reverse reads of header-stripped files are no
+  longer drawn mirrored. When a BAM's `@PG`/`@CO` lines were removed, legacy
+  `ns`/`nl`/`as`/`al` tags (fibertools ≤0.12, FiberHMM) were read in the wrong
+  frame on reverse reads. The frame now comes from the reads' m6A calls (few
+  inside nucleosomes, many inside MSPs), once per file. A header that states
+  the frame still decides. Diagnostics show `legacy_frame` and
+  `legacy_frame_basis`. `MA` groups with FiberHMM ≤2.13.1 `+`/`-` strands
+  still follow the header rule.
+
 ## 3.0.8 — 2026-11-20
 
 FiberBrowser 3.0.8 bundles FiberHMM 3.0.4 and requires

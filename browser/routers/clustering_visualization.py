@@ -17,6 +17,8 @@ router = APIRouter(tags=["clustering"])
 
 # The cluster key of a dataset's all-reads matrix (group_by="all").
 ALL_READS_KEY = -1
+# group_by="pooled": every named dataset's reads summed into one matrix, answered under this key (cluster key -1).
+POOLED_KEY = "__pooled__"
 
 
 # Every footprint of a read: the footprint layers together, Nuc + TF, each footprint counted once. A read
@@ -81,8 +83,15 @@ async def cluster_vplot(
     if request is None:
         request = ClusterVPlotRequest()
 
-    # Named datasets (None: the analysis scope's datasets).
-    named_ids = list(request.dataset_ids) if request.dataset_ids else None
+    # Named datasets: live-lifted ones are left out, as the implicit all-datasets scope leaves them out
+    # (this analysis does not read lifted rows yet); one lifted panel never fails the others' plots.
+    named_ids = None
+    if request.dataset_ids:
+        from services.lift.capability import is_lifted
+        datasets = getattr(state, "datasets", {}) or {}
+        named_ids = [d for d in request.dataset_ids if not is_lifted(datasets.get(d))]
+        if not named_ids:
+            return {"success": True, "data": {}, "sample_seed": request.sample_seed}
 
     query = AnalysisReadQuery.from_request(
         state,
@@ -118,8 +127,11 @@ async def cluster_vplot(
     mode = request.mode if request.mode in VPLOT_MODES else "midpoint"
     row_normalize = bool(request.row_normalize)
     row_min_footprints = max(0, int(request.row_min_footprints))
-    group_all = request.group_by == "all"
-    raw_values = bool(request.raw_values)
+    group_pooled = request.group_by == "pooled"
+    group_all = request.group_by in ("all", "pooled")
+    raw_values = bool(request.raw_values) or group_pooled
+    # Pooled: raw sums across datasets (counts add exactly), finished once after the loop.
+    pooled_acc: dict = {"matrix": None, "row": None, "col": None, "n_reads": 0}
     normalization = request.normalization if request.normalization in VPLOT_NORMALIZATIONS else (
         "row" if row_normalize else "raw")
     if request.sigma_size_bp is None and request.sigma_pos_bp is None:
@@ -130,6 +142,24 @@ async def cluster_vplot(
 
     assignment_overrides = request.cluster_assignments or {}
     result = {}
+    # The box mean's bootstrap (Plots summaries): per-read raw counts, resampled (services/box_bootstrap).
+    bb = request.box_bootstrap if isinstance(request.box_bootstrap, dict) else None
+    from services.box_bootstrap import UnitCounts, box_bootstrap, box_indices
+    box = box_indices(size_min, size_bin, n_size_bins, region_start, pos_bin, n_pos_bins, float(bb.get("size_from") or 0), float(bb.get("size_to") or 1e9),
+                      None if bb.get("pos_from") is None else float(bb["pos_from"]), None if bb.get("pos_to") is None else float(bb["pos_to"])) if bb else None
+    boot_kw = dict(normalization=normalization, log=False, sigma_bins_size=s_size_bins, sigma_bins_pos=s_pos_bins, row_min_footprints=row_min_footprints) if bb else None
+    boot_resamples = max(50, min(10000, int((bb or {}).get("resamples") or 1000)))
+    boot_seed = int((bb or {}).get("seed") or 1)
+    boot_tf = str((bb or {}).get("transform") or "none")
+    pooled_units = UnitCounts(n_size_bins, n_pos_bins) if bb and group_pooled else None
+
+    def read_units(into, ds_id, reads, offset):
+        for read in reads:
+            s1, e1, z1 = footprint_arrays(_pick_vplot_intervals(read, target_layer), offset)
+            rc, cc = np.zeros(n_size_bins, dtype=np.int64), np.zeros(n_pos_bins, dtype=np.int64)
+            m = accumulate_vplot(s1, e1, z1, size_min=size_min, size_bin=size_bin, n_size_bins=n_size_bins, pos_bin=pos_bin, n_pos_bins=n_pos_bins,
+                                 mode=mode, row_counts=rc, col_counts=cc)
+            into.add(f"{ds_id}:{read.get('id')}", m, rc, cc)
     # Every matrix is kept for the answer: on a public server each dataset's
     # clusters, and the cells of all matrices together, are bounded.
     kept_matrices = 0
@@ -142,11 +172,17 @@ async def cluster_vplot(
             continue
         try:
             ws = query.build_working_set(state, ds_id)
+            ws_reads = list(ws.reads)
+            if request.sample_n:
+                # Plots' Random N reads: the stable sampling rule over the dataset's reads in view.
+                from services.stable_sample import lowest_k, stable_key
+                ws_reads = lowest_k(ws_reads, int(request.sample_n), key=lambda r: stable_key(int(request.sample_seed_int), ds_id, str(r.get('id'))),
+                                    ident=lambda r: str(r.get('id')))
             cluster_reads: dict = {}
             if group_all:
-                cluster_reads[ALL_READS_KEY] = list(ws.reads)
+                cluster_reads[ALL_READS_KEY] = ws_reads
             else:
-                for read in ws.reads:
+                for read in ws_reads:
                     cluster = assigns.get(read['id'])
                     if cluster is not None:
                         cluster_reads.setdefault(cluster, []).append(read)
@@ -172,14 +208,29 @@ async def cluster_vplot(
                     pos_bin=pos_bin, n_pos_bins=n_pos_bins, mode=mode, row_counts=row_counts,
                     col_counts=col_counts,
                 )
+                if bb:
+                    uc = pooled_units if group_pooled else UnitCounts(n_size_bins, n_pos_bins)
+                    read_units(uc, ds_id, reads, ws.start - region_start)
+                    if not group_pooled:
+                        lo, hi, nu = box_bootstrap(uc, seed=boot_seed, resamples=boot_resamples, finish_kw=boot_kw, box=box, transform=boot_tf)
+                        boot_ci = {"lo": lo, "hi": hi, "units": nu}
+                if group_pooled:
+                    acc = pooled_acc
+                    acc["matrix"] = vp_matrix.astype(np.float64) if acc["matrix"] is None else acc["matrix"] + vp_matrix
+                    acc["row"] = row_counts.copy() if acc["row"] is None else acc["row"] + row_counts
+                    acc["col"] = col_counts.copy() if acc["col"] is None else acc["col"] + col_counts
+                    acc["n_reads"] += len(reads)
+                    continue
                 raw_matrices[int(cluster_id)] = finish_vplot(
                     vp_matrix, normalization=normalization, log=request.log_norm and not raw_values,
                     sigma_bins_size=s_size_bins, sigma_bins_pos=s_pos_bins,
                     row_counts=row_counts, col_counts=col_counts, row_min_footprints=row_min_footprints,
                     blank=float("nan") if raw_values else 0.0,
                 )
-                counts[int(cluster_id)] = {"n_reads": len(reads), "n_footprints": int(row_counts.sum())}
+                counts[int(cluster_id)] = {"n_reads": len(reads), "n_footprints": int(row_counts.sum()), **({"box_ci": boot_ci} if bb else {})}
 
+            if group_pooled:
+                continue
             if raw_values:
                 result[ds_id] = {
                     int(cluster_id): {
@@ -232,5 +283,22 @@ async def cluster_vplot(
             raise HTTPException(status_code=413, detail=str(exc)) from exc
         except Exception as e:
             result[ds_id] = {'error': str(e)}
+
+    if group_pooled and pooled_acc["matrix"] is not None:
+        pooled = finish_vplot(
+            pooled_acc["matrix"], normalization=normalization, log=False,
+            sigma_bins_size=s_size_bins, sigma_bins_pos=s_pos_bins,
+            row_counts=pooled_acc["row"], col_counts=pooled_acc["col"], row_min_footprints=row_min_footprints,
+            blank=float("nan"),
+        )
+        result[POOLED_KEY] = {ALL_READS_KEY: {
+            'matrix': [[None if not np.isfinite(x) else round(float(x), 6) for x in row] for row in pooled],
+            'size_min': size_min, 'size_max': size_max, 'size_bin': size_bin, 'pos_bin': pos_bin, 'mode': mode,
+            'normalization': normalization, 'row_normalize': normalization == "row", 'row_min_footprints': row_min_footprints,
+            'sigma_size_bp': sigma_size_bp, 'sigma_pos_bp': sigma_pos_bp, 'raw_values': True, 'group_by': "pooled",
+            'layer': target_layer, 'n_reads': int(pooled_acc["n_reads"]), 'n_footprints': int(pooled_acc["row"].sum()),
+            'dataset_ids': [d for d in query.dataset_ids],
+            **({'box_ci': dict(zip(("lo", "hi", "units"), box_bootstrap(pooled_units, seed=boot_seed, resamples=boot_resamples, finish_kw=boot_kw, box=box, transform=boot_tf)))} if bb and pooled_units else {}),
+        }}
 
     return {"success": True, "data": result, "sample_seed": sample_seed}

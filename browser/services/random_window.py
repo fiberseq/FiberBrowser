@@ -24,7 +24,21 @@ from typing import Callable, Optional
 
 from services.bam_handles import get_bam_handle
 from services.bigbed_handles import get_bigbed_handle
+from services.bam_tags import record_passes_call_rule, record_passes_read_policy
 from services.read_coverage import compute_binned_read_coverage
+
+
+def _read_policy() -> dict:
+    """The request's duplicate / QC-fail toggles (default hidden) for the coverage the windows are chosen from."""
+    from services.signal_evidence import request_include_duplicates, request_include_qcfail
+    return {"include_duplicates": request_include_duplicates(), "include_qcfail": request_include_qcfail()}
+
+
+def _resolve_hide_uncalled(value: Optional[bool]) -> bool:
+    if value is None:
+        from services.signal_evidence import request_hide_uncalled
+        return request_hide_uncalled()
+    return bool(value)
 from utils.chrom import get_chrom_variants
 
 MAX_COVERAGE_BINS = 2000
@@ -334,6 +348,8 @@ def _search_datasets(state, dataset_id: Optional[str], dataset_ids: Optional[lis
         wanted = state.dataset_order if dataset_ids is None else [d for d in state.dataset_order if d in set(dataset_ids)]
         datasets = [state.get_dataset(d) for d in wanted]
         datasets = [d for d in datasets if d]
+    from services.lift.capability import require_all
+    require_all(datasets, "random_window")  # Classify the resolved scope before dropping unsupported file types.
     return [d for d in datasets if getattr(d, "data_type", None) in ("bam", "bigbed") and (d.paths or [])]
 
 
@@ -347,11 +363,15 @@ def random_covered_window(
     max_attempts: int = 60,
     budget_s: float = SEARCH_BUDGET_S,
     dataset_ids: Optional[list] = None,
+    hide_uncalled: Optional[bool] = None,
 ) -> dict:
     """Return a random window of width `span` whose peak read depth >= min_coverage.
 
     `dataset_ids` limits the search to those datasets (default: all of them).
+    ``hide_uncalled``: depth counts the reads the read panel shows (Min footprints' uncalled-read rule;
+    None: as the request asked, default hide).
     """
+    hide_uncalled = _resolve_hide_uncalled(hide_uncalled)
     deadline = time.monotonic() + budget_s  # from entry: the contig scan counts too
     span = max(1, int(span))
     min_coverage = max(1, int(min_coverage))
@@ -390,6 +410,8 @@ def random_covered_window(
             min(bins, max(1, w_end - w_start)),
             bam_handle_getter=get_bam_handle,
             bigbed_handle_getter=get_bigbed_handle,
+            hide_uncalled=hide_uncalled,
+            **_read_policy(),
         )
         max_cov = int(result.get("max", 0))
         if max_cov >= min_coverage:
@@ -423,6 +445,7 @@ def top_covered_windows(
     seed: int = 17,
     budget_s: float = SEARCH_BUDGET_S,
     fit: bool = False,
+    hide_uncalled: Optional[bool] = None,
 ) -> dict:
     """The best-covered windows of width `span`, deepest first (at most `n`, not overlapping).
 
@@ -440,6 +463,8 @@ def top_covered_windows(
     deadline = time.monotonic() + budget_s  # from entry: the contig scan counts too
     span = max(1, int(span))
     n = max(1, min(100, int(n)))
+    # Depth (and the fitted extent) counts the reads the read panel shows: Min footprints' uncalled-read rule.
+    hide_uncalled = _resolve_hide_uncalled(hide_uncalled)
     datasets = _search_datasets(state, dataset_id)
     if not datasets:
         return {"success": False, "reason": "no_datasets",
@@ -454,12 +479,15 @@ def top_covered_windows(
     # loaded reference) are part of the key.
     reach = tuple(sorted((str(getattr(d, "id", "")), c.path, c.contig, c.size)
                          for d in datasets for c in scope.contigs.get(getattr(d, "id", None), ())))
-    key = (tuple(sorted(tuple(d.paths) for d in datasets)), reach, span, samples, seed)
+    from services.signal_evidence import read_policy_key, signal_filter_key
+    # (The candidates' coverage applies the request's read policy and signal filters: both are in the key.)
+    key = (tuple(sorted(tuple(d.paths) for d in datasets)), reach, span, samples, seed, hide_uncalled,
+           read_policy_key(), signal_filter_key())
     candidates = _TOP_WINDOW_CACHE.get(key)
     complete = True
     if candidates is None:
         candidates, complete = _top_window_candidates(datasets, span, samples, seed, scope=scope,
-                                                      deadline=deadline)
+                                                      deadline=deadline, hide_uncalled=hide_uncalled)
         if complete:
             _TOP_WINDOW_CACHE[key] = candidates
 
@@ -479,7 +507,7 @@ def top_covered_windows(
             continue
         window = {"chrom": chrom, "start": w_start, "end": w_end, "depth": round(depth, 1)}
         if fit:
-            fitted = _fit_window_to_reads(datasets, scope, contig, w_start, w_end, span)
+            fitted = _fit_window_to_reads(datasets, scope, contig, w_start, w_end, span, hide_uncalled)
             if fitted is not None:
                 # Windows inside one long amplicon fit to the same one: keep it once.
                 if any(chrom == c[1] and fitted[0] < c[3] and c[2] < fitted[1] for c in chosen):
@@ -518,7 +546,7 @@ FIT_MAX_WIDTH = 100_000
 
 
 def _fit_window_to_reads(datasets, scope: Optional[_Scope], contig: str, start: int, end: int,
-                         span: int) -> Optional[tuple[int, int]]:
+                         span: int, hide_uncalled: bool = True) -> Optional[tuple[int, int]]:
     """(start, end) around the reads overlapping [start, end) when they cover
     clearly less than `span`; None to keep the window as it is."""
     starts: list[int] = []
@@ -536,8 +564,19 @@ def _fit_window_to_reads(datasets, scope: Optional[_Scope], contig: str, start: 
                     bam = get_bam_handle(c.path)
                     if bam is None:
                         continue
+                    from services.graph_lift import lift_hidden_predicate
+                    from services.signal_evidence import record_keeps_signal, signal_header
+                    hidden = lift_hidden_predicate(getattr(bam, "header", None))
+                    provenance = signal_header(getattr(bam, "header", None))
                     for read in bam.fetch(contig, max(0, start), max(start + 1, end)):
                         if read.is_unmapped or read.is_secondary or read.is_supplementary:
+                            continue
+                        if hidden is not None and hidden(read):
+                            continue
+                        # The read track's duplicate / QC-fail toggles and signal filters (request) and the
+                        # uncalled-read rule.
+                        if (not record_passes_read_policy(read) or not record_keeps_signal(read, provenance)
+                                or not record_passes_call_rule(read, hide_uncalled)):
                             continue
                         starts.append(int(read.reference_start))
                         ends.append(int(read.reference_end or read.reference_start + 1))
@@ -596,7 +635,8 @@ def _densest_pair(values: list) -> tuple[float, int]:
 
 
 def _top_window_candidates(datasets, span: int, samples: int, seed: int, *, scope: Optional[_Scope] = None,
-                           deadline: Optional[float] = None) -> tuple[list[tuple[float, str, int, int]], bool]:
+                           deadline: Optional[float] = None,
+                           hide_uncalled: bool = True) -> tuple[list[tuple[float, str, int, int]], bool]:
     """(depth, contig, start, end) of the densest window near each sampled position, deepest
     first, and whether every sample was tried before ``deadline``."""
     rng = random.Random(seed)
@@ -631,6 +671,7 @@ def _top_window_candidates(datasets, span: int, samples: int, seed: int, *, scop
             result = compute_binned_read_coverage(
                 all_datasets, contig, lo, hi, bins,
                 bam_handle_getter=get_bam_handle, bigbed_handle_getter=get_bigbed_handle,
+                hide_uncalled=hide_uncalled, **_read_policy(),
             )
             values = result.get("coverage") or []
             if not values:

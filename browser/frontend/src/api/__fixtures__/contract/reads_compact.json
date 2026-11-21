@@ -1,0 +1,546 @@
+{
+ "available_layers": [
+  "deam",
+  "footprint",
+  "msp"
+ ],
+ "color": "#3b82f6",
+ "count": 3,
+ "dataset_id": "demo",
+ "display_count": 3,
+ "has_methylation": false,
+ "label": "demo",
+ "reads": [
+  {
+   "aligned_blocks": [
+    [
+     47514487,
+     47518985
+    ]
+   ],
+   "fire": [
+    [
+     192,
+     889,
+     128
+    ]
+   ],
+   "id": "read-1",
+   "intervals": [
+    [
+     0,
+     26,
+     151
+    ],
+    [
+     26,
+     192,
+     166
+    ],
+    [
+     192,
+     889,
+     -697
+    ]
+   ],
+   "layers": {
+    "msp": {
+     "intervals": [
+      [
+       192,
+       889,
+       697
+      ]
+     ],
+     "quality_names": []
+    },
+    "nuc": {
+     "intervals": [
+      [
+       0,
+       26,
+       151
+      ],
+      [
+       26,
+       192,
+       166
+      ],
+      [
+       889,
+       1000,
+       150
+      ]
+     ],
+     "qualities": [
+      [
+       255,
+       255,
+       255
+      ],
+      [
+       0,
+       0,
+       110
+      ],
+      [
+       68,
+       162,
+       178
+      ]
+     ],
+     "quality_names": [
+      "nq",
+      "lq",
+      "rq"
+     ]
+    },
+    "tf": {
+     "intervals": [
+      [
+       281,
+       294,
+       13
+      ],
+      [
+       334,
+       351,
+       17
+      ],
+      [
+       647,
+       656,
+       9
+      ]
+     ],
+     "qualities": [
+      [
+       89,
+       93,
+       65
+      ],
+      [
+       212,
+       246,
+       246
+      ],
+      [
+       246,
+       238,
+       246
+      ]
+     ],
+     "quality_names": [
+      "tq",
+      "el",
+      "er"
+     ]
+    }
+   },
+   "qualities": [
+    255,
+    255,
+    255
+   ],
+   "sequence_span": [
+    0,
+    4494
+   ],
+   "supplementary": false,
+   "sv_segments": [
+    {
+     "chrom": "chr19",
+     "cigar_ref_len": 4498,
+     "mapq": 60,
+     "pos": 47514487,
+     "q_end": 4494,
+     "q_start": 0,
+     "query_length": 4494,
+     "strand": "+"
+    }
+   ]
+  },
+  {
+   "aligned_blocks": [
+    [
+     47514487,
+     47518985
+    ]
+   ],
+   "fire": [
+    [
+     153,
+     891,
+     128
+    ]
+   ],
+   "id": "read-2",
+   "intervals": [
+    [
+     0,
+     153,
+     220
+    ],
+    [
+     153,
+     891,
+     -738
+    ],
+    [
+     891,
+     1000,
+     148
+    ]
+   ],
+   "layers": {
+    "msp": {
+     "intervals": [
+      [
+       153,
+       891,
+       738
+      ]
+     ],
+     "quality_names": []
+    },
+    "nuc": {
+     "intervals": [
+      [
+       0,
+       153,
+       220
+      ],
+      [
+       891,
+       1000,
+       148
+      ]
+     ],
+     "qualities": [
+      [
+       255,
+       255
+      ],
+      [
+       170,
+       128
+      ],
+      [
+       0,
+       195
+      ]
+     ],
+     "quality_names": [
+      "nq",
+      "lq",
+      "rq"
+     ]
+    },
+    "tf": {
+     "intervals": [
+      [
+       156,
+       182,
+       26
+      ],
+      [
+       195,
+       199,
+       4
+      ],
+      [
+       275,
+       319,
+       44
+      ]
+     ],
+     "qualities": [
+      [
+       208,
+       53,
+       220
+      ],
+      [
+       230,
+       238,
+       255
+      ],
+      [
+       187,
+       238,
+       246
+      ]
+     ],
+     "quality_names": [
+      "tq",
+      "el",
+      "er"
+     ]
+    }
+   },
+   "qualities": [
+    255,
+    255
+   ],
+   "sequence_span": [
+    0,
+    4498
+   ],
+   "supplementary": false,
+   "sv_segments": [
+    {
+     "chrom": "chr19",
+     "cigar_ref_len": 4498,
+     "mapq": 60,
+     "pos": 47514487,
+     "q_end": 4498,
+     "q_start": 0,
+     "query_length": 4498,
+     "strand": "+"
+    }
+   ]
+  },
+  {
+   "aligned_blocks": [
+    [
+     47514487,
+     47518983
+    ]
+   ],
+   "fire": [
+    [
+     0,
+     33,
+     128
+    ],
+    [
+     220,
+     884,
+     128
+    ],
+    [
+     976,
+     1000,
+     128
+    ]
+   ],
+   "id": "read-3",
+   "intervals": [
+    [
+     0,
+     33,
+     -232
+    ],
+    [
+     33,
+     220,
+     188
+    ],
+    [
+     220,
+     884,
+     -664
+    ]
+   ],
+   "layers": {
+    "msp": {
+     "intervals": [
+      [
+       0,
+       33,
+       235
+      ],
+      [
+       220,
+       884,
+       665
+      ],
+      [
+       976,
+       1000,
+       89
+      ]
+     ],
+     "quality_names": []
+    },
+    "nuc": {
+     "intervals": [
+      [
+       33,
+       220,
+       188
+      ],
+      [
+       884,
+       976,
+       92
+      ]
+     ],
+     "qualities": [
+      [
+       255,
+       255
+      ],
+      [
+       178,
+       187
+      ],
+      [
+       0,
+       204
+      ]
+     ],
+     "quality_names": [
+      "nq",
+      "lq",
+      "rq"
+     ]
+    },
+    "tf": {
+     "intervals": [
+      [
+       414,
+       424,
+       10
+      ],
+      [
+       784,
+       810,
+       26
+      ],
+      [
+       841,
+       865,
+       24
+      ]
+     ],
+     "qualities": [
+      [
+       58,
+       157,
+       72
+      ],
+      [
+       230,
+       255,
+       230
+      ],
+      [
+       238,
+       170,
+       246
+      ]
+     ],
+     "quality_names": [
+      "tq",
+      "el",
+      "er"
+     ]
+    }
+   },
+   "qualities": [
+    255,
+    255
+   ],
+   "sequence_span": [
+    0,
+    4507
+   ],
+   "supplementary": false,
+   "sv_segments": [
+    {
+     "chrom": "chr19",
+     "cigar_ref_len": 4496,
+     "mapq": 60,
+     "pos": 47514487,
+     "q_end": 4507,
+     "q_start": 0,
+     "query_length": 4507,
+     "strand": "+"
+    }
+   ]
+  }
+ ],
+ "sample_seed": "fiberbrowser-analysis",
+ "server_elapsed_ms": 0,
+ "server_timings": {
+  "display_candidate_ms": 0,
+  "display_load_ms": 0,
+  "display_profile_select_ms": 0,
+  "display_project_ms": 0,
+  "display_select_ms": 0,
+  "display_sort_ms": 0,
+  "display_working_set_ms": 0,
+  "signal_counts_ms": 0,
+  "sv_summary_ms": 0
+ },
+ "signal_counts": {
+  "background": 0,
+  "chimera_hidden": 0,
+  "detectable": 0,
+  "duplicate_hidden": 0,
+  "few_footprints": 0,
+  "hidden": 0,
+  "kept": 3045,
+  "min_footprints": 0,
+  "min_footprints_hidden": 0,
+  "provenance": [],
+  "qcfail_hidden": 0,
+  "scope": "alignments_before_call_filters",
+  "structure_scored": 0,
+  "total": 3045,
+  "uncalled": 2,
+  "uncalled_extents": [
+   [
+    47514487,
+    47515391
+   ],
+   [
+    47515511,
+    47516196
+   ]
+  ],
+  "uncalled_hidden": 2,
+  "unclassified": 0,
+  "unknown": 3045,
+  "unscored": 0
+ },
+ "sv_summary": {
+  "clips": [
+   {
+    "n": 1,
+    "ref": 47514804,
+    "side": "L"
+   },
+   {
+    "n": 1,
+    "ref": 47514953,
+    "side": "L"
+   },
+   {
+    "n": 1,
+    "ref": 47515186,
+    "side": "L"
+   }
+  ],
+  "clusters": [],
+  "conflict_options": {
+   "enabled": true,
+   "max_distance": 100000,
+   "min_clip_fraction": 0.5,
+   "min_mapq": 0,
+   "min_overlap": 500
+  },
+  "evidence_targets": [],
+  "margin": 100,
+  "min_len": 50,
+  "n_reads": 3043,
+  "scope": "all"
+ },
+ "total": 3043,
+ "total_in_scope": 3043,
+ "total_overlapping": 3043,
+ "total_spanning": 2943,
+ "width": 1000,
+ "working_count": 3043
+}

@@ -130,3 +130,18 @@ def test_string_tags_and_scalar_as_do_not_drop_reads(tmp_path):
     assert interval_tag_pair(by["scalar_as"], "as", "al") == (None, None)
     reads = _reads(path)
     assert {"scalar_as", "after"} <= set(reads)
+
+
+def test_dafc_reads_use_the_pair_rule(tmp_path):
+    """DAF-C (dev line): a scalar or string ns is not footprints; a Dorado read with Ma calls falls back to them, and
+    valid ns/nl reads are unaffected by a scalar as/al."""
+    from services.dafc_reads import query_bam_for_dafc
+    path = _write_odd(tmp_path / "odd.bam")
+    # Min footprints hides the uncalled string-tag read by default; "All reads" shows it as uncalled.
+    assert "strings" not in {e["name"] for e in query_bam_for_dafc(path, "chrT", 0, 5000)}
+    entries = {e["name"]: e for e in query_bam_for_dafc(path, "chrT", 0, 5000, hide_uncalled=False)}
+    assert {"dorado_Ma", "strings", "scalar_as", "after"} <= set(entries)
+    called = {name for name, e in entries.items() if e.get("footprintsCalled")}
+    assert {"dorado_Ma", "scalar_as", "after"} <= called
+    assert "strings" not in called
+    assert entries["dorado_Ma"]["blockCount"] == 2   # the Ma nuc calls, not the scalar ns

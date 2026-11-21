@@ -424,3 +424,35 @@ describe('LibraryDetails basecaller', () => {
       + "re-call again). Starts from the run's basecalled reads: no basecalling again.");
   });
 });
+
+describe('LibraryDetails graph lift', () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+    vi.resetAllMocks();
+  });
+
+  const render = async (shown: LibraryEntry) => {
+    api.get.mockImplementation(async () => ({ entry: shown }));
+    await act(async () => root.render(
+      <LibraryDetails entry={shown} groups={[]} fiberhmmVersion="3.0.0"
+        onOpen={() => {}} onChanged={() => {}} onAddToGroup={() => {}} />));
+  };
+
+  it("shows the fiberhmm-lift summary, and nothing for a file that was not lifted", async () => {
+    await render({ ...entry('A'), graph_lift: { repaired: true, unrepaired: [], lifts: 1, source: 'asmA',
+      target: 'asmB', graph: 'graph.gbz', calmd: 'yes', text: 'asmA → asmB · graph graph.gbz · MD/NM recomputed' } });
+    expect(container.textContent).toContain('Graph liftasmA → asmB · graph graph.gbz · MD/NM recomputed');
+    await render(entry('B'));
+    expect(container.textContent).not.toContain('Graph lift');
+  });
+});

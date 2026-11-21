@@ -1,19 +1,21 @@
 import { copyPanelAtSite } from '../utils/panelCopies';
 import { previewHidden } from '../utils/previewFeatures';
-import { mainViewForPanel, withLinkedPanelMoving } from '../utils/panelExtensions';
+import { mainViewForPanel, panelFollowers, withLinkedPanelMoving } from '../utils/panelExtensions';
 import { isPublicServerPage } from '../utils/publicServerFlag';
 import { revealDrawerPanel } from './drawerTabsStore';
 import type { BrowserState } from './browserStore';
 import type { PanelConfig, SubTrackConfig, SubTrackType, PanelLayout, PanelContentType, AnalysisPanelType } from '../types';
-import { canonicalPanelType, getAnalysisPanel, isAnalysisPanel, normalizeAnalysisPanelContentTypes } from '../plugins/registry';
+import { canonicalPanelType, getAnalysisPanel, isAnalysisPanel, normalizeAnalysisPanelContentTypes, retiredPanelOpener } from '../plugins/registry';
 import { generatePanelId, createDefaultSubTracks, createGenomeSubTracks, restoreBuiltinAt } from './utils';
 import { restoreOrphanSplitSources } from './splitSources';
+import { restoreOrphanGraphMembers, withoutGraphFold, withoutGraphMembership } from './graphMembership';
 import { clampTrackHeight, isDeletableTrack } from '../components/tracks/trackRegistry';
 import { isPanOrZoom, moveLikewise, withSiteLockSuppressed } from './siteLock';
 import { seedHistoryBaseline } from './historySlice';
 import { canLinkToMainView, inComparisonGroup, isMainViewPanel, linkGroupPeers, recordPanelMove } from '../utils/panelNavigation';
 import { forgetRememberedState } from '../hooks/useRememberedState';
 import { isStacked, sideBySide, stackBelow, stackTarget, type PanelArrangement } from './panelArrangement';
+import { isLiveLift, opensOwnPanel } from '../utils/datasetKinds';
 
 /** Analysis state kept per panel (keyed by stateKey ?? datasetId). */
 
@@ -34,8 +36,10 @@ function rememberPanelDock(contentType: string, dock: 'side' | 'beside'): void {
 export const PER_PANEL_STATE_KEYS = [
   'clusterAssignments', 'clusterOrder', 'selectedClusters', 'readSortOrder', 'clusterProfiles',
   'filteredReadIds', 'readFilterSources', 'clusterFocus', 'readStateDetails', 'selectedReadIds',
-  'svSplits', 'clusterGroupLabels', 'svSelectedCluster',
+  'svSplits', 'clusterGroupLabels', 'svCarrierEvidence', 'svSelectedCluster',
 ] as const;
+
+const panelNavigationLabel = (chrom: string, start: number) => `Panel to ${chrom}:${Math.max(0, Math.floor(start)).toLocaleString()}`;
 
 /** Undo point before and after a panel-view action. */
 function withUndo(get: () => BrowserState, label: string, apply: () => void, coalesceKey?: string) {
@@ -46,6 +50,39 @@ function withUndo(get: () => BrowserState, label: string, apply: () => void, coa
 
 /** A panel's pans/zooms this close together are one undo step (the main view's settle after 500 ms). */
 const PANEL_NAVIGATION_COALESCE_MS = 750;
+
+/** Panels linked to `panel` that keep views of their own follow its move, and theirs follow them (a source view moves
+ * its graph host, which moves the host's other source views), each panel at most once. The move is recorded for the
+ * follower's link group (Linked navigation goes where it is: agy group C, HIGH 4). A follower keeps its clusters and
+ * filters: a mapped span is no evidence of a jump, and graph runs survive moves on their contig (agy group C round 2,
+ * NEW HIGH 3). */
+function moveLinkedFollowers(get: () => BrowserState, set: (partial: (state: BrowserState) => Partial<BrowserState>) => void,
+  panel: PanelConfig, span: { chrom: string; start: number; end: number }) {
+  const moved = new Set([panel.id]);
+  let wave = [{ panel, span }];
+  while (wave.length) {
+    const next: typeof wave = [];
+    for (const w of wave) {
+      for (const f of panelFollowers(w.panel, w.span, get().panels)) {
+        if (moved.has(f.panelId)) continue;
+        moved.add(f.panelId);
+        set(state => {
+          const follower = state.panels.find(x => x.id === f.panelId);
+          const v = follower?.viewportOverride;
+          if (!follower || !v || (v.chrom === f.span.chrom && v.start === f.span.start && v.end === f.span.end)) return state;
+          const to = { chrom: f.span.chrom, start: f.span.start, end: f.span.end };
+          return {
+            panels: state.panels.map(x => x.id === f.panelId ? { ...x, viewportOverride: to } : x),
+            lastMovedPanels: recordPanelMove(state.lastMovedPanels, follower, to),
+          };
+        });
+        const p = get().panels.find(x => x.id === f.panelId);
+        if (p) next.push({ panel: p, span: f.span });
+      }
+    }
+    wave = next;
+  }
+}
 
 const panelKey = (panel: PanelConfig) => panel.stateKey ?? panel.datasetId ?? panel.id;
 
@@ -181,6 +218,11 @@ export interface PanelSlice {
   addPanel: (datasetId: string) => string;
   removePanel: (panelId: string) => void;
   setPanelReversed: (panelId: string, reversed: boolean) => void;
+  /**
+   * A linked panel's view set by its link (a lift map's exact correction, a jump to a source insertion): only that
+   * panel's own view. It maps nothing back to the main view, moves no link-group peers and records no undo step.
+   */
+  setPanelViewportFromLink: (panelId: string, view: { chrom: string; start: number; end: number }) => void;
   duplicatePanel: (panelId: string) => string;
 
   // Panel config
@@ -198,9 +240,15 @@ export interface PanelSlice {
   reorderSubTracks: (panelId: string, fromIndex: number, toIndex: number) => void;
 
   // Panel viewport (for split-view panels with viewportOverride)
-  setPanelViewport: (panelId: string, start: number, end: number) => void;
+  /** `options.lockedMove`: whether panels locked to it (and the main view) move likewise; default: when the move is
+   *  a pan or zoom. Back / Forward pass the outward jump's own answer, so the return trip moves the same panels. */
+  setPanelViewport: (panelId: string, start: number, end: number, options?: { lockedMove?: boolean }) => void;
   setPanelIndependent: (panelId: string, independent: boolean) => void;
   navigatePanel: (panelId: string, chrom: string, start: number, end: number) => void;
+  /** navigatePanel without moving the main view through a view link. */
+  /** `followLinks: false`: only this panel moves (showing a source span in a linked source view, not a navigation of
+   * the pair). */
+  navigatePanelOwnView: (panelId: string, chrom: string, start: number, end: number, options?: { followLinks?: boolean }) => void;
   /**
    * Copy a dataset panel next to itself with its own navigation; returns the
    * copy's id. `linked` (the header's +): it moves with the main view until
@@ -212,6 +260,10 @@ export interface PanelSlice {
   setPanelStrand: (panelId: string, strand: 'CT' | 'GA' | null) => void;
   /** DAF-seq: this panel shows CT and a copy next to it shows GA; returns the GA panel's id. */
   splitPanelByStrand: (panelId: string) => string;
+  /** Live lift: one panel per haplotype label (the source panel keeps the first); returns the new panels' ids. */
+  splitPanelByLiftHap: (panelId: string, labels: string[]) => string[];
+  /** Live lift: the dataset's haplotype panels back to one pooled panel. */
+  poolLiftHapPanels: (datasetId: string, panelId?: string) => void;
   /** DAF-seq: a copy of this panel showing `strand`, next to it. */
   addStrandPanel: (panelId: string, strand: 'CT' | 'GA') => string;
   /** Panel whose location box should take focus once it renders (a new copy at another locus). */
@@ -278,6 +330,28 @@ export interface PanelSlice {
 // ============================================================
 
 export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state: BrowserState) => Partial<BrowserState>)) => void, get: () => BrowserState): PanelSlice {
+  /** A panel's own view to a locus (navigatePanel without the undo step or a view link). */
+  const movePanelOwnView = (panelId: string, chrom: string, start: number, end: number) => set(state => {
+    const panel = state.panels.find(p => p.id === panelId);
+    if (!panel) return state;
+    const s0 = Math.max(0, Math.floor(start));
+    const next = { chrom, start: s0, end: Math.max(s0 + 3, Math.floor(end)) };
+    // Its reference's link group goes with it ("Linked navigation", panels on another assembly).
+    const peers = new Set(linkGroupPeers(state.panels, panel, state.navigationMode));
+    // A jump elsewhere leaves the panel's clusters and filters behind (the
+    // main view does the same when it jumps).
+    let cleared: Partial<BrowserState> = {};
+    for (const p of state.panels) {
+      if (!peers.has(p.id) || (p.viewportOverride && isPanOrZoom(p.viewportOverride, next))) continue;
+      cleared = { ...cleared, ...clearPanelState({ ...state, ...cleared } as BrowserState, panelKey(p)) };
+    }
+    return {
+      ...cleared,
+      // Stays in its haplotype comparison (closed together with it).
+      panels: state.panels.map(p => peers.has(p.id) ? { ...p, viewportOverride: { ...next }, linkGroup: null } : p),
+      lastMovedPanels: recordPanelMove(state.lastMovedPanels, panel, next),
+    };
+  });
   const seedLayoutHistory = () => {
     const state = get();
     if ((state._historyStack?.length ?? 0) === 0) {
@@ -352,7 +426,11 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
 
   clearNavigatorRegions: () => set({ navigatorRegions: [] }),
 
-  openAnalysisPanel: (requested) => set(state => {
+  openAnalysisPanel: (requested) => {
+    // A retired panel type opens its replacement (co-accessibility: a Plots co-accessibility plot).
+    const retired = retiredPanelOpener(requested);
+    if (retired) { retired(); return; }
+    set(state => {
     const plugin = getAnalysisPanel(requested);
     if (!plugin) return state;
     // A renamed panel type opens the panel under its current name (plugins/registry.ts PANEL_ALIASES).
@@ -398,8 +476,21 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
     // Clear dismissed state when explicitly opening
     const newDismissed = new Set(state.dismissedPanelTypes);
     newDismissed.delete(type);
-    return { panels: [...state.panels, panel], dismissedPanelTypes: newDismissed };
-  }),
+    let panels = [...state.panels, panel];
+    // A short panel (the graph view) opens stacked under the top row's first reads or genome panel, at its natural
+    // height, not as a tall column beside the reads.
+    if (plugin.opens === 'stack-below-reads' && !panel.dock) {
+      const reads = state.panels.find(p => p.contentType === 'dataset' && !p.collapsed && (p.layoutRow ?? 0) === 0);
+      if (reads) {
+        // Under the last panel already stacked there (a second graph view goes under the first).
+        const column = reads.layoutColumn;
+        const stacked = column == null ? [reads] : state.panels.filter(p => (p.layoutRow ?? 0) === 0 && p.layoutColumn === column && !p.collapsed);
+        panels = stackBelow(panels, panel.id, stacked[stacked.length - 1].id);
+      }
+    }
+    return { panels, dismissedPanelTypes: newDismissed };
+    });
+  },
   closeAnalysisPanel: (id) => set(state => {
     const panel = state.panels.find(p => p.id === id);
     if (panel && panel.contentType !== 'dataset') forgetRememberedState(panel.contentType);
@@ -558,7 +649,11 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
 
     // Collapse the source dataset panels, remembering which panels this
     // comparison hid so close only restores its own sources.
-    const datasetPanels = basePanels.filter(p => p.contentType === 'dataset' && isMainViewPanel(p));
+    // (Members folded into a graph are shown by their host: no comparison panels of their own; graph features.)
+    // (A member folded into a graph is left out when another panel of its dataset stands for it; one folded into
+    // another dataset's graph is a source of its own: graph features review.)
+    const datasetPanels = basePanels.filter(p => p.contentType === 'dataset' && isMainViewPanel(p)
+      && (!p.collapsedByGraphGroup || !basePanels.some(q => q !== p && q.datasetId === p.datasetId && !q.collapsedByGraphGroup && isMainViewPanel(q))));
     for (const original of datasetPanels) {
       const idx = newPanels.findIndex(p => p.id === original.id);
       if (idx >= 0 && !original.collapsed) {
@@ -734,10 +829,12 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
   addPanel: (datasetId) => {
     const id = generatePanelId();
     const state = get();
+    const dataset = state.datasets.find(d => d.id === datasetId);
     const panel: PanelConfig = {
       id,
       contentType: 'dataset',
       datasetId,
+      ...(isLiveLift(dataset) ? { liftHaplotypeMode: dataset?.live_lift?.settings?.haplotype_mode ?? 'split' } : {}),
       subTracks: createDefaultSubTracks(state.orthogonalTracks, state.compositeTracks),
       collapsed: false,
       linkGroup: null,
@@ -754,7 +851,8 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
       newDismissed.add(panel.contentType);
     }
     // The last panel of a split shows the panel it was split from again (not left folded away).
-    const panels = restoreOrphanSplitSources(state.panels.filter(p => p.id !== panelId));
+    // (and a closed graph host's members are shown again, out of its graph, with their state: D8).
+    const panels = restoreOrphanGraphMembers(restoreOrphanSplitSources(state.panels.filter(p => p.id !== panelId)));
     // Its own state goes too, unless another panel shares its key.
     const key = panel?.contentType === 'dataset' ? panelKey(panel) : null;
     const keyShared = key != null && panels.some(p => p.contentType === 'dataset' && panelKey(p) === key);
@@ -770,13 +868,19 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
   setPanelReversed: (panelId, reversed) => withUndo(get, 'Reverse panel', () => set(state => ({
     panels: state.panels.map(p => p.id === panelId ? { ...p, reversed } : p),
   }))),
+  setPanelViewportFromLink: (panelId, view) => set(state => {
+    const panel = state.panels.find(p => p.id === panelId);
+    const v = panel?.viewportOverride;
+    if (!panel || !v || (v.chrom === view.chrom && v.start === view.start && v.end === view.end)) return state;
+    return { panels: state.panels.map(p => p.id === panelId ? { ...p, viewportOverride: { chrom: view.chrom, start: view.start, end: view.end } } : p) };
+  }),
   duplicatePanel: (panelId) => {
     const state = get();
     const source = state.panels.find(p => p.id === panelId);
     if (!source || source.contentType !== 'dataset') return '';  // Only duplicate dataset panels
     const newId = generatePanelId();
     const clone: PanelConfig = {
-      ...source,
+      ...withoutGraphMembership(source),
       id: newId,
       subTracks: source.subTracks.map(t => ({ ...t })),
       stateKey: newId,      // independent state key so filters/clusters are per-copy
@@ -805,8 +909,8 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
     // Shown again by hand: no longer held folded by a split or comparison (closing that later leaves it be).
     panels: state.panels.map(p => {
       if (p.id !== panelId) return p;
-      if (collapsed) return { ...p, collapsed };
-      const { collapsedBySplitGroup: _a, collapsedByHaplotypeGroup: _b, collapsedByContactRegionGroup: _c, ...rest } = p;
+      if (collapsed) return { ...withoutGraphFold(p), collapsed };
+      const { collapsedBySplitGroup: _a, collapsedByHaplotypeGroup: _b, collapsedByContactRegionGroup: _c, ...rest } = withoutGraphFold(p);
       return { ...rest, collapsed };
     }),
     fullViewPanelId: collapsed && state.fullViewPanelId === panelId ? null : state.fullViewPanelId,
@@ -1023,27 +1127,27 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
       } : p),
     };
   })),
-  navigatePanel: (panelId, chrom, start, end) => withUndo(get, `Panel to ${chrom}:${Math.max(0, Math.floor(start)).toLocaleString()}`, () => set(state => {
+  navigatePanel: (panelId, chrom, start, end) => withUndo(get, panelNavigationLabel(chrom, start), () => {
+    movePanelOwnView(panelId, chrom, start, end);
+    const moved = get().panels.find(p => p.id === panelId);
+    if (moved?.viewportOverride) moveLinkedFollowers(get, set, moved, moved.viewportOverride);
+    // A linked panel (utils/panelExtensions.ts view links) takes the main view with it, as its pans do: one undo step.
+    const state = get();
     const panel = state.panels.find(p => p.id === panelId);
-    if (!panel) return state;
-    const s0 = Math.max(0, Math.floor(start));
-    const next = { chrom, start: s0, end: Math.max(s0 + 3, Math.floor(end)) };
-    // Its reference's link group goes with it ("Linked navigation", panels on another assembly).
-    const peers = new Set(linkGroupPeers(state.panels, panel, state.navigationMode));
-    // A jump elsewhere leaves the panel's clusters and filters behind (the
-    // main view does the same when it jumps).
-    let cleared: Partial<BrowserState> = {};
-    for (const p of state.panels) {
-      if (!peers.has(p.id) || (p.viewportOverride && isPanOrZoom(p.viewportOverride, next))) continue;
-      cleared = { ...cleared, ...clearPanelState({ ...state, ...cleared } as BrowserState, panelKey(p)) };
+    const v = panel?.viewportOverride;
+    const mapped = panel && v ? mainViewForPanel(panel, v) ?? null : null;
+    if (mapped && !(mapped.chrom === state.chrom && mapped.start === state.start && mapped.end === state.end)) {
+      withLinkedPanelMoving(panelId, () => get().setViewport(mapped.chrom, mapped.start, mapped.end));
     }
-    return {
-      ...cleared,
-      // Stays in its haplotype comparison (closed together with it).
-      panels: state.panels.map(p => peers.has(p.id) ? { ...p, viewportOverride: { ...next }, linkGroup: null } : p),
-      lastMovedPanels: recordPanelMove(state.lastMovedPanels, panel, next),
-    };
-  })),
+  }),
+  navigatePanelOwnView: (panelId, chrom, start, end, options) => withUndo(get, panelNavigationLabel(chrom, start), () => {
+    movePanelOwnView(panelId, chrom, start, end);
+    if (options?.followLinks === false) return;
+    // Panels linked to it that keep views of their own follow it, as after navigatePanel (a graph host's moves to
+    // another contig and its pans while it follows a graph go through here).
+    const moved = get().panels.find(p => p.id === panelId);
+    if (moved?.viewportOverride) moveLinkedFollowers(get, set, moved, moved.viewportOverride);
+  }),
   openPanelAtSite: (panelId, options) => {
     const state = get();
     const source = state.panels.find(p => p.id === panelId);
@@ -1084,7 +1188,7 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
     if (!source || source.contentType !== 'dataset') return '';
     const id = generatePanelId();
     const copy: PanelConfig = {
-      ...source, id, stateKey: id, strand,
+      ...withoutGraphMembership(source), id, stateKey: id, strand,
       subTracks: source.subTracks.map(track => ({ ...track })),
       linkGroup: null, collapsed: false, layoutColumn: undefined,
       // A comparison's copy leaves the comparison but keeps its locus: never in its reference's link group.
@@ -1112,11 +1216,11 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
     if (!source || source.contentType !== 'dataset') return '';
     const id = generatePanelId();
     const copy: PanelConfig = {
-      ...source,
+      ...withoutGraphMembership(source),
       id,
       subTracks: source.subTracks.map(track => ({ ...track })),
       stateKey: id,
-      strand: 'GA',
+      strand: 'GA', ...(source.liftSplitGroup ? { liftSplitGroup: source.liftSplitGroup } : {}),
       linkGroup: null,
       collapsed: false,
       layoutColumn: undefined,  // its own column, right after the source
@@ -1150,22 +1254,67 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
     return id;
   },
 
-  setPanelViewport: (panelId, start, end) => {
+  splitPanelByLiftHap: (panelId, labels) => {
+    const source = get().panels.find(p => p.id === panelId);
+    if (!source || source.contentType !== 'dataset' || labels.length === 0) return [];
+    const liftSplitGroup = `lsg-${generatePanelId()}`;
+    const copies: PanelConfig[] = labels.slice(1).map(label => {
+      const id = generatePanelId();
+      return {
+        ...withoutGraphMembership(source), id, stateKey: id, liftHap: label, liftHaplotypeMode: 'split', liftSplitGroup,
+        subTracks: source.subTracks.map(track => ({ ...track })),
+        collapsed: false, regionLabel: undefined,
+        contactRegionGroupId: undefined, contactRegionRole: undefined, genomeRegionGroupId: undefined,
+        haplotypeGroup: undefined, collapsedByContactRegionGroup: undefined, collapsedByHaplotypeGroup: undefined,
+      };
+    });
+    withUndo(get, 'Split by haplotype', () => set(current => {
+      const idx = current.panels.findIndex(p => p.id === panelId);
+      if (idx < 0) return current;
+      const panels = [...current.panels];
+      const src = panels[idx];
+      // Other reads now: the source panel's clusters and filters don't apply.
+      const { stateKey, reset } = isolatePanelState(current, src);
+      panels[idx] = { ...src, liftHap: labels[0], liftHaplotypeMode: 'split', liftSplitGroup, ...(stateKey ? { stateKey } : {}) };
+      panels.splice(idx + 1, 0, ...copies);
+      return { ...reset, panels };
+    }));
+    return copies.map(c => c.id);
+  },
+  poolLiftHapPanels: (datasetId, panelId) => withUndo(get, 'Pool haplotypes', () => set(state => {
+    // One Split by haplotype's panels (the clicked panel's group), never a graph's host or members; the clicked
+    // panel is kept (graph features review).
+    const clicked = panelId ? state.panels.find(p => p.id === panelId) : undefined;
+    const inGraph = (p: PanelConfig) => p.viewMode === 'graph' || (p.graphView as { role?: string } | undefined)?.role === 'host' || Boolean(p.graphMemberOf);
+    const mine = state.panels.filter(p => p.datasetId === datasetId && p.liftHap && !inGraph(p)
+      && (!clicked || (p.liftSplitGroup ?? null) === (clicked.liftSplitGroup ?? null)));
+    if (mine.length === 0) return state;
+    const keep = (clicked && mine.find(p => p.id === clicked.id)) || mine[0];
+    const drop = new Set(mine.filter(p => p.id !== keep.id).map(p => p.id));
+    const { stateKey, reset } = isolatePanelState(state, keep);
+    return {
+      ...reset,
+      panels: restoreOrphanGraphMembers(state.panels.filter(p => !drop.has(p.id))
+        .map(p => p.id === keep.id ? { ...p, liftHap: undefined, liftHaplotypeMode: 'pooled', liftSplitGroup: undefined, ...(stateKey ? { stateKey } : {}) } : p)),
+    };
+  })),
+  setPanelViewport: (panelId, start, end, options) => {
     const state = get();
     const panel = state.panels.find(p => p.id === panelId);
     const prev = panel?.viewportOverride;
     if (!panel || !prev) return;
     const next = { chrom: prev.chrom, start, end };
     if (next.start === prev.start && next.end === prev.end) return;
-    const move = panel.siteLocked && isPanOrZoom(prev, next);
+    const move = Boolean(panel.siteLocked) && (options?.lockedMove ?? isPanOrZoom(prev, next));
+    // An undo step, like a move of the main view. A locked panel moves the main view too, whose own navigation step
+    // records it (not twice). Seeded before the link maps the move, so a late link correction knows the baseline
+    // is not the move's step.
+    if (!move) seedHistoryBaseline(state, 'Before navigation', 'navigation');
     // A linked panel's view on the main genome (utils/panelExtensions.ts view links; null: none, or the main view
     // already shows it, e.g. a pan inside a part with no main-view coordinates, whose own step is then recorded below).
     const mappedMain = !move ? mainViewForPanel(panel, next) ?? null : null;
     const linkedMain = mappedMain && !(mappedMain.chrom === state.chrom && mappedMain.start === state.start && mappedMain.end === state.end)
       ? mappedMain : null;
-    // An undo step, like a move of the main view. A locked panel moves the
-    // main view too, whose own navigation step records it (not twice).
-    if (!move) seedHistoryBaseline(state, 'Before navigation', 'navigation');
     // Its reference's link group shows the same locus ("Linked navigation", panels on another assembly).
     const peers = new Set(linkGroupPeers(state.panels, panel, state.navigationMode));
     set({
@@ -1176,6 +1325,8 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
       }),
       lastMovedPanels: recordPanelMove(state.lastMovedPanels, panel, next),
     });
+    // Panels linked to this one that keep views of their own ("Each panel navigates") follow it.
+    moveLinkedFollowers(get, set, panel, next);
     if (move) {
       // The main view is a site too; its own update must not move us again.
       const main = moveLikewise({ chrom: state.chrom, start: state.start, end: state.end }, prev, next);
@@ -1442,10 +1593,11 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
   initPanelsFromDatasets: () => set(state => {
     if (state.panels.length > 0) return state;  // Already initialized
     const defaultLinkGroup = state.datasets.length > 1 ? 'link-1' : null;
-    const panels: PanelConfig[] = state.datasets.map(ds => ({
+    const panels: PanelConfig[] = state.datasets.filter(opensOwnPanel).map(ds => ({
       id: generatePanelId(),
       contentType: 'dataset' as PanelContentType,
       datasetId: ds.id,
+      ...(isLiveLift(ds) ? { liftHaplotypeMode: ds.live_lift?.settings?.haplotype_mode ?? 'split' } : {}),
       subTracks: createDefaultSubTracks(state.orthogonalTracks, state.compositeTracks),
       collapsed: false,
       linkGroup: defaultLinkGroup,

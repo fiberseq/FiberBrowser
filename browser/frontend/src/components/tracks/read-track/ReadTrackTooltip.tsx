@@ -1,13 +1,20 @@
 import { SIGNAL_LABELS } from '../../../utils/signalFilters';
-import type { CompactRead } from './types';
+import type { CompactRead, SvSummary } from './types';
+import { svEvidenceLevel } from './svDrawing';
+import { clipConflict } from '../../../utils/svConflicts';
 import type { ReadStateInfo } from '../../../types/clustering';
 import { getClusterColor, getClusterLabel } from './constants';
 import { clusterAssignmentForRead } from './readFilter';
 import { tfFamilyMetadata } from '../../../utils/tfFamilies';
 import { consensusRecordSummary } from '../../../utils/consensusVisual';
+import { LiveLiftTooltipLines } from '../../../features/liveLift/LiveLiftTooltip';
+import { MetaReadLines } from '../../../features/metaLocus/MetaReadLines';
+import { readBodyExtent } from './readExtent';
+import { describeNucRegTile, describeNucSegRow, describeNucSizeMark, nucRegRows, nucRegTileAt, nucRegInReach, nucPatchAt, nucPatchRows, describeNucPatch, nucSegRows, nucSegRowsAt, nucSizeIndex, nucSizeMarkAt } from '../../../utils/nucLayers';
 
 interface ReadTooltipProps {
-  hoveredRead: { read: CompactRead; x: number; y: number };
+  /** pos: the genome position under the pointer (absolute, like `start`). */
+  hoveredRead: { read: CompactRead; x: number; y: number; pos?: number };
   width: number;
   height: number;
   chrom: string;
@@ -16,21 +23,44 @@ interface ReadTooltipProps {
   myReadStateDetails: Record<string, ReadStateInfo> | null;
   annotationOverlays?: Record<string, Array<{ start: number; end: number; type: string; confidence: number }>> | null;
   annotationColors?: Record<string, string>;
+  svSummary?: SvSummary | null;
+  /** The dataset the read was loaded for (its patch-label overlay). */
+  datasetId?: string;
 }
 
 export function ReadTooltip({
   hoveredRead, width, height, chrom, start,
   myClusterAssignments, myReadStateDetails,
-  annotationOverlays, annotationColors,
+  annotationOverlays, annotationColors, svSummary, datasetId,
 }: ReadTooltipProps) {
   const read = hoveredRead.read;
-  const footprints = read.intervals.filter(iv => iv[2] > 0);
-  const allPositions = read.intervals;
-  const readStart = allPositions.length > 0 ? Math.min(...allPositions.map(iv => iv[0])) : 0;
-  const readEnd = allPositions.length > 0 ? Math.max(...allPositions.map(iv => iv[1])) : 0;
+  const seenCalls = new Set<string>();
+  const footprints = read.intervals.filter((iv, i) => {
+    if (iv[2] <= 0) return false;
+    const call = read.live_lift?.calls?.intervals?.[i];
+    if (call == null) return true;
+    if (seenCalls.has(call)) return false;
+    seenCalls.add(call); return true;
+  });
+  const extent = readBodyExtent(read);
+  const readStart = extent?.lo ?? 0;
+  const readEnd = extent?.hi ?? 0;
   const readSize = readEnd - readStart;
-  const cluster = clusterAssignmentForRead(myClusterAssignments, read.id);
+  const cluster = clusterAssignmentForRead(myClusterAssignments, read);
   const state = myReadStateDetails?.[read.id];
+  const conflictReasons = (svSummary?.clusters ?? []).flatMap(target => {
+    if (svEvidenceLevel(read, target, chrom, svSummary?.evidence_targets, svSummary?.conflict_options) !== 'conflicting') return [];
+    return (read.sv_alignments ?? [read]).flatMap(part => (part.sv_evidence ?? part.sv ?? []).flatMap(clip => {
+      if (clip.t !== 'S') return [];
+      const [lo, hi] = target.uncertainty ?? [target.ref, target.ref];
+      const tol = target.t === 'I' ? Math.max(20, Math.min(target.len * 0.05, 50)) : Math.max(20, target.len * 0.05);
+      const point = clip.ref - (target.t === 'D' && clip.side === 'L' ? target.len : 0);
+      if (point < lo - tol || point > hi + tol) return [];
+      const reason = clipConflict({ ...part, sv_segments: read.sv_segments ?? part.sv_segments }, clip,
+        lo, target.end + hi - target.ref, chrom, svSummary?.conflict_options);
+      return reason ? [reason.message] : [];
+    }));
+  });
   const familySummaries = ([
     ['XCR', read.layers?.tf_cross_consensus],
     ['CR', read.layers?.tf_consensus],
@@ -47,6 +77,7 @@ export function ReadTooltip({
   const propagatedConsensus = Object.values(read.layers ?? {}).some(layer => (
     (layer.annotation_names ?? []).some(name => /^fhlt_[0-9a-f]+_P_/i.test(name))
   ));
+  const nucLines = nucleosomeTooltipLines(read, hoveredRead.pos, start, datasetId);
 
   return (
     <div
@@ -63,6 +94,7 @@ export function ReadTooltip({
       <div className="text-gray-300 text-[11px] space-y-0.5">
         {read.qcfail && <div className="text-amber-300">{read.chimera === 'strand_swap' ? 'Chimera (DAF strand swap, FiberHMM)' : 'QC fail'}</div>}
         {read.signal && <div data-testid="signal-read-status">{SIGNAL_LABELS[read.signal.status]}</div>}
+        {[...new Set(conflictReasons)].map(reason => <div key={reason} data-testid="sv-read-conflict" className="text-amber-300">Conflicting · {reason}</div>)}
         <div>Footprints: {footprints.length}{read.qualities ? ` (${footprints.length} scored)` : ''}</div>
         {familySummaries.map(summary => (
           <div key={summary.label}>
@@ -76,7 +108,20 @@ export function ReadTooltip({
         {propagatedConsensus && (
           <div className="text-amber-300">Consensus: PCR-propagated hypothesis</div>
         )}
+        {nucLines.map(line => <div key={line} data-testid="read-nuc-line">{line}</div>)}
         <div>Span: {readSize.toLocaleString()} bp ({chrom}:{(start + readStart).toLocaleString()}-{(start + readEnd).toLocaleString()})</div>
+        {read.lift && (
+          <div data-testid="read-lift-provenance">
+            Lifted from {read.lift.from}{read.lift.mapq != null ? ` · source MAPQ ${read.lift.mapq}` : ''}
+          </div>
+        )}
+        {read.live_lift && <LiveLiftTooltipLines read={read} />}
+        {read.meta && <MetaReadLines meta={read.meta} />}
+        {read.strand_conflict && (
+          <div className="text-amber-300" data-testid="read-strand-conflict">
+            Strand: {read.strand} (st tag); SEQ marks say {read.strand === 'CT' ? 'GA' : 'CT'}
+          </div>
+        )}
         {cluster !== undefined && (
           <div className="flex items-center gap-1">
             Cluster: <span
@@ -100,6 +145,28 @@ export function ReadTooltip({
       </div>
     </div>
   );
+}
+
+/**
+ * The nucleosome marks under the pointer: the size mark (class, z, posterior), the array segment (state,
+ * posterior, q-hat) and any disruption events there. `pos` is absolute; layers are relative to `start`.
+ */
+export function nucleosomeTooltipLines(read: CompactRead, pos: number | undefined, start: number, datasetId?: string): string[] {
+  if (pos === undefined || !Number.isFinite(pos) || !read.layers) return [];
+  const rel = pos - start;
+  const lines: string[] = [];
+  const mark = nucSizeMarkAt(nucSizeIndex(read.layers.nucsz), rel);
+  if (mark) lines.push(`Size class: ${describeNucSizeMark(mark)}`);
+  const { segment, events } = nucSegRowsAt(nucSegRows(read.layers.nucseg), rel);
+  if (segment) lines.push(`Array: ${describeNucSegRow(segment)}`);
+  const regRows = nucRegRows(read.layers.nucreg as Parameters<typeof nucRegRows>[0]);
+  const regTile = nucRegTileAt(regRows, rel);
+  if (regRows && regTile) lines.push(`Regularity: ${describeNucRegTile(regTile, regRows.scale)}`);
+  else if (regRows && nucRegInReach(regRows, rel)) lines.push('Regularity: not scored (too few calls in the window)');
+  const patch = nucPatchAt(nucPatchRows(read.layers.nucpatch as Parameters<typeof nucPatchRows>[0], datasetId), rel);
+  if (patch) lines.push(`Patch: ${describeNucPatch(patch, regRows?.scale)}`);
+  for (const event of events) lines.push(`Disrupted: ${describeNucSegRow(event)}`);
+  return lines;
 }
 
 interface ClusterTooltipProps {

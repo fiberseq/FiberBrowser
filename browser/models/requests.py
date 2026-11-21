@@ -52,6 +52,9 @@ class AddDatasetRequest(BaseModel):
     paths: Optional[List[str]] = None
     label: Optional[str] = None
     url: Optional[str] = None
+    # A live-lift dataset's linked source view opens its BAM as a native dataset: that dataset's id. The page shows
+    # such a dataset only in its source view (a reload without a session opens no panel of its own for it).
+    lift_source_of: Optional[str] = None
 
 class MergeDatasetsRequest(BaseModel):
     dataset_ids: List[str]
@@ -87,6 +90,10 @@ class PeakRegion(BaseModel):
     mode: str = 'accessibility'  # 'accessibility', 'tf', 'modification', 'annotation', or 'off'
 
 class ScanPeaksRequest(BaseModel):
+    # One-release compatibility controls (the owner accepted local Rare as default).
+    execution_engine: Literal['scan', 'legacy'] = 'scan'
+    tier_rule: Literal['local', 'window'] = 'local'
+    lift_hap: Optional[str] = None
     strand: Optional[Literal["CT", "GA"]] = None
     min_width: int = 80
     min_reads: int = 5
@@ -120,6 +127,7 @@ class ClusterViewport(BaseModel):
     start: int = Field(ge=0)
     end: int = Field(gt=0)
     read_ids: Optional[List[str]] = None
+    lift_hap: Optional[str] = None
     strand: Optional[Literal["CT", "GA"]] = None  # DAF-seq panel showing one strand
     # This window's own peaks (absolute), matched one-to-one and equal in width
     # to every other window's, so reads at different loci cluster together.
@@ -152,6 +160,7 @@ class MatchedViewPanel(BaseModel):
     dataset_id: str
     result_key: str
     read_ids: Optional[List[str]] = None
+    lift_hap: Optional[str] = None
     strand: Optional[Literal["CT", "GA"]] = None
 
 
@@ -185,6 +194,7 @@ class MatchedClusterRequest(BaseModel):
 
 
 class DissolveClusterRequest(BaseModel):
+    lift_hap_by_dataset: Optional[Dict[str, str]] = None
     cluster_to_dissolve: int
     current_assignments: Dict[str, Dict[str, int]]
     peak_regions: List[PeakRegion] = []
@@ -193,8 +203,12 @@ class DissolveClusterRequest(BaseModel):
     accessibility_threshold: float = 0.5
     sample_seed: Optional[str] = None
     cluster_feature_rules: List[Dict[str, Any]] = []
+    # The fit's molecule metric cohort (as on AssignToClustersRequest): metric columns rank these reads against the
+    # fitted reads. Absent: the stored clustering's (no explicit peaks), else the reads of this request.
+    cluster_metric_cohort: Optional[Dict[str, Any]] = None
 
 class AutoCullRequest(BaseModel):
+    lift_hap_by_dataset: Optional[Dict[str, str]] = None
     current_assignments: Dict[str, Dict[str, int]]
     peak_regions: List[PeakRegion] = []
     dataset_ids: List[str] = []
@@ -210,8 +224,13 @@ class AutoCullRequest(BaseModel):
     merge_alpha: float = Field(0.01, gt=0, lt=1)
     sample_seed: Optional[str] = None
     cluster_feature_rules: List[Dict[str, Any]] = []
+    # The fit's molecule metric cohort (as on AssignToClustersRequest): metric columns rank these reads against the
+    # fitted reads. Absent: the stored clustering's (no explicit peaks), else the reads of this request.
+    cluster_metric_cohort: Optional[Dict[str, Any]] = None
 
 class AssignToClustersRequest(BaseModel):
+    viewports: Optional[List[ClusterViewport]] = None
+    lift_hap_by_dataset: Optional[Dict[str, str]] = None
     peak_regions: List[PeakRegion] = []
     # Combinatorial dynamic reassignment uses binary patterns. Non-combinatorial
     # methods (kmeans, etc.) supply per-cluster centroids + the feature-column
@@ -219,6 +238,9 @@ class AssignToClustersRequest(BaseModel):
     cluster_patterns: Dict[int, List[int]] = {}
     cluster_centroids: Optional[Dict[int, List[float]]] = None
     cluster_peak_widths: Optional[List[int]] = None
+    # The fit's molecule metric cohort ({metric: {values, counts}}, as cluster_all returns it with the patterns or
+    # centroids): metric columns rank the view's reads against the fitted reads. Absent: against the view's own.
+    cluster_metric_cohort: Optional[Dict[str, Any]] = None
     overlap_mode: str = 'aggressive'  # 'aggressive' (assign if overlaps any peak) | 'conservative' (require all peaks)
     dataset_ids: List[str] = []
     read_ids: Optional[Dict[str, List[str]]] = None
@@ -260,7 +282,8 @@ class ClusterVPlotRequest(BaseModel):
     # without them is answered exactly as before.
     # "cluster": one matrix per cluster (needs assignments); "all": one matrix
     # per dataset from every read in its working set (no clustering needed),
-    # under the cluster key -1.
+    # under the cluster key -1; "pooled": every named dataset's reads summed
+    # into one matrix (raw sums, finished once), under data["__pooled__"][-1].
     group_by: str = "cluster"
     # Restrict to these datasets (None: the analysis scope's datasets).
     dataset_ids: Optional[List[str]] = None
@@ -274,8 +297,16 @@ class ClusterVPlotRequest(BaseModel):
     # counts, no log1p, not scaled to a maximum; blank cells null) with the
     # reads and footprints behind each matrix. False: the older scaled matrix.
     raw_values: bool = False
+    # Plots summaries: the box mean's seeded Poisson bootstrap over reads (size_from, size_to, pos_from, pos_to
+    # genomic, resamples, seed); each raw group answers box_ci {lo, hi, units} (services/box_bootstrap).
+    box_bootstrap: Optional[Dict[str, Any]] = None
+    # Plots' read sampling: a random N reads per dataset by the stable rule (services/stable_sample: smallest
+    # blake2b keys of (seed, dataset, read name)); None: every read.
+    sample_n: Optional[int] = Field(None, ge=1, le=10_000_000)
+    sample_seed_int: int = 1
 
 class ProjectionRequest(BaseModel):
+    lift_hap_by_dataset: Optional[Dict[str, str]] = None
     dataset_ids: List[str] = []
     peak_regions: List[PeakRegion] = []
     # t-SNE by default: it keeps each read's nearest neighbours together.
@@ -300,7 +331,23 @@ class ProjectionRequest(BaseModel):
     merge_alpha: float = Field(0.01, gt=0, lt=1)
     sample_seed: Optional[str] = None
     cluster_feature_rules: List[Dict[str, Any]] = []
+    # The fit's molecule metric cohort (as on AssignToClustersRequest): metric columns rank these reads against the
+    # fitted reads. Absent: the stored clustering's (no explicit peaks), else the reads of this request.
+    cluster_metric_cohort: Optional[Dict[str, Any]] = None
     cluster_assignments: Optional[Dict[str, Dict[str, int]]] = None
+    # Build the map from another cluster mode (a layer, or a nuc.* mode) at the same peaks: every peak's mode becomes
+    # this one. None: the modes the clustering used (the default; the merge preview then matches Merge).
+    feature_mode: Optional[str] = None
+
+
+class ClusterMoleculesRequest(BaseModel):
+    """Per-molecule summaries for the cluster map's colours (m6A per kb, span, layer shares, layer at a position)."""
+    lift_hap_by_dataset: Optional[Dict[str, str]] = None
+    dataset_ids: List[str] = []
+    cluster_assignments: Optional[Dict[str, Dict[str, int]]] = None
+    sample_seed: Optional[str] = None
+    # A reference position: each molecule's layer there ('state'). None: summaries only.
+    position: Optional[int] = None
 
 
 # ── Filtering & Sorting ────────────────────────────────────────────────────
@@ -312,6 +359,8 @@ class FilterRequest(BaseModel):
     filter_mode: str = "either"
     layer: Optional[str] = None
     sample_seed: Optional[str] = None
+    # Live lift: a split panel's haplotype (dataset id -> MAT/PAT or a map haplotype key); absent: every haplotype.
+    lift_hap_by_dataset: Optional[Dict[str, str]] = None
 
 class ProjectionSortSettings(BaseModel):
     peak_regions: List[PeakRegion] = []
@@ -323,6 +372,8 @@ class ProjectionSortSettings(BaseModel):
     # focused clusters, a filter): only those reads are ordered, but along the
     # map of all of them, so the order matches the map on screen.
     cluster_assignments: Optional[Dict[str, Dict[str, int]]] = None
+    # The fit's molecule metric cohort, as the Projection tab sends it (ProjectionRequest.cluster_metric_cohort).
+    cluster_metric_cohort: Optional[Dict[str, Any]] = None
 
 
 class SortReadsRequest(BaseModel):
@@ -342,13 +393,26 @@ class SortReadsRequest(BaseModel):
     # sort_by="projection": the features of the Projection tab's map (its
     # peaks, cluster rules and threshold); None uses the stored clustering's.
     projection: Optional[ProjectionSortSettings] = None
+    # Live lift: a split panel's haplotype (dataset id -> MAT/PAT or a map haplotype key); absent: every haplotype.
+    lift_hap_by_dataset: Optional[Dict[str, str]] = None
+    # sort_by="value": a per-molecule scalar ('nuc.nrl', 'nfr.openness': services/nuc/scalars.py); missing values
+    # sort last.
+    molecule_metric: Optional[str] = None
+    # sort_by="feature_hub": the number of these hub hits where the read's state is `state`.
+    feature_hub: Optional[Dict[str, Any]] = None
 
 
 class AnalysisFilterRequest(BaseModel):
     dataset_ids: List[str] = []
-    metric: Literal["count", "occupancy", "rate", "accessibility"] = "count"
-    operator: Literal["gt", "gte", "lt", "lte", "eq"] = "gte"
+    metric: Literal["count", "occupancy", "rate", "accessibility", "value"] = "count"
+    operator: Literal["gt", "gte", "lt", "lte", "eq", "between"] = "gte"
     threshold: float = 1
+    # operator "between": threshold <= value <= threshold_max.
+    threshold_max: Optional[float] = None
+    # metric "value": a per-molecule scalar (services/nuc/scalars.py); a missing value never passes.
+    molecule_metric: Optional[str] = None
+    # metric "count" of hub hits: {hits: [{set_id, hit_id, chrom, start, end}], state: '1' | '0'}.
+    feature_hub: Optional[Dict[str, Any]] = None
     rule: Optional[dict] = None
     peak_regions: Optional[List[List[int]]] = None
     scope_windows: Optional[List[List[int]]] = None
@@ -356,6 +420,8 @@ class AnalysisFilterRequest(BaseModel):
     transcription_state: Optional[TranscriptionStateKind] = None
     gene_ids: List[str] = []
     sample_seed: Optional[str] = None
+    # Live lift: a split panel's haplotype (dataset id -> MAT/PAT or a map haplotype key); absent: every haplotype.
+    lift_hap_by_dataset: Optional[Dict[str, str]] = None
 
 class TranscriptionStateFilterRequest(BaseModel):
     """Filter reads by transcription state criteria."""
@@ -389,7 +455,12 @@ class ReadStatsRegion(BaseModel):
 
 
 class ReadStatsRequest(BaseModel):
+    # The read track's read policy and footprint-quality gate: QC-fail and duplicate reads are hidden unless
+    # their toggles show them, and footprints below min_fp_quality (legacy nq) are dropped, as the read track
+    # does. The colour-rule quality filters are the server's (state.quality_filters).
     include_qcfail: bool = False
+    include_duplicates: bool = False
+    min_fp_quality: int = 0
     # Min footprints as the read track applies it: hide_uncalled=false (or
     # min_footprints=-1) is its "All reads, including uncalled" choice; which reads it
     # hid in the region, by reason, is part of the summary.
@@ -397,6 +468,8 @@ class ReadStatsRequest(BaseModel):
     min_footprints: int = 0
     read_ids_by_dataset: Dict[str, List[str]]
     sample_seed: Optional[str] = None
+    # Live lift: a split panel's haplotype (dataset id -> MAT/PAT or a map haplotype key); absent: every haplotype.
+    lift_hap_by_dataset: Optional[Dict[str, str]] = None
     extra_regions: List[ReadStatsRegion] = []
 
 class LiveFigureState(BaseModel):
@@ -990,6 +1063,9 @@ class RegionViewport(ClusterViewport):
     reverse: bool = False
     blocks: list[FrameBlock]
     region_label: Optional[str] = None
+    # The window's blocks run across a circular contig's origin: reads must cover the whole hull of each feature's
+    # blocks (graph primary G0). Never inferred from block order, which mixed-orientation blocks make look wrapped.
+    wraps_origin: bool = False
 
 
 class RegionClusterRequest(ClusterAllRequest):
@@ -999,6 +1075,9 @@ class RegionClusterRequest(ClusterAllRequest):
     feature_geometry: Literal['crop'] = 'crop'
     balance_windows: bool = True
     member_specific_features: list[int] = Field(default_factory=list)
+    # Frame positions sampled per feature (graph primary §2.5: a carrier-only feature continues its parent's 10 bp
+    # grid); None: every 10 bp from 0, as before.
+    sample_positions: Optional[list[list[int]]] = None
 
 
 class CorrespondenceScanRequest(ScanPeaksRequest):

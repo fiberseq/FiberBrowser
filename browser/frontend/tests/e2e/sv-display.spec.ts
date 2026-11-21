@@ -85,7 +85,9 @@ test('SV summary track, then split the reads by the deletion allele', async ({ p
   const xAt = (pos: number) => box.x + sidebar + ((pos - VIEW.start) / (VIEW.end - VIEW.start)) * (box.width - sidebar);
   await page.mouse.move(xAt(10_750), box.y + box.height / 2);
   await expect(page.getByTestId('sv-cluster-tooltip')).toContainText('DEL 1.5 kb');
-  await expect(page.getByTestId('sv-cluster-tooltip')).toContainText('13 of 21 informative');
+  // Geometry support is now labelled by evidence tier; weaker calls have their own counts.
+  await expect(page.getByTestId('sv-cluster-tooltip')).toContainText('13 confirmed of 21 informative');
+  await expect(page.getByTestId('sv-cluster-tooltip')).toContainText('0 putative · 0 conflicting');
 
   // Right-click the arc: split the reads by this SV (the SV track's menu; the common track items under Track options).
   await page.mouse.click(xAt(10_750), box.y + box.height / 2, { button: 'right' });
@@ -114,7 +116,7 @@ test('SV summary track, then split the reads by the deletion allele', async ({ p
 
   // The groups are the panel's clusters: the cluster panel names them.
   await page.evaluate(() => (window as any).__FIBERBROWSER_STORE__.getState().openAnalysisPanel('cluster-detail'));
-  await expect(page.getByText('Carriers', { exact: true }).first()).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText('Confirmed (13) + putative (0)', { exact: true }).first()).toBeVisible({ timeout: 15_000 });
   await expect(page.getByText('Reference', { exact: true }).first()).toBeVisible();
 
   // A pan within the locus keeps the groups.

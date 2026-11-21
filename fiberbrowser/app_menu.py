@@ -133,6 +133,7 @@ MENUS: tuple = (
         _cmd("Back", "back", "["),
         _cmd("Forward", "forward", "]"),
         _cmd("Go to Locus…", "go-to-locus", "l"),
+        _cmd("Find Sequence in Genome…", "find-sequence"),
         _cmd("Search Commands and Settings…", "command-palette", "k"),
         SEP,
         _cmd("Show/Hide Sidebar", "toggle-sidebar", "b"),

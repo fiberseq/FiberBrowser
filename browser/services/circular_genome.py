@@ -206,6 +206,12 @@ def shift_compact_read(read: dict, offset: int, reference_offset: Optional[int] 
                 shift_interval(iv, offset)
                 for iv in layer.get("intervals") or []
             ]
+            if "source_intervals" in layer:
+                shifted_layer["source_intervals"] = [shift_interval(iv, offset) for iv in layer["source_intervals"]]
+            reach = layer.get("reach")
+            if isinstance(reach, (list, tuple)) and len(reach) == 2:
+                # the regularity window grid's reach (nucreg), viewport-relative like the intervals
+                shifted_layer["reach"] = [int(reach[0]) + offset, int(reach[1]) + offset]
             shifted_layers[layer_name] = shifted_layer
         out["layers"] = shifted_layers
     return out
@@ -243,8 +249,11 @@ _ROW_IDENTITY_KEYS = (
     "library_id", "source_path", "record_sha256", "alignment_occurrence",
     "reference_start", "reference_end", "alignment_orientation",
     "chemical_strand", "daf_strand", "strand", "_original_id", "bigbed_sample",
+    "strand_conflict", "lift", "lift_flipped", "strand_frame",
     # Absolute-coordinate SV events (services/sv_events.py): the record's own.
     "sv",
+    "aligned_blocks", "sv_segments", "sequence_span",
+    "sv_alignments", "supplementary",
 )
 
 
@@ -269,7 +278,12 @@ def merge_compact_reads_by_id(reads: Iterable[dict]) -> list[dict]:
     per revolution) join, while distinct records sharing a name (exact
     duplicates, the same QNAME in two files) stay separate rows.  The row
     keeps its alignment identity and the union of its parts'
-    ``alignment_spans``."""
+    ``alignment_spans``.  A scan overlay's fields are kept too: its layers'
+    ``scan_overlay`` token (and draw fields) and the parts' row receipts
+    (``PARTS_KEY``: each names its segment's window, so the caller renames
+    them for the whole view with ``scan.overlay.rewindow_receipts``)."""
+    from services.scan.overlay import PARTS_KEY, RECEIPT_KEY
+    from services.nuc.scalars import SCALARS_KEY, WITHOUT_CALLS_KEY
     grouped: dict[tuple, list[dict]] = {}
     order: list[tuple] = []
 
@@ -292,9 +306,26 @@ def merge_compact_reads_by_id(reads: Iterable[dict]) -> list[dict]:
                 if identity_key in part:
                     target[identity_key] = part[identity_key]
                     break
+        # Call-less record (services/nuc/scalars.drop_stale_nuc_groups): the row-level marks keep a scan overlay's
+        # nucleosome rows off the merged row, as they are kept off each part.
+        for flag in ("nuc_live", WITHOUT_CALLS_KEY):
+            if any(part.get(flag) for part in parts):
+                target[flag] = True
         spans = [span for part in parts for span in part.get("alignment_spans") or []]
         if spans:
             target["alignment_spans"] = merged_spans(spans)
+        receipts = tuple(part[RECEIPT_KEY] for part in parts if part.get(RECEIPT_KEY) is not None)
+        if receipts:
+            target[PARTS_KEY] = receipts
+        # The record's molecule scalars (a scan's molecules table, live nucleosome outputs, an annotated BAM's scalar
+        # group): one value per molecule, the same on every part. Dropped, a rewindowed receipt would keep the final
+        # overlay from putting them back (Codex review, stabilize 3 group B round 1).
+        scalars: dict = {}
+        for part in parts:
+            for name, value in (part.get(SCALARS_KEY) or {}).items():
+                scalars.setdefault(name, value)
+        if scalars:
+            target[SCALARS_KEY] = scalars
         for read in sorted(parts, key=_read_position_sort_key):
             if read.get("duplicate"):
                 target["duplicate"] = True
@@ -325,9 +356,18 @@ def merge_compact_reads_by_id(reads: Iterable[dict]) -> list[dict]:
                         dest["quality_names"] = layer.get("quality_names")
                     if layer.get("quality_source"):
                         dest["quality_source"] = layer["quality_source"]
-                    for meta_key in ("circular_ids", "annotation_names"):
+                    for meta_key in ("circular_ids", "annotation_names", "source_intervals"):
                         if layer.get(meta_key):
                             dest.setdefault(meta_key, []).extend(layer.get(meta_key) or [])
+                    for meta_key in ("scan_overlay", "source_layer", "draw_style", "scale", "params_digest", "nuc_live", "lk", "pg"):
+                        if layer.get(meta_key) is not None:
+                            dest.setdefault(meta_key, layer[meta_key])
+                    reach = layer.get("reach")
+                    if isinstance(reach, (list, tuple)) and len(reach) == 2:
+                        # the parts' regularity window-grid reaches (already in the view's frame): their envelope
+                        old = dest.get("reach")
+                        dest["reach"] = ([min(int(old[0]), int(reach[0])), max(int(old[1]), int(reach[1]))]
+                                         if old else [int(reach[0]), int(reach[1])])
         result.append(target)
     return result
 

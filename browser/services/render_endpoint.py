@@ -51,6 +51,9 @@ def _view_sequence(state, chrom: str, start: int, end: int) -> str:
 
 def _render_sync(request: RenderRequest, state):
     """Blocking render logic — runs in thread pool."""
+    from services.lift.capability import require_for_ids
+    from services.query_params import resolve_dataset_ids
+    require_for_ids(state, resolve_dataset_ids(state, request.dataset_ids, request.dataset_id), "figure")
     from render import (
         render_axis_track,
         render_meta_track,

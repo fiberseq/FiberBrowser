@@ -1,0 +1,66 @@
+{
+ "group": "f6979b4b",
+ "jobs": [
+  {
+   "attempt": 1,
+   "auto_open": false,
+   "basecall": null,
+   "command": "fiberhmm-pipeline /data/sample_a.fastq --reference /data/ref.fa --enzyme dddb -o /data/r1 --sample sample_a --cores 1 --progress-json /data/progress.jsonl --min-mapq 0 --dedup off",
+   "cores": 1,
+   "created": 1795183525.904,
+   "enzyme": "dddb",
+   "group": "f6979b4b",
+   "id": "job-1",
+   "input_kind": "reads",
+   "opener": null,
+   "option_labels": [
+    "MAPQ 0",
+    "duplicates off"
+   ],
+   "options": {
+    "alignments": "primary-supplementary",
+    "chimera_filter": true,
+    "cpg_mask_policy": "unmethylated-only",
+    "dedup": "off",
+    "dedup_mode": "flag",
+    "min_mapq": 0,
+    "prob_threshold": null,
+    "snp_mask": "",
+    "snp_screen": "auto",
+    "use_m5c": "auto"
+   },
+   "outdir": "/data/r1",
+   "pid": 0,
+   "progress": {
+    "current_step": null,
+    "done": null,
+    "eta_s": null,
+    "fraction": null,
+    "logs": [],
+    "settings": null,
+    "started": false,
+    "steps": [],
+    "version": null,
+    "warnings": []
+   },
+   "queued_at": 1795183525.904,
+   "reads": [
+    "/data/sample_a.fastq"
+   ],
+   "reference": {
+    "kind": "fasta",
+    "label": "ref.fa",
+    "path": "/data/ref.fa"
+   },
+   "regions": [],
+   "sample": "sample_a",
+   "started_at": 0,
+   "status": "running",
+   "user": null
+  }
+ ],
+ "success": true,
+ "warnings": [
+  "Sample 'sample a' will be named 'sample_a' (letters, digits, . _ - only)."
+ ]
+}

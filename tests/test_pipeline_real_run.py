@@ -21,7 +21,7 @@ FIBERHMM_TAGS = ("ns", "nl", "as", "al", "nq", "MA", "AQ")
 # The wizard's defaults (frontend utils/dafRun.ts DEFAULT_OPTIONS), as buildRunRequest sends them.
 WIZARD_OPTIONS = {"dedup": "auto", "dedup_mode": "flag", "snp_screen": "auto", "snp_mask": "",
                   "chimera_filter": True, "alignments": "primary-supplementary", "prob_threshold": None,
-                  "use_m5c": "auto", "cpg_mask_policy": "unmethylated-only"}
+                  "use_m5c": "auto", "cpg_mask_policy": "unmethylated-only", "min_mapq": 0}
 
 
 @pytest.fixture

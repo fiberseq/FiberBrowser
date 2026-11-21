@@ -1280,7 +1280,7 @@ def cluster_check(state, request):
     if not 0.1 <= min_cover <= 1: raise ValueError('Coverage must be 10–100% of the sub-window.')
     n = max(1, int(math.ceil(length / CLUSTER_BIN)))
     t = time.perf_counter()
-    rows, groups, per_window = [], [], []
+    rows, groups, per_window, row_ids = [], [], [], []
     for w in windows:
         key = w.get('key') or w['panelId']
         index = frame_index(w, length)
@@ -1301,11 +1301,12 @@ def cluster_check(state, request):
         per_window.append(dict(key=key, panelId=w['panelId'], eligible=eligible, used=len(kept), total=len(ws.reads)))
         groups.append(list(range(len(rows), len(rows) + len(kept))))
         rows += [v for _, v in kept]
+        row_ids += [str(r.get('id')) for r, _ in kept]
     short = [p['key'] for p in per_window if p['used'] < 10]
     if short:
         raise ValueError(f"Too few reads cover {min_cover:.0%} of the sub-window in {', '.join(short)}; lower the coverage or shorten the sub-window.")
     observed = np.vstack(rows)
-    fit = _balanced_indices(groups, np.random.default_rng(0))
+    fit = _balanced_indices(groups, 0, lambda i: row_ids[i])
     # Uncovered bins take the balanced training rows' mean (so a deep window does not set
     # it) for fitting only; agreement uses observed values.
     with np.errstate(all='ignore'):

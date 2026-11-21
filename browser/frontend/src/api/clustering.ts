@@ -1,4 +1,4 @@
-import type { ClusterFeatureRule, ClusterResponse, FilterMode, PeakMode } from '../types';
+import type { ClusterFeatureRule, ClusterMetricCohort, ClusterResponse, FilterMode, PeakMode } from '../types';
 import { fetchJson } from './sharedFetch';
 
 const API_BASE = '/api';
@@ -49,7 +49,7 @@ export async function clusterAllReads(
   extraChroms?: string[],
   sampleSeed?: string,
   clusterFeatureRules?: ClusterFeatureRule[],
-  viewports?: Array<{dataset_id:string;result_key:string;chrom:string;start:number;end:number;read_ids?:string[];strand?:'CT'|'GA';peak_regions?:Array<{start:number;end:number;mode?:string}>}>,
+  viewports?: Array<{dataset_id:string;result_key:string;chrom:string;start:number;end:number;read_ids?:string[];lift_hap?:string;strand?:'CT'|'GA';peak_regions?:Array<{start:number;end:number;mode?:string}>}>,
   /**
    * method 'graph': community resolution (higher gives more, smaller clusters).
    * panelGenome: the run's reference when it is a panel's own (another
@@ -58,9 +58,13 @@ export async function clusterAllReads(
   options?: { resolution?: number; panelGenome?: string | null; preparationSampleCount?: number | null; signal?: AbortSignal },
 ): Promise<{
   results: Record<string, ClusterResponse>;
+  joint_cohort?: { policy: string; shared_molecules: number; removed_rows: number; rows: number };
   cluster_patterns?: Record<number, number[]>;
   cluster_centroids?: Record<number, number[]>;
   cluster_peak_widths?: number[];
+  /** The fit's molecule metric cohort (only when a cluster rule has a molecule metric term): sent back with the
+   * patterns or centroids for dynamic assignment. */
+  cluster_metric_cohort?: ClusterMetricCohort;
   peak_regions?: Array<{ start: number; end: number; mode?: string }>;
   sample_seed?: string | null;
   cluster_random_state?: number;
@@ -109,6 +113,7 @@ export async function clusterAllReads(
 
 /** One dataset panel of a comparison view; its result comes back under result_key. */
 export interface MatchedViewPanel {
+  lift_hap?: string;
   dataset_id: string;
   result_key: string;
   read_ids?: string[];
@@ -188,6 +193,11 @@ export async function clusterMatchedViews(args: {
   });
 }
 
+/** The fit's molecule metric cohort as a request field, only when there is one (as assignToClusters sends it). */
+function metricCohortField(cohort?: ClusterMetricCohort): { cluster_metric_cohort?: ClusterMetricCohort } {
+  return cohort && Object.keys(cohort).length ? { cluster_metric_cohort: cohort } : {};
+}
+
 export async function dissolveCluster(
   chrom: string,
   start: number,
@@ -203,6 +213,11 @@ export async function dissolveCluster(
   clusterFeatureRules?: ClusterFeatureRule[],
   /** A panel on another assembly: its reference's key (panel_genome). */
   panelGenome?: string | null,
+  options?: {
+    // The fit's molecule metric cohort (the store's clusterMetricCohort): metric columns rank these reads against
+    // the fitted reads. Absent or empty: the server's stored cohort (no explicit peaks), else these reads' own.
+    metricCohort?: ClusterMetricCohort;
+  },
 ): Promise<{ results: Record<string, ClusterResponse> }> {
   const params = new URLSearchParams({
     chrom,
@@ -223,6 +238,7 @@ export async function dissolveCluster(
       accessibility_threshold: accessibilityThreshold,
       sample_seed: sampleSeed ?? null,
       cluster_feature_rules: clusterFeatureRules ?? [],
+      ...metricCohortField(options?.metricCohort),
     }),
   });
 }
@@ -262,6 +278,10 @@ export async function autoCullClusters(
   /** A panel on another assembly: its reference's key (panel_genome). */
   panelGenome?: string | null,
   mergeBy?: MergeByOptions,
+  options?: {
+    /** The fit's molecule metric cohort, as for dissolveCluster. */
+    metricCohort?: ClusterMetricCohort;
+  },
 ): Promise<{ results: Record<string, ClusterResponse>; dissolved: DissolvedCluster[]; merge?: Record<string, unknown> }> {
   const params = new URLSearchParams({
     chrom,
@@ -285,6 +305,7 @@ export async function autoCullClusters(
       ...(mergeBy?.threshold != null ? { merge_threshold: mergeBy.threshold } : {}),
       sample_seed: sampleSeed ?? null,
       cluster_feature_rules: clusterFeatureRules ?? [],
+      ...metricCohortField(options?.metricCohort),
     }),
   });
 }
@@ -360,8 +381,12 @@ export async function fetchClusterProjection(
     clusterAssignments?: Record<string, Record<string, number>>;
     /** Per-read DAF strand (CT/GA): loads deamination marks, so only for the export. */
     includeStrands?: boolean;
+    /** The fit's molecule metric cohort, as for dissolveCluster. */
+    metricCohort?: ClusterMetricCohort;
     /** A panel on another assembly: its reference's key (panel_genome). */
     panelGenome?: string | null;
+    /** Build the map from another cluster mode at the same peaks (absent: the clustering's modes). */
+    featureMode?: string | null;
   } = {}
 ): Promise<ProjectionResponse> {
   const params = new URLSearchParams({
@@ -390,6 +415,49 @@ export async function fetchClusterProjection(
       cluster_feature_rules: options.clusterFeatureRules ?? [],
       ...(options.clusterAssignments ? { cluster_assignments: options.clusterAssignments } : {}),
       ...(options.includeStrands ? { include_strands: true } : {}),
+      ...(options.featureMode ? { feature_mode: options.featureMode } : {}),
+      ...metricCohortField(options.metricCohort),
+    }),
+    signal: options.signal,
+  });
+}
+
+/** One clustered molecule's map colours (from /api/cluster_molecules). */
+export interface ClusterMoleculeSummary {
+  span: number;
+  m6a: number | null;
+  m6a_per_kb: number | null;
+  frac: Record<string, number>;
+  /** With a position: the layer covering it ('linker': no call; null: the read doesn't cover it). */
+  state?: string | null;
+}
+export interface ClusterMoleculesResponse {
+  molecules: Record<string, Record<string, ClusterMoleculeSummary>>;
+  layers: string[];
+  position: number | null;
+}
+
+/** Each clustered molecule's summary for the map's colours, from the clustered reads (not the read panels). */
+export async function fetchClusterMolecules(
+  chrom: string, start: number, end: number, datasetIds: string[], spanning: boolean,
+  options: {
+    clusterAssignments?: Record<string, Record<string, number>>;
+    sampleSeed?: string;
+    position?: number | null;
+    panelGenome?: string | null;
+    signal?: AbortSignal;
+  } = {},
+): Promise<ClusterMoleculesResponse> {
+  const params = new URLSearchParams({ chrom, start: String(start), end: String(end), spanning: String(spanning) });
+  if (options.panelGenome) params.set('panel_genome', options.panelGenome);
+  return fetchJson(`${API_BASE}/cluster_molecules?${params}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      dataset_ids: datasetIds,
+      sample_seed: options.sampleSeed ?? null,
+      ...(options.clusterAssignments ? { cluster_assignments: options.clusterAssignments } : {}),
+      ...(options.position != null ? { position: options.position } : {}),
     }),
     signal: options.signal,
   });
@@ -410,10 +478,14 @@ export async function assignToClusters(
     clusterFeatureRules?: ClusterFeatureRule[];
     readIds?: Record<string, string[]>;
     signal?: AbortSignal;
+    viewports?: Array<{ dataset_id: string; result_key: string; chrom: string; start: number; end: number; read_ids?: string[]; lift_hap?: string; strand?: 'CT' | 'GA' }>;
     // Non-combinatorial dynamic reassignment: supply centroids + feature-column
     // widths instead of patterns, and reads are assigned to the nearest centroid.
     centroids?: Record<number, number[]>;
     peakWidths?: number[];
+    // The fit's molecule metric cohort (cluster_all's cluster_metric_cohort): metric columns rank the view's reads
+    // against the fitted reads, for patterns and centroids alike. Absent or empty: against the view's own reads.
+    metricCohort?: ClusterMetricCohort;
     // Conservative: a read missing any clustering peak goes to Unassigned.
     overlapMode?: 'conservative' | 'aggressive';
   }
@@ -432,6 +504,7 @@ export async function assignToClusters(
       peak_regions: peakRegions,
       cluster_patterns: clusterPatterns,
       dataset_ids: datasetIds,
+      ...(options?.viewports ? { viewports: options.viewports } : {}),
       subnucleosomal_threshold: subnucleosomalThreshold,
       accessibility_threshold: accessibilityThreshold,
       sample_seed: options?.sampleSeed ?? null,
@@ -443,6 +516,7 @@ export async function assignToClusters(
         cluster_centroids: options!.centroids,
         cluster_peak_widths: options!.peakWidths ?? [],
       } : {}),
+      ...metricCohortField(options?.metricCohort),
     }),
     signal: options?.signal,
   });
@@ -517,6 +591,8 @@ export const ALL_READS_KEY = -1;
 /** One footprint size matrix (raw_values mode): the values themselves, null where the guard leaves a cell blank. */
 export interface FootprintSizeData {
   matrix: (number | null)[][];
+  /** The box mean's bootstrap interval (Plots summaries, when asked). */
+  box_ci?: { lo: number | null; hi: number | null; units: number };
   size_min: number;
   size_max: number;
   size_bin: number;
@@ -547,7 +623,8 @@ export async function fetchFootprintSizes(
     sigmaSizeBp: number; sigmaPosBp: number;
     minFootprints: number;
     layer?: string | null;
-    groupBy: 'all' | 'cluster';
+    /** 'pooled': every named dataset's reads in one matrix, answered under data.__pooled__[ALL_READS_KEY]. */
+    groupBy: 'all' | 'cluster' | 'pooled';
     datasetIds?: string[];
     clusterAssignments?: Record<string, Record<string, number>>;
     sampleSeed?: string;
@@ -555,6 +632,10 @@ export async function fetchFootprintSizes(
     /** Hide reads without footprint calls (false: Min footprints' "All reads, including uncalled"). */
     hideUncalled?: boolean;
     signal?: AbortSignal;
+    /** Plots' Random N reads per dataset (stable keys, this seed). */
+    readSample?: { n: number; seed: number } | null;
+    /** The box mean's seeded bootstrap (Plots summaries): each matrix answers box_ci. */
+    boxBootstrap?: { size_from: number; size_to: number; pos_from: number | null; pos_to: number | null; resamples: number; seed: number; transform?: string } | null;
   },
 ): Promise<{ success: boolean; data: Record<string, Record<number, FootprintSizeData> | { error: string }> }> {
   const params = new URLSearchParams({
@@ -583,6 +664,8 @@ export async function fetchFootprintSizes(
       layer: options.layer ?? null,
       group_by: options.groupBy,
       sample_seed: options.sampleSeed ?? null,
+      ...(options.readSample ? { sample_n: options.readSample.n, sample_seed_int: options.readSample.seed } : {}),
+      ...(options.boxBootstrap ? { box_bootstrap: options.boxBootstrap } : {}),
       ...(options.datasetIds?.length ? { dataset_ids: options.datasetIds } : {}),
       ...(options.clusterAssignments ? { cluster_assignments: options.clusterAssignments } : {}),
     }),

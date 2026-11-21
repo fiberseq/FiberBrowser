@@ -9,6 +9,7 @@ from collections import OrderedDict
 import threading
 import numpy as np
 from services.background_work import checkpoint
+from services.read_columns import IntColumn
 from contextlib import contextmanager
 from contextvars import ContextVar
 
@@ -42,6 +43,10 @@ def read_geometry_groups(read):
     """A compact read's geometry by group: its own intervals, its FIRE calls and each annotation layer's."""
     yield 'intervals', read.get('intervals') or []
     yield 'fire', read.get('fire') or []
+    if 'live_lift' in read:
+        # A live-lift row's body segments and badges (services/lift/reads.geometry_intervals).
+        from services.lift.reads import geometry_intervals
+        yield 'live_lift', geometry_intervals(read)
     for name, layer in (read.get('layers') or {}).items():
         yield name, (layer.get('intervals') or []) if isinstance(layer, dict) else []
 
@@ -56,6 +61,20 @@ def compact_read_bounds(read, viewport_start=None, viewport_end=None, include=No
     lo = hi = None
     groups = [intervals for name, intervals in read_geometry_groups(read) if include is None or include(name)]
     for group in groups:
+        if type(group) is IntColumn and group.width is not None and group.width >= 2:
+            # Read row format 2: the same extent from the column's array.
+            arr = group.array
+            starts, ends = arr[:, 0], arr[:, 1]
+            if viewport_start is not None:
+                keep = (ends > viewport_start) & (starts < viewport_end)
+                starts, ends = starts[keep], ends[keep]
+            if len(starts):
+                a, b = int(starts.min()), int(ends.max())
+                if lo is None or a < lo:
+                    lo = a
+                if hi is None or b > hi:
+                    hi = b
+            continue
         for interval in group:
             if len(interval) < 2:
                 continue
@@ -67,6 +86,17 @@ def compact_read_bounds(read, viewport_start=None, viewport_end=None, include=No
             if hi is None or end > hi:
                 hi = end
     return None if lo is None else (lo, hi)
+
+
+def _positive_spans(group):
+    """``(start, end)`` of a group's non-empty intervals, sorted."""
+    if type(group) is IntColumn and group.width is not None and group.width >= 2:
+        arr = group.array
+        keep = arr[:, 1] > arr[:, 0]
+        starts, ends = arr[keep, 0], arr[keep, 1]
+        order = np.lexsort((ends, starts))
+        return list(zip(starts[order].tolist(), ends[order].tolist()))
+    return sorted((int(iv[0]), int(iv[1])) for iv in group if len(iv) >= 2 and iv[1] > iv[0])
 
 
 def _merge_sorted(intervals):
@@ -117,7 +147,8 @@ class PackedReads(Sequence):
         # decompress the entire neighborhood to discover its overlapping rows.
         self._display_index = ReadDisplayIndex(reads) if display_index else None
         self._bounds = self._display_index.bounds if display_index else _read_bounds_array(reads)
-        self._read_ids = None if display_index else tuple(str(r.get("id", "")) for r in reads)
+        self._read_ids = None if display_index else tuple(str(r.get("analysis_id") or r.get("id", "")) for r in reads)
+        self._qnames = None if display_index else tuple(str(r.get("id", "")) for r in reads)
         blocks = []
         for i in range(0, len(reads), self.block_size):
             checkpoint()
@@ -130,13 +161,19 @@ class PackedReads(Sequence):
         self._selected = ByteCache(self._selection_budget)
         self.retained_bytes = sum(_block_bytes(block) for block in self._blocks) + self._bounds.nbytes + 256
         from services.byte_cache import retained_size
+        # A decoded block's retention, from at most five evenly spaced blocks:
+        # each estimate already samples 64 rows, and walking every block cost
+        # as much as encoding them.
+        block_starts = range(0, len(reads), self.block_size)
+        if len(block_starts) > 5:
+            block_starts = sorted({block_starts[k * (len(block_starts) - 1) // 4] for k in range(5)})
         self.retained_bytes += max((retained_size(reads[i:i + self.block_size])
-                                   for i in range(0, len(reads), self.block_size)), default=0)
+                                   for i in block_starts), default=0)
         if self._display_index is not None:
             self.retained_bytes += self._display_index.retained_bytes
-        self.retained_bytes += self._selection_budget + retained_size(self._read_ids)
+        self.retained_bytes += self._selection_budget + retained_size((self._read_ids, self._qnames))
         # Sampled loads also carry the extents of unparsed alignments.
-        for name in ('sample_level', 'skipped_starts', 'skipped_ends', 'kept_starts', 'kept_ends'):
+        for name in ('sample_level', 'sampling_estimated', 'skipped_starts', 'skipped_ends', 'kept_starts', 'kept_ends'):
             if hasattr(reads, name):
                 value = getattr(reads, name)
                 setattr(self, name, value)
@@ -199,20 +236,30 @@ class PackedReads(Sequence):
     def read_ids(self):
         index = getattr(self, '_display_index', None)
         if index is not None:
-            return (str(row.get('id', '')) for row in index.metadata)
+            return (str(row.get('analysis_id') or row.get('id', '')) for row in index.metadata)
         ids = getattr(self, '_read_ids', None)
         # Legacy in-process objects without metadata still remain readable.
-        return iter(ids) if ids is not None else (str(r.get('id', '')) for r in self)
+        return iter(ids) if ids is not None else (str(r.get('analysis_id') or r.get('id', '')) for r in self)
 
     def selected(self, ids, *, aliases=False):
         """Expand selected frames only, keeping every physical duplicate in order."""
-        from services.read_selection import read_matches_id_filter
+        from services.read_selection import read_matches_id_filter, read_id_keys
         wanted = set(ids)
+        index = getattr(self, '_display_index', None)
+        qnames = getattr(self, '_qnames', None)
+        if index is not None:
+            identities = (read_id_keys(row) for row in index.metadata)
+        elif qnames is not None:
+            from services.lift.cohort import record_key
+            identities = ({cohort, name} | ({rk} if (rk := record_key(cohort)) else set()) for cohort, name in zip(self.read_ids(), qnames))
+        else:
+            # Older in-process objects have only one indexed identity.
+            identities = (read_id_keys(row) for row in self)
         indices = []
-        for i, name in enumerate(self.read_ids()):
+        for i, keys in enumerate(identities):
             if not i & 255:
                 checkpoint()
-            if read_matches_id_filter(name, wanted) if aliases else name in wanted:
+            if any(read_matches_id_filter(key, wanted) for key in keys) if aliases else bool(keys & wanted):
                 indices.append(i)
         return self.take(indices).values()
 
@@ -313,7 +360,7 @@ class ReadDisplayIndex:
                 checkpoint()
             intervals = []
             for name, group in read_geometry_groups(read):
-                own = sorted((int(iv[0]), int(iv[1])) for iv in group if len(iv) >= 2 and iv[1] > iv[0])
+                own = _positive_spans(group)
                 if not own:
                     continue
                 gid = group_names.setdefault(name, len(group_names))
@@ -323,7 +370,9 @@ class ReadDisplayIndex:
             segments.extend((index, start, end) for start, end in merged)
             bounds.append((merged[0][0], merged[-1][1]) if merged else empty)
             metadata.append({key: read[key] for key in
-                ('id', 'reference_start', 'reference_end', 'alignment_spans', 'sv') if key in read})
+                ('id', 'analysis_id', 'live_lift', 'reference_start', 'reference_end', 'alignment_spans', 'sv',
+                 'aligned_blocks', 'sv_segments', 'sequence_span', 'sv_alignments', 'supplementary', 'meta',
+                 'source_id') if key in read})
         self.segments = np.asarray(segments, dtype=np.int64).reshape(-1, 3)
         # The same geometry per group (merged within it), for a request showing only some (see overlapping).
         self.group_segments = np.asarray(group_segments, dtype=np.int64).reshape(-1, 4)
@@ -413,6 +462,7 @@ class PackedReadBuilder:
         self.expanded_reserve = 0
         self.bounds = []
         self.read_ids = []
+        self.qnames = []
 
     def append(self, read):
         self.pending.append(read)
@@ -425,7 +475,8 @@ class PackedReadBuilder:
 
     def flush(self):
         if self.pending:
-            self.read_ids.extend(str(r.get("id", "")) for r in self.pending)
+            self.read_ids.extend(str(r.get("analysis_id") or r.get("id", "")) for r in self.pending)
+            self.qnames.extend(str(r.get("id", "")) for r in self.pending)
             display = packed_display.get()
             if display:
                 # Whole-file blocks already arrive in physical record order.
@@ -453,9 +504,11 @@ class PackedReadBuilder:
         bounds = np.concatenate(self.bounds) if self.bounds else np.empty((0, 2), dtype=np.int64)
         from services.byte_cache import retained_size
         ids = tuple(self.read_ids)
+        qnames = tuple(self.qnames)
         result.__setstate__({'_blocks': tuple(self.blocks), '_length': self.count, '_read_ids': ids,
+                            '_qnames': qnames,
                             '_bounds': bounds,
-                            'retained_bytes': sum(_block_bytes(b) for b in self.blocks) + bounds.nbytes + retained_size(ids) + self.expanded_reserve + 256})
+                            'retained_bytes': sum(_block_bytes(b) for b in self.blocks) + bounds.nbytes + retained_size((ids, qnames)) + self.expanded_reserve + 256})
         return result
 
 
@@ -464,7 +517,7 @@ def select_read_ids(reads, ids, *, aliases=False):
         return reads
     if isinstance(reads, PackedReads):
         return reads.selected(ids, aliases=aliases)
-    from services.read_selection import read_matches_id_filter
+    from services.read_selection import read_matches_id_filter, read_id_keys
     wanted = set(ids)
-    return (r for r in reads if (read_matches_id_filter(str(r.get('id', '')), wanted)
-                                if aliases else r.get('id') in wanted))
+    return (r for r in reads if (read_matches_id_filter(r, wanted)
+                                if aliases else bool(read_id_keys(r) & wanted)))

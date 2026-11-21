@@ -8,7 +8,7 @@ Which FiberHMM a process runs (``fiberhmm_selection``):
   ``~/.fiberhmm/browser_settings.json`` does not apply to them.
 - **Source runs and pip installs** (``python browser.py``, ``fiberbrowser``): ``FIBERHMM_SOURCE_DIR`` >
   ``fiberhmm_source_dir`` in ``~/.fiberhmm/browser_settings.json`` > the ``fiberhmm`` installed in their Python
-  (``pip install "fiberhmm[consensus]>=3.0.3,<4"``).
+  (``pip install "fiberhmm[consensus]>=3.2.0,<4"``).
 
 A source tree is put first on ``sys.path`` so an older installed package never shadows it.
 
@@ -40,17 +40,45 @@ ACTIVE_CHOICE_ENV = "FIBERBROWSER_ACTIVE_FIBERHMM"
 
 
 MIN_FIBERHMM_MAJOR = 3
-FIBERHMM_REQUIREMENT = "fiberhmm[consensus]>=3.0.3,<4"
+# FiberHMM 3.2.0 is the first release with fiberhmm.scan, fiberhmm.nuc, fiberhmm.assoc, fiberhmm.io.scan_ma and
+# fiberhmm.io.graph_lift; the feature checks below still refuse a FiberHMM without them.
+FIBERHMM_REQUIREMENT = "fiberhmm[consensus]>=3.2.0,<4"
+# The supported range as versions, derived from the requirement above (compatibility checks and messages).
+MIN_FIBERHMM_VERSION = re.search(r">=\s*([0-9][0-9.]*)", FIBERHMM_REQUIREMENT).group(1)
+MAX_FIBERHMM_MAJOR = int(re.search(r"<\s*([0-9]+)", FIBERHMM_REQUIREMENT).group(1))
 # What every build needs. Plugin packs add theirs in their manifest (plugins/packs.py, ARCHITECTURE.md):
 #   "fiberhmm": {"features": [{"label": "...", "module": "fiberhmm.x.y",
 #                              "names": ["function", ...],                       (optional: defined in that module)
 #                              "schema": {"module": "fiberhmm.x.y.z", "name": "SCHEMA", "min": "prefix.v1"}}],
 #                "min_version": "3.0"}                                             (optional)
 CORE_REQUIREMENTS = {
-    "min_version": "3.0",
+    "min_version": "3.2",
     "features": [
         {"label": "FiberHMM 3.0 core (footprint classes)", "module": "fiberhmm.inference.consensus.workflow"},
         {"label": "FiberHMM 3.0 core (strand rescue)", "module": "fiberhmm.inference.strand_rescue"},
+        # Scans, the feature hub, the nucleosome panel, co-occurrence and graph mode / live lift import these
+        # FiberHMM modules (first released after FiberHMM 3.1.0). Each entry names functions FiberBrowser
+        # imports from that module; no entry's module is a parent package of another's.
+        {"label": "fiberhmm.scan (scans and the feature hub)", "module": "fiberhmm.scan.runner",
+         "names": ["resolve_modules", "base_key"]},
+        {"label": "fiberhmm.scan (scan reads)", "module": "fiberhmm.scan.reads",
+         "names": ["iter_records", "resolve_read_policy", "passes", "record_ref"]},
+        {"label": "fiberhmm.scan (scan directories)", "module": "fiberhmm.scan.reader", "names": ["ScanDir"]},
+        {"label": "fiberhmm.scan (scan units)", "module": "fiberhmm.scan.units", "names": ["plan"]},
+        {"label": "fiberhmm.nuc (nucleosome records)", "module": "fiberhmm.nuc.records",
+         "names": ["decode_record", "DecodeContext"]},
+        {"label": "fiberhmm.nuc (nucleosome regularity)", "module": "fiberhmm.nuc.regularity",
+         "names": ["decode_score", "sliding_regularity", "tile_reference", "RegularityParams"]},
+        {"label": "fiberhmm.nuc (nucleosome BAM groups)", "module": "fiberhmm.nuc.tags",
+         "names": ["read_nuc_groups", "encode_nucmol"]},
+        {"label": "fiberhmm.assoc (co-occurrence)", "module": "fiberhmm.assoc.cooccur",
+         "names": ["cooccurrence", "MoleculeTable", "FeatureStates"]},
+        {"label": "fiberhmm.assoc (association statistics)", "module": "fiberhmm.assoc.nucleosome",
+         "names": ["condition_stats", "random_backgrounds"]},
+        {"label": "fiberhmm.io.scan_ma (scan BAM group contracts)", "module": "fiberhmm.io.scan_ma",
+         "names": ["scan_contracts"]},
+        {"label": "fiberhmm.io.graph_lift (graph mode and live lift)", "module": "fiberhmm.io.graph_lift",
+         "names": ["lift_pg_record", "repair_record", "header_lift_state", "RepairStats"]},
     ],
 }
 BROWSER_DIR = Path(__file__).resolve().parent.parent
@@ -256,6 +284,7 @@ def fiberhmm_selection() -> dict:
     from services.user_settings import settings_file_fiberhmm_source_dir
     packaged = is_packaged()
     default_kind = "bundled" if packaged else "installed"
+    overlay_reason = "invalid overlay setting"
     env = os.environ.get("FIBERHMM_SOURCE_DIR") or ""
     if env:
         requested = ("env", env)
@@ -263,11 +292,13 @@ def fiberhmm_selection() -> dict:
         source, custom, overlay = _app_choice()
         requested = ("app", custom) if source == "custom" and custom else ("bundled", "")
         if source == "updated" and overlay:
-            from services.fiberhmm_update import overlay_site
+            from services.fiberhmm_update import minimum_version, overlay_site, supported
             try:
                 requested = ("updated", str(overlay_site(overlay)))
             except ValueError:
                 requested = ("updated", "")
+                if not supported(overlay):
+                    overlay_reason = f"this app needs FiberHMM {minimum_version()} or newer"
     else:
         from_file = settings_file_fiberhmm_source_dir()
         requested = ("settings", from_file) if from_file else ("installed", "")
@@ -282,7 +313,7 @@ def fiberhmm_selection() -> dict:
         overlay = _app_choice()[2]
         key = (raw, overlay, str(BROWSER_DIR))
         if key not in _OVERLAY_CHECKS:
-            _OVERLAY_CHECKS[key] = check_overlay(Path(raw), overlay) if raw else "invalid overlay setting"
+            _OVERLAY_CHECKS[key] = check_overlay(Path(raw), overlay) if raw else overlay_reason
         error = _OVERLAY_CHECKS[key]
         if error:
             notices.append(f"Updated FiberHMM {overlay} could not load ({error}); using {default_label}.")
@@ -345,7 +376,7 @@ def fiberhmm_install_help(source: Optional[str] = None) -> str:
     python = shlex.quote(sys.executable)
     command = f"{python} -m pip install --upgrade {shlex.quote(FIBERHMM_REQUIREMENT)}"
     text = (
-        f"Install a compatible FiberHMM ({MIN_FIBERHMM_MAJOR}.x) with its consensus dependencies in the same Python "
+        f"Install a compatible FiberHMM (>={MIN_FIBERHMM_VERSION},<{MAX_FIBERHMM_MAJOR}) with its consensus dependencies in the same Python "
         f"environment as FiberBrowser, then restart the Browser. Command: {command}."
     )
     if source:
@@ -356,11 +387,19 @@ def fiberhmm_install_help(source: Optional[str] = None) -> str:
     return text
 
 
-def _major(version: str) -> Optional[int]:
-    try:
-        return int(str(version).split(".")[0])
-    except (TypeError, ValueError):
+def _release(version: str) -> Optional[tuple]:
+    """The numeric release of ``version`` (3.2.0 for "3.2.0.dev1+g..."), padded to three parts; None if unparsable."""
+    match = re.match(r"\s*v?([0-9]+(?:\.[0-9]+)*)", str(version or ""))
+    if not match:
         return None
+    parts = tuple(int(p) for p in match.group(1).split("."))
+    return parts + (0,) * (3 - len(parts))
+
+
+def fiberhmm_version_supported(version: str) -> bool:
+    """Is ``version`` inside FIBERHMM_REQUIREMENT's range (>= MIN_FIBERHMM_VERSION, < MAX_FIBERHMM_MAJOR)?"""
+    release = _release(version)
+    return release is not None and _release(MIN_FIBERHMM_VERSION) <= release and release[0] < MAX_FIBERHMM_MAJOR
 
 
 def describe_fiberhmm() -> dict:
@@ -372,10 +411,9 @@ def describe_fiberhmm() -> dict:
         return {"available": False, "version": None, "path": None, "compatible": False,
                 "error": f"{type(error).__name__}: {error}"}
     version = str(getattr(fiberhmm, "__version__", "") or "unknown")
-    major = _major(version)
     path = str(Path(getattr(fiberhmm, "__file__", "") or "").parent) or None
     return {"available": True, "version": version, "path": path,
-            "compatible": major is not None and major >= MIN_FIBERHMM_MAJOR, "error": None}
+            "compatible": fiberhmm_version_supported(version), "error": None}
 
 
 def fiberhmm_version() -> Optional[str]:
@@ -391,8 +429,8 @@ def log_fiberhmm_runtime(printer=print) -> dict:
         printer(f"  FiberHMM: not installed ({info['error']}). Browsing works; footprint classes, "
                 f"chemistry detection and BAM export need it. {fiberhmm_install_help()}")
     elif not info["compatible"]:
-        printer(f"  WARNING: FiberHMM {info['version']} at {info['path']} is older than "
-                f"{MIN_FIBERHMM_MAJOR}.0; footprint classes may fail or disagree with this Browser. "
+        printer(f"  WARNING: FiberHMM {info['version']} at {info['path']} is outside the supported range "
+                f"(>={MIN_FIBERHMM_VERSION},<{MAX_FIBERHMM_MAJOR}); footprint classes may fail or disagree with this Browser. "
                 f"{fiberhmm_install_help()}")
     else:
         printer(f"  FiberHMM: {info['version']} ({info['path']})")

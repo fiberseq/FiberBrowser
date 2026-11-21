@@ -11,6 +11,12 @@ vi.mock('../api/reference', () => ({
   loadFasta: vi.fn(async (path: string) => ({ success: true, path })),
 }));
 vi.mock('../api/status', () => ({ getStatus: vi.fn(async () => ({})) }));
+vi.mock('../api/pipeline', () => ({ markJobOpened: vi.fn(async () => ({ claimed: true, opened_at: 1, reason: null })) }));
+vi.mock('../api/genomeCheck', () => ({ getGenomeCheck: vi.fn(async () => ({ datasets: [] })) }));
+vi.mock('../stores/panelGenomeStore', () => {
+  const attach = vi.fn(async () => ({ success: true, genome: null }));
+  return { usePanelGenomeStore: { getState: () => ({ attach }) } };
+});
 vi.mock('./referenceNavigation', () => ({ showLoadedReference: vi.fn(async () => undefined) }));
 vi.mock('./plasmidLoader', () => ({
   openPlasmidDatasetFiles: vi.fn(async () => ({ success: true, links: [], problems: [], datasets: [] })),
@@ -19,10 +25,13 @@ vi.mock('./plasmidLoader', () => ({
 
 import type { PipelineJob } from '../api/pipeline';
 import { addDataset } from '../api/datasets';
+import { getGenomeCheck } from '../api/genomeCheck';
+import { markJobOpened } from '../api/pipeline';
 import { loadFasta, loadGenome } from '../api/reference';
 import { useBrowserStore } from '../stores/browserStore';
+import { usePanelGenomeStore } from '../stores/panelGenomeStore';
 import { openPlasmidDatasetFiles } from './plasmidLoader';
-import { openJobResult, openedJobs, parseRegion } from './pipelineResults';
+import { autoOpenCandidate, openJobResult, pageOpenerId, parseRegion } from './pipelineResults';
 
 function job(changes: Partial<PipelineJob> = {}): PipelineJob {
   return {
@@ -42,7 +51,7 @@ describe('opening a finished run', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.localStorage.clear();
-    useBrowserStore.setState({ datasets: [], currentGenome: null, fastaPath: null } as any);
+    useBrowserStore.setState({ datasets: [], currentGenome: null, fastaPath: null, hasFasta: false } as any);
   });
 
   it('parses the region', () => {
@@ -64,7 +73,8 @@ describe('opening a finished run', () => {
     const state = useBrowserStore.getState();
     expect(state.datasets.map(d => d.path)).toEqual(['/o/ind.fiberhmm.bam']);
     expect([state.chrom, state.start, state.end]).toEqual(['chr3L', 15038000, 15052000]);  // one-based region, zero-based viewport
-    expect(openedJobs().has(job().id)).toBe(true);
+    // Open in browser records the opening on the server (no page opens it by itself afterwards).
+    expect(markJobOpened).toHaveBeenCalledWith(job().id);
     // Opening again later: already loaded, nothing added.
     await openJobResult(job());
     expect(addDataset).toHaveBeenCalledTimes(1);
@@ -78,5 +88,79 @@ describe('opening a finished run', () => {
     }));
     expect(openPlasmidDatasetFiles).toHaveBeenCalledWith('/m/pX.dna', ['/o/p.bam'], '/o/pX.fa');
     expect(addDataset).not.toHaveBeenCalled();
+  });
+
+  it('never replaces an open genome: a result on another genome opens in its own panel with that genome', async () => {
+    useBrowserStore.setState({ currentGenome: 'hg38', hasFasta: true, fastaPath: null, chrom: 'chr1', start: 100, end: 200 } as any);
+    const result = await openJobResult(job(), { claimed: true });
+    expect(result.success).toBe(true);
+    expect(result.ownPanel).toBe(true);
+    expect(loadGenome).not.toHaveBeenCalled();
+    expect(loadFasta).not.toHaveBeenCalled();
+    expect(markJobOpened).not.toHaveBeenCalled();  // claimed already (the automatic opening)
+    const attach = usePanelGenomeStore.getState().attach;
+    expect(attach).toHaveBeenCalledWith({ dataset_ids: ['ds-undefined'], genome_id: 'dm6' }, { perPanel: true });
+    const state = useBrowserStore.getState();
+    expect(state.currentGenome).toBe('hg38');  // the open genome stays, and so does the main view
+    expect([state.chrom, state.start, state.end]).toEqual(['chr1', 100, 200]);
+  });
+
+  it('a FASTA run on another reference gets that FASTA in its own panel; the open FASTA stays', async () => {
+    useBrowserStore.setState({ currentGenome: null, hasFasta: true, fastaPath: '/ref/other.fa' } as any);
+    vi.mocked(getGenomeCheck).mockResolvedValueOnce({ datasets: [{ dataset_id: 'ds-undefined', status: 'different_assembly' }] } as any);
+    const fastaJob = job({ reference: { path: '/o/genome.fa', kind: 'fasta', label: 'genome.fa' },
+      outputs: { called_bam: '/o/s.bam', reference_fasta: '/o/genome.fa', plasmid_map: null,
+        open: { fasta: '/o/genome.fa', datasets: ['/o/s.bam'], plasmid_maps: [], region: null } } });
+    const result = await openJobResult(fastaJob);
+    expect(result.ownPanel).toBe(true);
+    expect(loadFasta).not.toHaveBeenCalled();
+    expect(usePanelGenomeStore.getState().attach).toHaveBeenCalledWith({ dataset_ids: ['ds-undefined'], fasta_path: '/o/genome.fa' }, { perPanel: true });
+    expect(useBrowserStore.getState().fastaPath).toBe('/ref/other.fa');
+  });
+
+  it('a result that fits the open genome (e.g. the run copy of the same FASTA) stays on it and goes to the region', async () => {
+    useBrowserStore.setState({ currentGenome: 'dm6', hasFasta: true, fastaPath: '/ref/dm6.fa' } as any);
+    vi.mocked(getGenomeCheck).mockResolvedValueOnce({ datasets: [{ dataset_id: 'ds-undefined', status: 'match' }] } as any);
+    const copy = job({ reference: { path: '/ref/dm6.fa', kind: 'fasta', label: 'dm6.fa' },
+      outputs: { called_bam: '/o/s.bam', reference_fasta: '/o/dm6.fa', plasmid_map: null,
+        open: { fasta: '/o/dm6.fa', datasets: ['/o/s.bam'], plasmid_maps: [], region: 'chr2L:1001-2000' } } });
+    const result = await openJobResult(copy);
+    expect(result.success && !result.ownPanel).toBe(true);
+    expect(loadFasta).not.toHaveBeenCalled();
+    expect(usePanelGenomeStore.getState().attach).not.toHaveBeenCalled();
+    const state = useBrowserStore.getState();
+    expect([state.fastaPath, state.chrom, state.start, state.end]).toEqual(['/ref/dm6.fa', 'chr2L', 1000, 2000]);
+  });
+
+  it('the same genome open: only the BAM is added', async () => {
+    useBrowserStore.setState({ currentGenome: 'dm6', hasFasta: true } as any);
+    await openJobResult(job());
+    expect(loadGenome).not.toHaveBeenCalled();
+    expect(usePanelGenomeStore.getState().attach).not.toHaveBeenCalled();
+    expect(useBrowserStore.getState().datasets.map(d => d.path)).toEqual(['/o/ind.fiberhmm.bam']);
+  });
+});
+
+describe('automatic opening', () => {
+  beforeEach(() => { window.sessionStorage.clear(); });
+
+  it('gives each page one opener token, kept for the tab', () => {
+    const id = pageOpenerId();
+    expect(id).toMatch(/^[A-Za-z0-9_-]{8,64}$/);
+    expect(pageOpenerId()).toBe(id);
+    expect(window.sessionStorage.getItem('fiberbrowser.dafRun.opener')).toBe(id);
+  });
+
+  it('opens only a finished run this page started, that asked for it and was never opened', () => {
+    const mine = 'tab-aaaaaaaaaaaa';
+    const done = (changes: Partial<PipelineJob>) => job({ opener: mine, opened_at: null, ...changes });
+    expect(autoOpenCandidate([done({})], mine, new Set())?.id).toBe(job().id);
+    expect(autoOpenCandidate([done({ opener: 'tab-bbbbbbbbbbbb' })], mine, new Set())).toBeNull();  // another window, profile or origin
+    expect(autoOpenCandidate([done({ opener: null })], mine, new Set())).toBeNull();  // from before the server kept it
+    expect(autoOpenCandidate([done({ opened_at: 123 })], mine, new Set())).toBeNull();  // opened already, anywhere
+    expect(autoOpenCandidate([done({ auto_open: false })], mine, new Set())).toBeNull();
+    expect(autoOpenCandidate([done({ status: 'running' })], mine, new Set())).toBeNull();
+    expect(autoOpenCandidate([done({ outputs: null })], mine, new Set())).toBeNull();
+    expect(autoOpenCandidate([done({})], mine, new Set([job().id]))).toBeNull();  // asked once already
   });
 });

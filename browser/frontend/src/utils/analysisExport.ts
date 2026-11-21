@@ -1,4 +1,5 @@
 import { wilsonInterval } from './statistics';
+import { META_EXPORT_COLUMNS, metaExportValues, type MetaSite } from '../features/metaLocus/metaChrom';
 
 export function exportTimestamp(): string {
   return new Date().toISOString().replace(/[-:]/g, '').replace('T', '_').slice(0, 15);
@@ -82,11 +83,11 @@ export interface ExportProfileSeries {
 
 export function formatProfileChartTsv(
   series: ExportProfileSeries[],
-  options: { windowBp?: number; isReversed?: boolean } = {},
+  options: { windowBp?: number; isReversed?: boolean; valueLabel?: string } = {},
 ): string {
   const rows: unknown[][] = [[
     'series', 'display_index', 'source_index', 'relative_position_bp',
-    'value', 'ci_low', 'ci_high', 'n', 'color',
+    options.valueLabel ? `value (${options.valueLabel})` : 'value', 'ci_low', 'ci_high', 'n', 'color',
   ]];
   for (const entry of series) {
     const length = entry.data.length;
@@ -102,7 +103,7 @@ export function formatProfileChartTsv(
         displayIndex,
         sourceIndex,
         relativePosition,
-        entry.data[sourceIndex],
+        Number.isFinite(entry.data[sourceIndex]) ? entry.data[sourceIndex] : '',
         entry.ciLow?.[sourceIndex],
         entry.ciHigh?.[sourceIndex],
         entry.n,
@@ -214,6 +215,8 @@ interface ExportCompactRead {
   methyl_m5c?: number[];
   deam?: Array<[number, number]>;
   cigar?: Array<Record<string, unknown>>;
+  /** A meta-locus read's site (its real locus): exports add real coordinates next to the virtual ones. */
+  meta?: MetaSite;
 }
 
 /** One region's reads (a working-set request): its datasets' reads, where they are, on which reference. */
@@ -231,19 +234,27 @@ export interface WorkingSetBlock {
  * ending with its reference and chromosome.
  */
 export function formatWorkingSetReadsTsv(options: WorkingSetBlock | { blocks: WorkingSetBlock[] }): string {
+  const blocks = 'blocks' in options ? options.blocks : [options];
+  // A meta-locus's reads (any read with a site): each row also names its real locus (chrom, start, end, the site's
+  // strand, index and name) next to the virtual coordinates.
+  const meta = blocks.some(b => Object.values(b.datasets).some(d => (d.reads ?? []).some(r => r.meta?.window)));
   const rows: unknown[][] = [[
     'record_type', 'dataset_id', 'read_id', 'layer', 'record_index',
     'start_relative', 'end_relative', 'start_genomic', 'end_genomic', 'value',
     'quality_names', 'qualities', 'modification_type', 'cigar_json', 'reference', 'chrom',
+    ...(meta ? META_EXPORT_COLUMNS : []),
   ]];
-  const blocks = 'blocks' in options ? options.blocks : [options];
-  for (const block of blocks) appendWorkingSetRows(rows, block);
+  for (const block of blocks) appendWorkingSetRows(rows, block, meta);
   return formatTsv(rows);
 }
 
-function appendWorkingSetRows(out: unknown[][], options: WorkingSetBlock): void {
+function appendWorkingSetRows(out: unknown[][], options: WorkingSetBlock, meta = false): void {
   const where = [options.reference ?? '', options.chrom];
-  const rows = { push: (row: unknown[]) => out.push([...row, ...where]) };
+  let site: MetaSite | undefined;
+  // Virtual start / end of a row are its columns 7 and 8 (start_genomic, end_genomic).
+  const rows = { push: (row: unknown[]) => out.push([...row, ...where, ...(meta
+    ? (typeof row[7] === 'number' && typeof row[8] === 'number' ? metaExportValues(site, row[7] as number, row[8] as number) : META_EXPORT_COLUMNS.map(() => ''))
+    : [])]) };
   const pushMark = (datasetId: string, readId: string, type: string, position: number, index: number, value?: unknown) => {
     rows.push([
       'modification', datasetId, readId, '', index,
@@ -253,6 +264,7 @@ function appendWorkingSetRows(out: unknown[][], options: WorkingSetBlock): void 
   };
   for (const [datasetId, dataset] of Object.entries(options.datasets)) {
     for (const read of dataset.reads ?? []) {
+      site = read.meta;
       (read.intervals ?? []).forEach((interval, index) => {
         rows.push([
           'interval', datasetId, read.id, 'primary', index,

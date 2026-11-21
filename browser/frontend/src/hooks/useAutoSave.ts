@@ -9,8 +9,12 @@ import { autoSaveHasWork } from '../components/controls/CrashRecoveryBanner';
 import { closedDatasetReference } from '../stores/panelGenomeStore';
 import { getLaunchInfo, lastSessionSuperseded, launchOfferPending, useLaunchUiStore } from '../utils/launchSession';
 import { isSandboxPage } from '../utils/sandbox';
+import { isPublicMode } from '../utils/publicMode';
+import { isPublicServerPage } from '../utils/publicServerFlag';
 import { useReadActionsStore } from '../stores/readActionsStore';
 import { extensionKeys } from '../stores/storeExtensions';
+import { galleryForSave, useGalleryStore } from '../features/plots/gallery';
+import { metaLocusSessionPayload, useMetaLocusStore } from '../features/metaLocus/metaLocusStore';
 
 const AUTO_SAVE_INTERVAL_MS = 30_000; // 30 seconds (periodic background tick)
 const CHANGE_DEBOUNCE_MS = 1500;       // commit shortly after catalog/cart changes
@@ -33,6 +37,7 @@ export const AUTO_SAVE_WATCHED_KEYS = [
   'clusterPatterns',
   'clusterCentroids',
   'clusterPeakWidths',
+  'clusterMetricCohort',
   'clusterPeakRegions',
   'clusterWindowPeaks', 'clusterMatchedRun',
   'clusterTreeNodes',
@@ -120,8 +125,15 @@ async function performAutoSave(required: boolean): Promise<void> {
   // The Projection map, so "reopen last session" brings it back with its clustering (not in undo snapshots: too big).
   const projection = projectionForSave(state);
   if (projection) serialized.readProjection = projection;
+  // The Plots Gallery (kept plots and their states), as a saved session carries it.
+  serialized.plotsGallery = galleryForSave();
+  // The open meta-locus (its pool's spec and working set): the pool is process-local, so a recovery after a restart
+  // reopens it from this, as a saved session does.
+  const metaLocus = metaLocusSessionPayload();
+  if (metaLocus) serialized.metaLocus = metaLocus;
   // Genomes declared for custom FASTAs live on the server: a restarted server has lost them (Reopen puts them back).
-  const declarations = await getGenomeDeclarations().catch(error => {
+  // Host-only: a public server refuses it (its visitors declare nothing), so a public page never asks.
+  const declarations = isPublicMode() || isPublicServerPage() ? null : await getGenomeDeclarations().catch(error => {
     if (required) throw new Error(`Could not save reference declarations: ${String(error)}`);
     return null;
   });
@@ -210,11 +222,27 @@ export function useAutoSave() {
       changeTimerRef.current = setTimeout(commit, CHANGE_DEBOUNCE_MS);
     });
 
+    // A plot kept, renamed or removed in the Plots Gallery is saved too.
+    const unsubGallery = useGalleryStore.subscribe((state, prev) => {
+      if (state === prev) return;
+      if (changeTimerRef.current) clearTimeout(changeTimerRef.current);
+      changeTimerRef.current = setTimeout(commit, CHANGE_DEBOUNCE_MS);
+    });
+
+    // Opening, closing or resizing the meta-locus working set is saved too.
+    const unsubMeta = useMetaLocusStore.subscribe((state, prev) => {
+      if (state.spec === prev.spec && state.seed === prev.seed && state.count === prev.count && state.view === prev.view) return;
+      if (changeTimerRef.current) clearTimeout(changeTimerRef.current);
+      changeTimerRef.current = setTimeout(commit, CHANGE_DEBOUNCE_MS);
+    });
+
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
       if (changeTimerRef.current) clearTimeout(changeTimerRef.current);
       unsub();
       unsubExcluded();
+      unsubGallery();
+      unsubMeta();
     };
   }, []);
 }

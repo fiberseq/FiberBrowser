@@ -1,3 +1,4 @@
+import { LinearWheelSurface } from './LinearWheelSurface';
 import { useMemo } from 'react';
 import { usePanelDisplayStore as useBrowserStore } from '../../hooks/usePanelDisplayStore';
 import { useDafcStore, linkedViewportFilter } from '../../stores/dafcStore';
@@ -201,21 +202,15 @@ export function TrackContainerSplitView({ containerRef, dimensions }: SplitViewP
     const totalReadTrackHeight = linkedPanelHeight - headerHeight - axisHeight - geneHeight - (showSequence ? SEQUENCE_HEIGHT : 0);
     const perDatasetHeight = Math.floor(totalReadTrackHeight / numDatasets);
 
-    const handleWheel = (e: React.WheelEvent) => {
-      e.preventDefault();
-      const factor = e.deltaY > 0 ? 1.3 : 0.7;
-      handleZoom(regionStart, regionEnd, factor, bounds, setViewport);
-    };
-
     return (
-      <div
+      <LinearWheelSurface view={{ chrom: regionChrom, start: regionStart, end: regionEnd }} width={panelWidth}
+        onViewportChange={(start, end) => { const v = clampToBounds(start, end, bounds); setViewport(v.start, v.end); }}
         className="flex flex-col"
         style={{
           width: panelWidth,
           height: linkedPanelHeight,
           borderRight: isXPanel ? '2px solid #d1d5db' : 'none',
         }}
-        onWheel={handleWheel}
       >
         {/* Panel header with zoom controls */}
         <div
@@ -395,7 +390,7 @@ export function TrackContainerSplitView({ containerRef, dimensions }: SplitViewP
             overrideEnd={regionEnd}
           />
         </div>
-      </div>
+      </LinearWheelSurface>
     );
   };
 

@@ -1,0 +1,285 @@
+{
+  "bindings": [
+    {
+      "key": "target",
+      "path": {
+        "sample": "reference",
+        "haplotype": "0",
+        "contig": "chrA"
+      },
+      "assembly": "reference",
+      "reference": "reference",
+      "size": 1000,
+      "size_inferred": false,
+      "fragments": [
+        {
+          "origin": 0,
+          "end": 1000,
+          "indexed": true
+        }
+      ],
+      "uncovered": []
+    },
+    {
+      "key": "source",
+      "path": {
+        "sample": "strain",
+        "haplotype": "0",
+        "contig": "chrA"
+      },
+      "assembly": "strain",
+      "reference": "strain",
+      "size": 1000,
+      "size_inferred": false,
+      "fragments": [
+        {
+          "origin": 0,
+          "end": 1000,
+          "indexed": true
+        }
+      ],
+      "uncovered": []
+    }
+  ],
+  "topology": {
+    "target": "target",
+    "interval": {
+      "start": 0,
+      "end": 60
+    },
+    "complete": true,
+    "summaries": [],
+    "direct_matches": [
+      {
+        "source_binding": "source",
+        "source_occurrence": "s-left",
+        "target_occurrence": "t-left",
+        "reverse": false,
+        "provenance": "direct"
+      },
+      {
+        "source_binding": "source",
+        "source_occurrence": "s-right",
+        "target_occurrence": "t-right",
+        "reverse": false,
+        "provenance": "direct"
+      }
+    ],
+    "nodes": [
+      {
+        "id": "left",
+        "length": 30,
+        "selected": true,
+        "context": false
+      },
+      {
+        "id": "repeat",
+        "length": 40,
+        "selected": true,
+        "context": false
+      },
+      {
+        "id": "right",
+        "length": 30,
+        "selected": true,
+        "context": false
+      }
+    ],
+    "edges": [],
+    "paths": [
+      {
+        "binding": "target",
+        "windows": [
+          {
+            "start": 0,
+            "end": 60
+          }
+        ],
+        "coverage": [
+          {
+            "span": {
+              "start": 0,
+              "end": 60
+            },
+            "kind": "covered"
+          }
+        ],
+        "complete": true,
+        "occurrences": [
+          {
+            "id": "t-left",
+            "node": "left",
+            "fragment": "fragment",
+            "handle": "left",
+            "reverse": false,
+            "path_span": {
+              "start": 0,
+              "end": 30
+            },
+            "clip": {
+              "start": 0,
+              "end": 30
+            }
+          },
+          {
+            "id": "t-right",
+            "node": "right",
+            "fragment": "fragment",
+            "handle": "right",
+            "reverse": false,
+            "path_span": {
+              "start": 30,
+              "end": 60
+            },
+            "clip": {
+              "start": 0,
+              "end": 30
+            }
+          }
+        ],
+        "plan": {
+          "windows": [],
+          "summaries": [],
+          "candidates": [
+            {
+              "target": {
+                "start": 0,
+                "end": 60
+              },
+              "source": {
+                "start": 0,
+                "end": 60
+              },
+              "owned": true,
+              "kind": "map_block",
+              "correspondence": "map_anchor",
+              "chain_ids": [
+                "chain"
+              ],
+              "strands": [
+                "+"
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "binding": "source",
+        "windows": [
+          {
+            "start": 0,
+            "end": 140
+          }
+        ],
+        "coverage": [
+          {
+            "span": {
+              "start": 0,
+              "end": 140
+            },
+            "kind": "covered"
+          }
+        ],
+        "complete": true,
+        "occurrences": [
+          {
+            "id": "s-left",
+            "node": "left",
+            "fragment": "fragment",
+            "handle": "left",
+            "reverse": false,
+            "path_span": {
+              "start": 0,
+              "end": 30
+            },
+            "clip": {
+              "start": 0,
+              "end": 30
+            }
+          },
+          {
+            "id": "s-copy-a",
+            "node": "repeat",
+            "fragment": "fragment",
+            "handle": "repeat",
+            "reverse": false,
+            "path_span": {
+              "start": 30,
+              "end": 70
+            },
+            "clip": {
+              "start": 0,
+              "end": 40
+            }
+          },
+          {
+            "id": "s-copy-b",
+            "node": "repeat",
+            "fragment": "fragment",
+            "handle": "repeat",
+            "reverse": true,
+            "path_span": {
+              "start": 70,
+              "end": 110
+            },
+            "clip": {
+              "start": 0,
+              "end": 40
+            }
+          },
+          {
+            "id": "s-right",
+            "node": "right",
+            "fragment": "fragment",
+            "handle": "right",
+            "reverse": false,
+            "path_span": {
+              "start": 110,
+              "end": 140
+            },
+            "clip": {
+              "start": 0,
+              "end": 30
+            }
+          }
+        ],
+        "plan": {
+          "windows": [],
+          "summaries": [],
+          "candidates": [
+            {
+              "target": {
+                "start": 0,
+                "end": 60
+              },
+              "source": {
+                "start": 0,
+                "end": 140
+              },
+              "owned": true,
+              "kind": "map_block",
+              "correspondence": "map_anchor",
+              "chain_ids": [
+                "chain"
+              ],
+              "strands": [
+                "+"
+              ]
+            }
+          ]
+        }
+      }
+    ],
+    "correspondence_complete": true,
+    "target_queries": [],
+    "timings": {}
+  },
+  "site": {
+    "binding": "source",
+    "occurrence": "s-copy-b",
+    "node": "repeat",
+    "offset": 7
+  },
+  "expected_source_position": 102,
+  "expected_repeat_bp": 80
+}

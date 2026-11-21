@@ -429,6 +429,35 @@ def test_run_cluster_projection_endpoint_projects_assigned_reads(monkeypatch):
     assert result["sample_seed"] == "projection-seed"
 
 
+@pytest.mark.parametrize("explicit", [False, True])
+def test_a_projection_feature_mode_reads_the_same_peaks_through_another_mode(monkeypatch, explicit):
+    """The map's input features (Cluster views): every peak, stored or explicit, is read through the chosen mode;
+    without one the clustering's own modes are used (the default request is unchanged)."""
+    state = FakeClusterState()
+    state.datasets["ds1"].cluster_assignments = {"read-a": 2}
+    state.datasets["ds1"].cluster_peak_regions = [{"start": 10, "end": 20, "mode": "accessibility"},
+                                                  {"start": 22, "end": 28, "mode": "accessibility"}]
+    seen = []
+
+    def fake_extract(reads, peaks, start, step=10, subnucleosomal_threshold=90, peak_modes=None):
+        seen.append(list(peak_modes))
+        return np.array([[1.0, 2.0]], dtype=np.float32), ["ds1::read-a"], None, None
+
+    def fake_project(features, method, n_components, random_state):
+        return np.array([[0.5, -1.0]], dtype=np.float32), [1.0, 0.0], "pca"
+
+    monkeypatch.setattr(clustering_endpoint, "extract_features_from_compact", fake_extract)
+    monkeypatch.setattr(clustering_endpoint, "compute_cluster_projection", fake_project)
+    peaks = [PeakRegion(start=10, end=20, mode="accessibility"), PeakRegion(start=22, end=28, mode="accessibility")] if explicit else []
+    for mode in (None, "nuc"):
+        result = clustering_endpoint.run_cluster_projection_endpoint(
+            state=state, req=ProjectionRequest(dataset_ids=["ds1"], method="pca", peak_regions=peaks, feature_mode=mode),
+            chrom="chr2R", start=0, end=30, spanning=False)
+        assert result["n_reads"] == 1
+        assert ("feature_mode" in (result["projection_params"] or {})) == (mode is not None)
+    assert seen == [["accessibility", "accessibility"], ["nuc", "nuc"]]
+
+
 def test_a_one_component_projection_request_still_returns_a_2d_scatter():
     state = FakeClusterState()
     state.datasets["ds1"].cluster_assignments = {"read-a": 0, "read-b": 1}

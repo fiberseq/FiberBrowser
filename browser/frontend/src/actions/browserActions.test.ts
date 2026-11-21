@@ -246,6 +246,53 @@ describe('executeBrowserAction', () => {
     expect(useBrowserStore.getState().clusterOrder.ds1).toEqual([2]);
   });
 
+  // stab3: merges rank molecule metric columns against the fit's cohort (the store's), as the Clusters panel sends it.
+  it.each(['dissolve_cluster', 'auto_cull_clusters'])('%s sends the fit\'s metric cohort', async (type) => {
+    const cohort = { 'nuc.nrl': { values: [180, 190, 200, 210], counts: [1, 1, 1, 1] } };
+    const fetchMock = vi.fn(async () => okResponse({
+      results: { ds1: { assignments: { read_a: 2, read_b: 2 } } },
+      dissolved: [{ cluster: 1, count: 1, reason: 'x' }],
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    useBrowserStore.setState({
+      clusterAssignments: { ds1: { read_a: 1, read_b: 2 } },
+      clusterPeakRegions: [{ start: 1100, end: 1200, mode: 'cluster_rule:m' }],
+      clusterMetricCohort: cohort,
+    } as Partial<BrowserState>);
+    await executeBrowserAction({ type, cluster_id: 1 });
+    const body = JSON.parse(String((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body));
+    expect(body.cluster_metric_cohort).toEqual(cohort);
+  });
+
+  it('a Copilot clustering without a reassignment model replaces an earlier fit\'s metric cohort', async () => {
+    const stale = { 'nuc.nrl': { values: [100, 300], counts: [1, 1] } };
+    const fitted = { 'nuc.nrl': { values: [180, 190, 200, 210], counts: [1, 1, 1, 1] } };
+    useBrowserStore.setState({
+      clusterMethod: 'kmeans', clusterMetricCohort: stale, clusterAssignments: { ds1: { read_a: 1, read_b: 1 } },
+    } as Partial<BrowserState>);
+    useBrowserStore.getState().captureActiveClusterTreeNode({ name: 'All reads' });
+    const root = useBrowserStore.getState().activeClusterTreeNodeId!;
+    const node = () => useBrowserStore.getState().clusterTreeNodes[root] as { metricCohort?: unknown };
+    expect(node().metricCohort).toEqual(stale);
+    const replies = [
+      { results: { ds1: { assignments: { read_a: 0, read_b: 1 } } }, cluster_metric_cohort: fitted },
+      { results: { ds1: { assignments: { read_a: 1, read_b: 0 } } } },
+    ];
+    const fetchMock = vi.fn(async () => okResponse(replies.shift()));
+    vi.stubGlobal('fetch', fetchMock);
+    const call = { type: 'api_call', method: 'POST', path: '/api/cluster_all',
+      body: { method: 'kmeans', peak_regions: [{ start: 1100, end: 1200, mode: 'cluster_rule:m' }] } } as const;
+    await executeBrowserAction(call);
+    expect(String((fetchMock.mock.calls[0] as unknown as [string])[0])).toContain('/api/cluster_all');
+    expect(useBrowserStore.getState().clusterAssignments.ds1).toEqual({ read_a: 0, read_b: 1 });
+    expect(useBrowserStore.getState().clusterMetricCohort).toEqual(fitted);
+    expect(node().metricCohort).toEqual(fitted);
+    // A fit without a metric column: no cohort, so none is sent with merges (not the earlier one).
+    await executeBrowserAction(call);
+    expect(useBrowserStore.getState().clusterMetricCohort).toEqual({});
+    expect(node().metricCohort).toEqual({});
+  });
+
   it('applies sort rules with scope windows and term payloads', async () => {
     const fetchMock = vi.fn(async () => okResponse({
       results: {

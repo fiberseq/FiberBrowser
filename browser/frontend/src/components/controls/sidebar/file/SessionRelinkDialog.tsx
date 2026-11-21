@@ -11,6 +11,7 @@ const KIND_LABELS: Record<string, string> = {
   reference: 'Reference',
   annotation: 'Annotation',
   contact_map: 'Contact map',
+  'meta-locus': 'Meta-locus BED',
 };
 
 interface SessionRelinkDialogProps {

@@ -18,6 +18,10 @@ import pytest
 
 from conftest import auth_headers
 
+# These synthetic reads carry no footprint calls: the tests ask for all reads ("All reads, including uncalled").
+pytestmark = pytest.mark.usefixtures("all_reads_including_uncalled")
+
+
 ROOT = Path(__file__).resolve().parents[1]
 DEMO_BAM = ROOT / "browser" / "data" / "demo" / "napa_ddda.bam"  # hg38, reads on chr19 only
 ENDPOINTS = ("/api/reads/top_windows", "/api/reads/random_window")

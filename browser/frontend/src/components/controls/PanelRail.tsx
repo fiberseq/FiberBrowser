@@ -18,6 +18,7 @@
  * window's right edge, beside the drawer, and the reads keep their full height
  * (the strip's minimized tray would take a row under them).
  */
+import { META_HIDDEN_PANELS, isMetaChrom } from '../../features/metaLocus/metaChrom';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useShallow } from 'zustand/react/shallow';
@@ -28,6 +29,7 @@ import { usePanelLauncherStore } from '../../stores/panelLauncherStore';
 import { PreviewBadge } from '../ui/PreviewBadge';
 import { PreviewRailHint } from './PreviewRailHint';
 import { usePreviewsEnabled } from '../../utils/previewFeatures';
+import { useWorkspaceStore } from '../../features/plots/workspace';
 import { findOpenAnalysisPanel, getAnalysisPanelLabel, getGroupedAnalysisPanels } from '../../plugins/registry';
 import type { GroupedPlugins } from '../../plugins/registry';
 import { PanelIcon } from '../ui/panelIcons';
@@ -59,18 +61,21 @@ export function useLauncherGroups(): { allGroups: GroupedPlugins[]; visibleGroup
   const dafcLoaded = useDafcStore(s => s.dafcLoaded);
   // Settings → Show preview features adds or takes away the Preview panels' tiles.
   const previews = usePreviewsEnabled();
+  // The meta-locus: panels that need a real genome position are not offered (features/metaLocus).
+  const metaView = useBrowserStore(s => isMetaChrom(s.chrom));
   return useMemo(() => {
     const contactPanelOpen = panels.some(panel => panel.contentType === 'contact-map');
     // Contacts only once a contact map is loaded (as in the strip).
     const needsData = (contentType: string) => contentType === 'contact-map' && !dafcLoaded && !contactPanelOpen;
     const allGroups = getGroupedAnalysisPanels()
-      .map(g => ({ ...g, plugins: g.plugins.filter(p => !HIDDEN_PANELS.has(p.contentType) && !needsData(p.contentType)) }))
+      .map(g => ({ ...g, plugins: g.plugins.filter(p => !HIDDEN_PANELS.has(p.contentType) && !needsData(p.contentType)
+        && !(metaView && META_HIDDEN_PANELS.has(p.contentType))) }))
       .filter(g => g.plugins.length > 0);
     const visibleGroups = allGroups
       .map(g => ({ ...g, plugins: g.plugins.filter(p => !hiddenStripPanels.has(p.contentType)) }))
       .filter(g => g.plugins.length > 0);
     return { allGroups, visibleGroups };
-  }, [panels, hiddenStripPanels, dafcLoaded, previews]);
+  }, [panels, hiddenStripPanels, dafcLoaded, previews, metaView]);
 }
 
 /** The tiles in order: the groups (Analyze, View, Tools), the Library right after Tracks, then minimized datasets. */
@@ -278,7 +283,9 @@ export function PanelRail() {
   useEffect(() => {
     if (!coachSeen && (anyPanelOpen || morePanels)) dismissCoach();
   }, [coachSeen, anyPanelOpen, morePanels, dismissCoach]);
-  const showCoach = !coachSeen && !anyPanelOpen && !morePanels && !sidebarOpen && datasets.length > 0 && !isSandboxPage() && captionEl !== null;
+  // Not over a workspace (Plots, the hub): the hint is about the panels beside the reads.
+  const inWorkspace = useWorkspaceStore(st => st.view !== 'browser');
+  const showCoach = !coachSeen && !anyPanelOpen && !morePanels && !sidebarOpen && !inWorkspace && datasets.length > 0 && !isSandboxPage() && captionEl !== null;
   if (showCoach && firstDatasetPanelCount.current === null) firstDatasetPanelCount.current = datasetPanelCount;
 
   const activate = (item: Launcher) => {

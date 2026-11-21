@@ -1,3 +1,4 @@
+import { foldedInShownGraph } from '../stores/graphMembership';
 import type { AnalysisRuleScope, FirePeak, Gene, PanelConfig, PeakMode } from '../types';
 import { annotationRegionScopes, type AnnotationRegionScope } from '../components/controls/annotation-panel/annotationScopes';
 import { resolveClusterRuleRegions } from './analysisRules';
@@ -80,7 +81,8 @@ export function groupStillShown(
   for (const keys of Object.values(group.stateKeysByDataset)) {
     for (const sk of keys) {
       const panel = panels.find(p => p.contentType === 'dataset' && (p.stateKey ?? p.datasetId) === sk);
-      const region = panel?.viewportOverride ?? main;
+      // (A member folded into a shown graph is at its host's view.)
+      const region = (panel && foldedInShownGraph(panel, panels) || panel)?.viewportOverride ?? main;
       if (region.chrom !== group.chrom || region.start !== group.start || region.end !== group.end) return false;
       if ((panel?.genome || undefined) !== group.genome) return false;
     }

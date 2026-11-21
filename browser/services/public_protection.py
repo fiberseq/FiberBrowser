@@ -65,7 +65,7 @@ log = logging.getLogger("fiberbrowser.public")
 HEAVY_ROUTES: frozenset[tuple[str, str]] = frozenset({
     ("POST", "/api/scan_peaks"), ("POST", "/api/detect_peaks"),
     ("POST", "/api/cluster"), ("POST", "/api/cluster_all"), ("POST", "/api/cluster_expand"),
-    ("POST", "/api/cluster_matched_views"), ("POST", "/api/cluster_projection"),
+    ("POST", "/api/cluster_matched_views"), ("POST", "/api/cluster_projection"), ("POST", "/api/cluster_molecules"),
     ("POST", "/api/cluster/vplot"), ("POST", "/api/assign_to_clusters"),
     ("POST", "/api/dissolve_cluster"), ("POST", "/api/auto_cull_clusters"),
     ("POST", "/api/filter"), ("POST", "/api/filter_by_analysis_rule"),

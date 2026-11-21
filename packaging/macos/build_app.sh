@@ -21,7 +21,7 @@
 #                       python3.11, python3.10, python3). Its minimum macOS carries into the app.
 #   FB_FIBERBROWSER     what to install as FiberBrowser (default: this checkout)
 #   FB_FIBERHMM         FiberHMM to bundle: a pip requirement or a source folder
-#                       (default: fiberhmm[consensus]>=3.0.3,<4 from PyPI)
+#                       (default: fiberhmm[consensus]>=3.2.0,<4 from PyPI)
 #   FB_MINIMAP2         an existing arm64 minimap2 to bundle (default: build v$MINIMAP2_VERSION
 #                       from source; MIT licence, copied into the app)
 #   FB_BLAST_TARBALL    a local copy of NCBI's ncbi-blast-<version>+-aarch64-macosx.tar.gz (offline
@@ -42,6 +42,8 @@
 #   FB_MACOS_TARGET     the app's minimum macOS (default: 14.0); the build stops if a bundled
 #                       binary needs a newer one, unless FB_ALLOW_NEWER_MACOS=1
 #   FB_SKIP_DMG=1       stop after the app
+#   FB_ALLOW_STALE_DIST=1  build although the tracked browser/frontend/dist is older than the frontend source
+#                       (packaging/check_frontend_dist.py; a test build only, never a release)
 #   FB_BUILD_NUMBER     the build written into the app (default: the source commit's UTC time, YYYYMMDD.HHMM, the
 #                       same as the WSL distribution's of that commit): with the version and
 #                       the flavour's update channel in Contents/Resources/fiberbrowser-build.json
@@ -49,6 +51,12 @@
 #   FB_UPDATE_URL       an update manifest address baked into the app (https://, file:// or a path); default: the
 #                       channel's GitHub releases (docs/updates.md)
 #   FB_UPDATE_REPO      the channel's GitHub repository (owner/name) instead of the flavour's default
+#   FB_ALLOW_PRIVATE_PATHS 1: skip the check that no bundled binary carries the builder's home path
+#   FB_REAL_HOME        the builder's real home when HOME points elsewhere (also searched for)
+#   FB_PRIVATE_PATHS_ALLOW  file names accepted as exceptions to that check (space-separated)
+#   FB_GRAPH_NATIVE_WHEEL  a fiberbrowser-graph-native wheel (packaging/graph-native/build_wheel.py) to install in the
+#                       build venv; FiberBrowser.spec then bundles its graph helper (graph view). FB_GRAPH_HELPER names
+#                       a helper executable directly instead. FB_REQUIRE_GRAPH_HELPER=1: fail the build without one
 set -euo pipefail
 
 MINIMAP2_VERSION=2.31
@@ -134,13 +142,18 @@ python_ok "$VENV/bin/python" || die "the build venv $VENV was made with a Python
 pip_install() { env PATH="$VENV/bin:$CLEAN_PATH" "$VENV/bin/python" -m pip install --disable-pip-version-check "$@"; }
 say "Installing FiberBrowser, FiberHMM, pywebview and PyInstaller into $VENV"
 pip_install -q --upgrade pip
-FIBERHMM_SPEC="${FB_FIBERHMM:-fiberhmm[consensus]>=3.0.3,<4}"
+FIBERHMM_SPEC="${FB_FIBERHMM:-fiberhmm[consensus]>=3.2.0,<4}"
 if [ -d "$FIBERHMM_SPEC" ]; then
   # A source folder: always reinstall it (its version may not have changed).
   pip_install -q --force-reinstall --no-deps "$FIBERHMM_SPEC"
   FIBERHMM_SPEC="$FIBERHMM_SPEC[consensus]"
 fi
 pip_install -q "$FIBERHMM_SPEC"
+# The app ships the committed frontend build: it must be current (a release never ships an old UI).
+if [ -z "${FB_FIBERBROWSER:-}" ] && [ "${FB_ALLOW_STALE_DIST:-0}" != 1 ]; then
+  "$VENV/bin/python" "$ROOT/packaging/check_frontend_dist.py" --repo "$ROOT" \
+    || die "rebuild browser/frontend/dist (cd browser/frontend && npm run build), commit it, and build again (FB_ALLOW_STALE_DIST=1: a test build)"
+fi
 pip_install -q --force-reinstall --no-deps "${FB_FIBERBROWSER:-$ROOT}"
 # The optional features the app ships with: primer design (primer3-py, seqfold),
 # contact maps (cooler, h5py; s3fs for s3:// matrices) and UMAP embeddings
@@ -148,6 +161,11 @@ pip_install -q --force-reinstall --no-deps "${FB_FIBERBROWSER:-$ROOT}"
 # --no-copilot); it remains available in the pip install. A current s3fs, as the
 # Windows image pins it: left free, pip settles a new boto3 by taking s3fs 0.4 (2020).
 pip_install -q "${FB_FIBERBROWSER:-$ROOT}[primers,contact-maps,s3,umap]" "s3fs>=2024.1" "pywebview>=5.0" "pyinstaller>=6.10"
+# The graph view's native helper (its companion wheel; FiberBrowser.spec collects the executable).
+if [ -n "${FB_GRAPH_NATIVE_WHEEL:-}" ]; then
+  [ -f "$FB_GRAPH_NATIVE_WHEEL" ] || die "FB_GRAPH_NATIVE_WHEEL=$FB_GRAPH_NATIVE_WHEEL does not exist"
+  pip_install -q --force-reinstall --no-deps "$FB_GRAPH_NATIVE_WHEEL"
+fi
 # The installed FiberBrowser must be of the flavour asked for (FB_FIBERBROWSER may name another tree or wheel).
 # (-I, from the venv: the installed package, never a checkout in the current directory or on PYTHONPATH.)
 BUILT_FLAVOR="$(cd "$VENV" && "$VENV/bin/python" -I -c 'from fiberbrowser._paths import build_flavor; print(build_flavor())')" \
@@ -322,6 +340,15 @@ fi
 cp "$ROOT/packaging/package_metadata.py" "$APP/Contents/Resources/package_metadata.py"
 "$VENV/bin/python" "$APP/Contents/Resources/package_metadata.py" --remove-direct-urls --record-build-home \
   --build-home "$HOME" "$APP/Contents" || die "private build paths in package metadata"
+# No bundled binary may carry the builder's home path (compilers embed source and install paths: the graph helper's
+# ~/.cargo paths, a conda Python's prefix, a local tool's debug map). FB_ALLOW_PRIVATE_PATHS=1: development builds.
+# FB_PRIVATE_PATHS_ALLOW: space-separated file names accepted as exceptions (a release decision, listed in the log).
+if [ "${FB_ALLOW_PRIVATE_PATHS:-0}" != 1 ]; then
+  ALLOW_ARGS=()
+  for name in ${FB_PRIVATE_PATHS_ALLOW:-}; do ALLOW_ARGS+=(--allow "$name"); done
+  "$VENV/bin/python" "$ROOT/packaging/check_private_paths.py" ${FB_REAL_HOME:+--forbid "$FB_REAL_HOME"} ${ALLOW_ARGS[@]+"${ALLOW_ARGS[@]}"} "$APP" \
+    || die "bundled binaries carry the builder's paths (see above); rebuild them without (FB_ALLOW_PRIVATE_PATHS=1 for a development build)"
+fi
 KEYCHAIN_ARGS=()
 [ -n "${FB_KEYCHAIN:-}" ] && KEYCHAIN_ARGS=(--keychain "$FB_KEYCHAIN")
 IDENTITY="${FB_SIGN_IDENTITY:-}"
@@ -374,13 +401,31 @@ for depth, kind, path in sorted(rows, reverse=True):
 PY
 count=0
 while IFS=$'\t' read -r kind path; do
-  if [ "$kind" = "exe" ]; then sign --entitlements "$ENTITLEMENTS" "$path"; else sign "$path"; fi
+  # The graph helper (Rust, no JIT) is signed with the hardened runtime and no entitlements.
+  if [ "$(basename "$path")" = "fiberbrowser-graph" ]; then sign "$path"
+  elif [ "$kind" = "exe" ]; then sign --entitlements "$ENTITLEMENTS" "$path"; else sign "$path"; fi
   count=$((count + 1))
 done < "$BUILD/macho.txt"
 find "$APP/Contents" -type d -name "*.framework" -depth | while read -r framework; do sign "$framework"; done
 sign --entitlements "$ENTITLEMENTS" "$APP"
 echo "  signed $count nested binaries and the app"
 codesign --verify --deep --strict --verbose=1 "$APP" 2>&1 | tail -2
+# The bundled graph helper: signed in place, and it still answers its framed handshake (services/graph_panel/helper.py).
+GRAPH_IN_APP="$(find "$APP/Contents" -type f -name fiberbrowser-graph -path '*graph-helper*' | head -1)"
+if [ -n "$GRAPH_IN_APP" ]; then
+  codesign --verify --strict --verbose=1 "$GRAPH_IN_APP" 2>&1 | tail -1
+  "$VENV/bin/python" - "$GRAPH_IN_APP" <<'PY' || die "the bundled graph helper does not answer its handshake"
+import json, struct, subprocess, sys
+out = subprocess.run([sys.argv[1], "handshake"], capture_output=True, timeout=10, check=True).stdout
+frame = json.loads(out[4:4 + struct.unpack(">I", out[:4])[0]])
+assert frame["protocol"] == 1 and frame["type"] == "ready", frame
+print("  graph helper:", frame["handshake"]["producer"], frame["handshake"]["build_target"])
+PY
+elif [ "${FB_REQUIRE_GRAPH_HELPER:-0}" = 1 ]; then
+  die "FB_REQUIRE_GRAPH_HELPER=1 but the app has no graph helper"
+else
+  echo "  (no graph helper bundled: the graph view will say how to install it)"
+fi
 
 # --- 7. notarize the app ---------------------------------------------------------------
 NOTARY_ARGS=(--keychain-profile "$NOTARY_PROFILE")

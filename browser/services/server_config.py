@@ -506,6 +506,10 @@ def state_environment(cfg: ServerConfig) -> dict[str, str]:
         "FIBERBROWSER_LIBRARY": cfg.library_file,
         "FIBERBROWSER_JOBS_DIR": cfg.jobs_dir,
         "FIBERBROWSER_UPLOAD_DIR": cfg.uploads_dir,
+        # Graph packages registered on this server: its state folder, not the service account's home (an
+        # operator's own setting wins).
+        "FIBERBROWSER_GRAPH_REGISTRY": os.environ.get("FIBERBROWSER_GRAPH_REGISTRY")
+        or os.path.join(cfg.state_dir, "graph_registrations.json"),
     }
     if cfg.jobs.max_cores_total:
         env["FIBERBROWSER_PIPELINE_CORES"] = str(cfg.jobs.max_cores_total)

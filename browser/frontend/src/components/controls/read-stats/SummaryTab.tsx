@@ -1,6 +1,8 @@
 import type { PerReadStats, ReadStatsResponse } from '../../../api/readStats';
-import { readStatsHiddenText, type ClusterSummaryRow } from '../../../utils/readStatsScope';
+import { readStatsFilterParts, readStatsQualityText, type ClusterSummaryRow } from '../../../utils/readStatsScope';
 import { SignalDetails } from './SignalDetails';
+import { useBrowserStore } from '../../../stores/browserStore';
+import { datasetsCarrySignal } from '../../../utils/signalFilters';
 import { CigarDetail } from './CigarDetail';
 
 export function SummaryTab({ aggregate: agg, isBam, perRead, chrom, containerWidth, byCluster, onPickCluster }: {
@@ -16,8 +18,13 @@ export function SummaryTab({ aggregate: agg, isBam, perRead, chrom, containerWid
 }) {
   const isSingle = perRead.length === 1;
   const read = isSingle ? perRead[0] : null;
-  // Which read filter hid which reads in the region (not among the reads summarised).
-  const hiddenText = readStatsHiddenText(agg);
+  // Which read filter hid which reads in the region (not among the reads summarised), and the quality
+  // gates applied to the footprints counted: the same filters as the read track.
+  const hiddenParts = readStatsFilterParts(agg);
+  const qualityText = readStatsQualityText(agg);
+  // Producer signal evidence is shown only where it exists: a loaded dataset carries bg/me/db tags, or this record does.
+  const datasetsHaveSignal = useBrowserStore(s => datasetsCarrySignal(s.datasets));
+  const showSignal = datasetsHaveSignal || (read?.signal != null && read.signal.reason !== 'annotation_unavailable');
 
   const cards: { label: string; value: string; show: boolean }[] = isSingle && read ? [
     // A read the caller skipped (no call tags) has unknown footprints and accessibility, not 0 / 100%.
@@ -31,9 +38,9 @@ export function SummaryTab({ aggregate: agg, isBam, perRead, chrom, containerWid
     { label: 'Aligned Span', value: `${read.aligned_span.toLocaleString()} bp`, show: true },
     { label: 'Modifications', value: read.methyl_count != null ? `${read.methyl_count} modified bases (${read.methyl_pct?.toFixed(1)}%)` : '-', show: read.methyl_count != null },
   ] : [
-    // null / missing: no read in scope has footprint calls (NA, not 0).
+    // NA: no read in scope has footprint calls (the means are unknown, not 0).
     { label: 'Mean Accessibility', value: agg.mean_accessibility_pct != null ? `${agg.mean_accessibility_pct.toFixed(1)}%` : 'NA', show: true },
-    { label: 'Mean FP Count', value: agg.mean_footprint_count != null ? `${agg.mean_footprint_count.toFixed(1)}` : 'NA', show: true },
+    { label: 'Mean FP Count', value: agg.mean_footprint_count != null ? agg.mean_footprint_count.toFixed(1) : 'NA', show: true },
     { label: 'Not Called', value: `${agg.n_not_called ?? 0} reads (no footprint calls; left out of the means)`, show: (agg.n_not_called ?? 0) > 0 },
     { label: 'Mean FP Size', value: agg.mean_footprint_size != null ? `${agg.mean_footprint_size.toFixed(0)} bp` : 'NA', show: true },
     { label: 'Median FP Size', value: agg.median_footprint_size != null ? `${agg.median_footprint_size.toFixed(0)} bp` : 'NA', show: true },
@@ -67,11 +74,17 @@ export function SummaryTab({ aggregate: agg, isBam, perRead, chrom, containerWid
         </div>
       )}
 
-      {isSingle && isBam && <SignalDetails signal={read?.signal} />}
-      {hiddenText && (
+      {isSingle && isBam && showSignal && <SignalDetails signal={read?.signal} />}
+      {hiddenParts.length > 0 && (
         <div className="text-[11px] text-gray-500 dark:text-gray-400" data-testid="read-stats-hidden"
-          title="Reads in the region Min footprints hid: 'uncalled' reads have no footprint calls (hidden at every Min footprints but 'All reads, including uncalled'); the others have calls but fewer than Min footprints.">
-          Min footprints: {hiddenText}
+          title="Reads in the region the read filters hid, by filter (as on the read track): duplicate and QC-fail reads unless their toggles show them; 'uncalled' reads have no footprint calls (hidden at every Min footprints but 'All reads, including uncalled'); the others have calls but fewer than Min footprints; quality filters hide a read they leave no calls.">
+          {hiddenParts.join(' · ')}
+        </div>
+      )}
+      {qualityText && (
+        <div className="text-[11px] text-gray-500 dark:text-gray-400" data-testid="read-stats-quality"
+          title="The quality filters in force on the read track, applied to the footprints counted here: a removed call counts as accessible.">
+          Quality filters applied: {qualityText}
         </div>
       )}
       <div className="grid grid-cols-2 gap-2">

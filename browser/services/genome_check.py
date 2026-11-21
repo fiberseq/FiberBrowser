@@ -260,6 +260,13 @@ def check_dataset(state, dataset_id: str, *, reference: Optional[dict] = None,
     reference = reference if reference is not None else loaded_reference(state)
     can_load = _can_load_genomes() if can_load is None else can_load
     label = str(getattr(dataset, "label", None) or dataset_id)
+    if getattr(dataset, "data_type", None) == "bam_livelift":
+        # Aligned to another assembly by design and drawn through its map; checked when it was opened
+        # (services/lift/validate.py), never against the main genome's contigs.
+        return {"dataset_id": dataset_id, "label": label, "data_type": "bam_livelift", "status": "match",
+                "severity": "ok", "message": None, "live_lift": True,
+                "reference": {"label": reference["label"], "assembly": reference["assembly"],
+                              "kind": reference["kind"]}}
     header = dataset_header(dataset)
     contigs: list[Contig] = header["contigs"]
     fp = fingerprint(contigs, labels=header["labels"])
@@ -521,6 +528,9 @@ def genome_check(state) -> dict:
             suggestion["datasets"] = [c["label"] for c in checks if (c.get("assembly") or {}).get("assembly") == only]
     gtf = getattr(state, "gtf_data", None)
     transcripts = gtf.get("transcripts") if isinstance(gtf, dict) else None
+    annotation = annotation_check(state, reference, suggestion=(suggestion or {}).get("genome_id"), can_load=can_load)
+    problems = [c for c in checks if c.get("severity") in ("warning", "error")]
+    recent_match = _recent_match(state, reference, problems) if problems and can_load and _local_workspace() else None
     return {
         "reference": {"kind": reference["kind"], "label": reference["label"], "assembly": reference["assembly"],
                       "name": assembly_name(reference["assembly"]), "genome_id": reference["genome_id"],
@@ -530,6 +540,68 @@ def genome_check(state) -> dict:
         "suggestion": suggestion,
         "can_load_genomes": can_load,
         "has_gtf": transcripts is not None and len(transcripts) > 0,
+        "annotation": annotation,
+        "recent_match": recent_match,
+    }
+
+
+def _recent_match(state, reference: dict, problems: list[dict]) -> Optional[dict]:
+    """A pinned or recent genome whose index fits the mismatched datasets' contigs clearly better than the loaded
+    reference (services/recent_genomes.best_match), or None."""
+    try:
+        from services.recent_genomes import best_match, entry_for_state
+        data: dict[str, int] = {}
+        for check in problems:
+            dataset = (getattr(state, "datasets", None) or {}).get(check.get("dataset_id"))
+            if dataset is None:
+                continue
+            for contig in dataset_header(dataset).get("contigs") or []:
+                data.setdefault(contig.name, int(contig.length))
+        current = {c.name: int(c.length) for c in reference.get("contigs") or []} if reference.get("kind") == "fasta" else {}
+        loaded = entry_for_state(state)
+        return best_match(data, current, exclude_key=loaded["key"] if loaded else None)
+    except Exception:
+        return None
+
+
+def _local_workspace() -> bool:
+    """Not a tour tab (its reference is the demo's)."""
+    from services.runtime import current_sandbox_id
+    return current_sandbox_id() is None
+
+
+def annotation_check(state, reference: dict, *, suggestion: Optional[str], can_load: bool) -> dict:
+    """The loaded gene annotation against the reference, and the registry annotation to reset it to.
+
+    ``target`` is the reference's registry genome (from its contig lengths, or the registry genome loaded), else,
+    with no reference, the genome the data points to. ``current``: the loaded annotation is the target's own.
+    ``fits``: its transcripts are on the reference's contigs (None without one of them)."""
+    from services.genome_loading import annotation_fits, registry_annotation_of, registry_annotation_path
+    from services.genome_registry import GENOME_REGISTRY
+    gtf = getattr(state, "gtf_data", None)
+    transcripts = gtf.get("transcripts") if isinstance(gtf, dict) else None
+    loaded = transcripts is not None and len(transcripts) > 0
+    target_id = None
+    if reference.get("assembly") in GENOME_REGISTRY:
+        target_id = reference["assembly"]
+    elif reference.get("kind") in ("none", "registry") and suggestion in GENOME_REGISTRY:
+        target_id = suggestion
+    elif reference.get("kind") == "registry" and getattr(state, "current_genome", None) in GENOME_REGISTRY:
+        target_id = state.current_genome
+    target = None
+    if target_id and GENOME_REGISTRY[target_id].get("gtf_url"):
+        info = GENOME_REGISTRY[target_id]
+        target = {"genome_id": target_id, "name": info["name"], "gtf_label": info.get("gtf_label", ""),
+                  "cached": os.path.exists(registry_annotation_path(target_id))}
+    of = registry_annotation_of(state)
+    return {
+        "loaded": loaded,
+        "gene_count": int(len(transcripts)) if loaded else 0,
+        "genome_id": of,
+        "fits": annotation_fits(state) if loaded else None,
+        "target": target,
+        "current": bool(target and of == target["genome_id"]),
+        "can_reset": bool(can_load and target and _local_workspace()),
     }
 
 

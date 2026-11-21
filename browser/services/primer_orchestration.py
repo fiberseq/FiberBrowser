@@ -22,6 +22,9 @@ class PrimerRuntimeConfig:
     # Loaded plasmid/custom sequences among the template contigs: read from memory, in no FASTA.
     sequence_templates: frozenset = field(default_factory=frozenset)
     template_in_db: str = 'auto'
+    # The database plasmid/custom templates are checked against (the user's chosen background); None: the
+    # same as blast_db_path. Genome contigs always use blast_db_path (the genome's database).
+    sequence_blast_db_path: Optional[str] = None
 
     def expects_home_hit(self, chrom: Optional[str]) -> bool:
         """Whether a primer on ``chrom`` should have its one home hit in the BLAST database."""
@@ -30,6 +33,12 @@ class PrimerRuntimeConfig:
         if self.template_in_db == 'no':
             return False
         return chrom not in self.sequence_templates
+
+    def blast_db_for(self, chrom: Optional[str]) -> str:
+        """The database primers on ``chrom`` are BLASTed against."""
+        if self.expects_home_hit(chrom):
+            return self.blast_db_path
+        return self.sequence_blast_db_path or self.blast_db_path
 
 
 def _sequence_templates(state, chroms: Iterable[Optional[str]], fasta_path: Optional[str]) -> tuple[set, set]:
@@ -88,14 +97,7 @@ def resolve_primer_runtime_config(
         setting = primer_fasta_setting(state)
         fasta_path = local_primer_fasta(state)
         sequences, from_file = _sequence_templates(state, chroms, fasta_path)
-        if sequences and from_file:
-            # One locus on the genome, one on a plasmid map (3C): each would be checked against its own
-            # database (the genome's; the plasmid background chosen). Not in this version.
-            return None, {"success": False, "message": (
-                f"3C between a genome locus ({', '.join(sorted(from_file))}) and a plasmid map "
-                f"({', '.join(sorted(sequences))}) isn't supported yet: design primers for each locus separately "
-                "(Standard PCR), or put both loci on the same reference.")}
-        only_sequences = bool(sequences)
+        only_sequences = bool(sequences) and not from_file
         if not only_sequences:
             if not setting:
                 return None, {"success": False, "message": missing_fasta_message}
@@ -112,6 +114,14 @@ def resolve_primer_runtime_config(
                     "genome BLAST database: choose yours (for example dm6) with Browse in the Primer panel. "
                     "No database of the plasmid itself is needed.")}
             return None, {"success": False, "message": missing_blast_message}
+        sequence_db = None
+        if sequences and from_file:
+            # 3C across a genome locus and a plasmid map: the plasmid locus is checked against the chosen
+            # background, the genome locus against the genome's database (resolved below).
+            from services.primer_config import blast_db_missing_message
+            if not blast_db_exists(blast_db_path):
+                return None, {"success": False, "message": blast_db_missing_message(blast_db_path)}
+            sequence_db = blast_db_path
         if only_sequences:
             # The template is in no FASTA and no database: the chosen database is the background primers are
             # checked against, whatever genome it is, so it is not matched to a reference.
@@ -139,4 +149,5 @@ def resolve_primer_runtime_config(
         }
 
     return PrimerRuntimeConfig(fasta_path=fasta_path, blast_db_path=blast_db_path,
-                               sequence_templates=frozenset(sequences), template_in_db=template_in_db), None
+                               sequence_templates=frozenset(sequences), template_in_db=template_in_db,
+                               sequence_blast_db_path=sequence_db), None

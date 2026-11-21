@@ -38,6 +38,14 @@ describe('analysis statistics', () => {
     expect(benjaminiHochberg([])).toEqual([]);
   });
 
+  it('gives the same q-values as the backend (browser/services/fdr.py, tests/test_fdr.py)', () => {
+    // Golden values from services.fdr.bh_qvalues: the one BH of the backend and this one must agree.
+    const ps = [0.092578, 0.175402, 0.789429, 0.100967, 0.130974, 0.20266, 0.006297, 0.134146, 0.249907, 0.498634, 0.000834, 0.027929, 0.02, 0.02, 1.0, 0.0];
+    const qs = [0.201934, 0.2551301818181818, 0.8420576000000001, 0.201934, 0.21463359999999998, 0.27021333333333336, 0.033583999999999996, 0.21463359999999998, 0.30757784615384615, 0.5698674285714286, 0.006672, 0.07447733333333333, 0.064, 0.064, 1.0, 0.0];
+    expect(benjaminiHochberg(ps)).toEqual(qs);
+    expect(benjaminiHochberg([0.01, NaN, 0.03])).toEqual([0.03, 1, 0.045]);
+  });
+
   it('matches a reference two-sided Fisher exact test', () => {
     expect(fisherExactTwoSided(1, 9, 11, 3)).toBeCloseTo(0.00275946, 7);
     expect(fisherExactTwoSided(11, 3, 1, 9)).toBeCloseTo(0.00275946, 7);

@@ -29,6 +29,12 @@ export function canonicalPanelType<T extends string>(contentType: T): T | string
   return PANEL_ALIASES[contentType] ?? contentType;
 }
 
+/** Panel types that were retired and moved elsewhere: opening one runs its replacement (co-accessibility → Plots). */
+const retiredPanels = new Map<string, () => unknown>();
+export function registerRetiredPanel(contentType: string, open: () => unknown): void { retiredPanels.set(contentType, open); }
+/** The replacement of a retired panel type (undefined: not retired). */
+export const retiredPanelOpener = (contentType: string): (() => unknown) | undefined => retiredPanels.get(contentType);
+
 type MigratedPanel = Record<string, unknown> & { contentType: string };
 /** A migration's answer: the panel as this build has it, the panels it becomes (one keeps its id), or null (no change). */
 type PanelMigration = (panel: MigratedPanel) => MigratedPanel | MigratedPanel[] | null;

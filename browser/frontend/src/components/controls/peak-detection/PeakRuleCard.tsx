@@ -1,3 +1,4 @@
+import { openPlots, plotsSourceOfPeakRule } from '../../../features/plots/workspace';
 import { removeMatchedGroups, matchedGroupLabel } from '../../../utils/matchedGroupActions';
 import { seedHistoryBaseline } from '../../../stores/historySlice';
 import { useCallback, useEffect, useRef } from 'react';
@@ -144,7 +145,18 @@ export function PeakRuleCard({
                   viewEnd={viewEnd}
                   filename={`signal_${rule.name}`}
                 />
-              ) : (
+              ) : null}
+              {signal && signal.length > 0 && plotsSourceOfPeakRule(rule.source) ? (
+                <div className="mt-1 flex justify-end">
+                  <button type="button" data-testid="peak-rule-open-in-plots"
+                    className="rounded border border-gray-200 px-1.5 py-0.5 text-[11px] text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300"
+                    title="Open in Plots: a metaprofile of this rule's read source over the view, per dataset (smoothing, normalisation, Compare, export, the Gallery). The scan keeps its own signal: the per-base share the peak caller thresholds."
+                    onClick={e => { e.stopPropagation(); openPlots({ type: 'metaprofile', source: plotsSourceOfPeakRule(rule.source)!, where: 'view', groupBy: 'dataset' }); }}>
+                    Open in Plots
+                  </button>
+                </div>
+              ) : null}
+              {signal && signal.length > 0 ? null : (
                 <div className="h-12 flex items-center justify-center text-[11px] text-gray-400 bg-gray-50 dark:bg-gray-800/50 rounded">
                   {scanning ? 'Scanning...' : (
                     <AnalysisButton

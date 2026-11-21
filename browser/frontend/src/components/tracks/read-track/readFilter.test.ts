@@ -71,3 +71,24 @@ describe('filterReadsByBranchScope', () => {
     expect(filterReadsByBranchScope(reads, true, null)).toEqual([]);
   });
 });
+
+
+it('preserves legacy native SV assignments while preferring qualified record calls',()=>{
+  const row={id:'shared',analysis_id:'alignment-record:v1:qualified'};
+  expect(clusterAssignmentForRead({shared:1},row)).toBe(1);
+  expect(clusterAssignmentForRead({shared:1,[row.analysis_id]:0},row)).toBe(0);
+  expect(clusterAssignmentForRead({shared:1},{...row,live_lift:{}})).toBeUndefined();
+});
+
+describe('folded supplementary rows (supplementary_display = fold)', () => {
+  const row = { id: 'q', analysis_id: 'primary-id', live_lift: { folded: { records: 2, analysis_ids: ['primary-id', 'supp-id'], supplementary_rows: 1 } } };
+  it('a filter by any member keeps the row', () => {
+    expect(filterReadsByReadIdSet([row], new Set(['supp-id']))).toEqual([row]);
+    expect(filterReadsByReadIdSet([row], new Set(['other']))).toEqual([]);
+  });
+  it('is coloured by the primary member, else by the first member with a cluster', () => {
+    expect(clusterAssignmentForRead({ 'primary-id': 1, 'supp-id': 2 }, row)).toBe(1);
+    expect(clusterAssignmentForRead({ 'supp-id': 2 }, row)).toBe(2);
+    expect(clusterAssignmentForRead({}, row)).toBeUndefined();
+  });
+});

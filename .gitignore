@@ -9,6 +9,7 @@ venv/
 
 # Playwright e2e test artifacts
 browser/frontend/test-results/
+browser/frontend/coverage/
 browser/frontend/playwright-report/
 browser/frontend/playwright/.cache/
 

@@ -50,6 +50,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--chimera-filter", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--primary", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--prob-threshold", type=int, default=None)
+    p.add_argument("--min-mapq", type=int, default=None)
     p.add_argument("--use-m5c", action=argparse.BooleanOptionalAction, default=None)
     p.add_argument("--cpg-mask-policy", choices=["unmethylated-only", "methylated-only"],
                    default="unmethylated-only")

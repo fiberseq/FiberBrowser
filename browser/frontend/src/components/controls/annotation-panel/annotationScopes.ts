@@ -1,3 +1,4 @@
+import { foldedInShownGraph } from '../../../stores/graphMembership';
 import type { PanelConfig } from '../../../types';
 
 /** One annotation request: a region and the panels (state keys) showing it. */
@@ -27,7 +28,8 @@ export function annotationRegionScopes(
   for (const sk of stateKeys) {
     const dsId = stateKeyToDs[sk] || sk;
     const panel = panels.find(p => p.contentType === 'dataset' && (p.stateKey ?? p.datasetId) === sk);
-    const region = panel?.viewportOverride ?? main;
+    // (A member folded into a shown graph is at its host's view: graph features review.)
+    const region = (panel && foldedInShownGraph(panel, panels) || panel)?.viewportOverride ?? main;
     const genome = panel?.genome || undefined;
     const key = `${genome ?? ''}|${region.chrom}:${region.start}-${region.end}`;
     let scope = scopes.get(key);

@@ -17,6 +17,7 @@ from models.requests import (
     DissolveClusterRequest,
     MatchedClusterRequest,
     ProjectionRequest,
+    ClusterMoleculesRequest,
     ScanPeaksRequest,
 )
 from services.clustering_inputs import (
@@ -137,6 +138,8 @@ async def scan_peaks(
     from services.signal_evidence import request_hide_uncalled
     body = req.model_dump_json() if hasattr(req, "model_dump_json") else req.json()
     scan_ids = list(req.dataset_ids or ([dataset_id] if dataset_id else getattr(state, "dataset_order", []) or []))
+    from services.lift.capability import require_for_ids
+    require_for_ids(state, scan_ids, "peaks")
     # Shared only by a request for the same data (files, generation) under the same settings.
     key = ("scan_peaks", id(state), chrom, start, end, dataset_id, spanning,
            hashlib.sha1(body.encode()).hexdigest(), dataset_identity(state, scan_ids),
@@ -289,6 +292,30 @@ async def do_cluster_projection(
         end=end,
         spanning=spanning,
     )
+
+
+@router.post("/api/cluster_molecules")
+async def do_cluster_molecules(
+    req: ClusterMoleculesRequest,
+    chrom: str = Query(...),
+    start: int = Query(...),
+    end: int = Query(...),
+    spanning: bool = Query(False),
+    state=Depends(get_state)):
+    """Each clustered molecule's summary for the cluster map's colours, from the clustered reads themselves
+    (not the read panels): {molecules: {dataset_id: {read_id: {span, m6a, m6a_per_kb, frac: {layer: share},
+    state?}}}, layers: [...]}. With `position`, `state` is the layer covering it ('linker': no call; null: the
+    read doesn't cover it)."""
+    from services.cluster_molecules import cluster_molecules
+    from services.query_params import resolve_dataset_ids
+    dataset_ids = resolve_dataset_ids(state, dataset_ids=req.dataset_ids)
+    try:
+        return await asyncio.to_thread(
+            cluster_molecules, state, chrom=chrom, start=start, end=end, spanning=spanning, dataset_ids=dataset_ids,
+            cluster_assignments=req.cluster_assignments or {}, sample_seed=req.sample_seed,
+            lift_hap_by_dataset=req.lift_hap_by_dataset, position=req.position)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 @router.post("/api/assign_to_clusters")

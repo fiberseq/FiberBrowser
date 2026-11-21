@@ -1,9 +1,15 @@
+import { idSetHas, recordKey } from '../utils/recordKeys';
+import { startupDatasetsApply } from '../utils/startupDatasets';
+import { adoptLinearSources } from '../features/graphPanel/linearSources';
 import { beginProgressiveAnalysis, cancelProgressiveAnalysis, displayedScope, needsDisplayPreview } from '../utils/progressiveAnalysis';
 import { AnalysisProgressLine } from './controls/AnalysisProgressLine';
+import { useLiveJobs } from '../stores/liveJobsStore';
 import { scanEquivalentRegions, scanUnsharedRegions } from '../utils/equivalentScanning';
 import { peakScanScope } from '../utils/peakScanScope';
 import { waitForViewIdle } from '../utils/viewIdle';
+import { AUTO_SCAN_BUDGET_MS, armScanBudget, scanStoppedNote } from '../utils/scanBudget';
 import { clusterBasisRunner } from '../utils/clusterRunExtensions';
+import { clusterRunReporter } from '../utils/clusterRunReporter';
 import { hasOrdinaryPeakSelection, isScannedRule } from '../utils/matchedRegions';
 import { linkChoseViewport } from '../utils/sessionLinks';
 import { registerClusterRunner, registerScanRunner } from '../utils/clusterRunner';
@@ -11,11 +17,17 @@ import { invalidateFilterRequests, isCurrentFilterRequest, nextFilterRequest } f
 import { alignWindowPeaks, otherLocusWindows } from '../utils/locusPeaks';
 import { captureRunViews, clusterRequestLocus, runViewsStillCurrent } from '../utils/panelRunScope';
 import { serverScanSource } from '../utils/peakScanSources';
-import { useEffect, useCallback, useState, useRef, useMemo } from 'react';
+import { useEffect, useCallback, useState, useRef, useMemo, lazy, Suspense } from 'react';
+import { useWorkspaceStore } from '../features/plots/workspace';
+
+const PlotsWorkspace = lazy(() => import('../features/plots/PlotsWorkspace').then(m => ({ default: m.PlotsWorkspace })));
+const HubWorkspace = lazy(() => import('../features/plots/HubWorkspace').then(m => ({ default: m.HubWorkspace })));
 import { useBrowserStore, getTargetDatasetIds, getStateKeyMap, isLinkedGroup } from '../stores/browserStore';
+import type { ErrorAction } from '../stores/viewportSlice';
 import { useShallow } from 'zustand/react/shallow';
 import { CrashRecoveryBanner } from './controls/CrashRecoveryBanner';
 import { GenomeMismatchBanner } from './controls/GenomeMismatchBanner';
+import { ReferenceNotices } from './controls/ReferenceNotices';
 import { PreviewSessionPrompt } from './controls/PreviewSessionPrompt';
 import { DafRunHost } from './controls/daf-run/DafRunHost';
 import { LibraryHost } from './controls/library/LibraryHost';
@@ -29,6 +41,8 @@ import { fetchApiResponse } from '../api/sharedFetch';
 import { useDafcStore } from '../stores/dafcStore';
 import { scanPeaks } from '../api/peaks';
 import { clusterAllReads, assignToClusters } from '../api/clustering';
+import { matchRefinedLabels, relabelClusterResponse } from '../utils/clusterLabelMatch';
+import { adoptClusterFit } from '../utils/adoptClusterFit';
 import { performanceSamplingNote } from '../utils/performanceProfile';
 import { mergeClusterOrder } from '../utils/clusterOrder';
 import { clusterReferenceScope, clusterRunLabel, restoredClusteringState, savedClusterStateForPanels } from '../stores/clusterSlice';
@@ -51,11 +65,16 @@ import { ExportPanel } from './ExportPanel';
 import { ExportDataDialog } from './ExportDataDialog';
 import { GenomeOverview } from './GenomeOverview';
 import { ChromSelector } from './controls/ChromSelector';
+import { MetaLocusDialog } from '../features/metaLocus/MetaLocusDialog';
+import { MetaLocusControls, MetaLocusProgressStrip } from '../features/metaLocus/MetaLocusBar';
+import { SessionExpiredBanner } from './controls/SessionExpiredBanner';
+import { isMetaChrom } from '../features/metaLocus/metaChrom';
 import { HistoryQuickControls } from './controls/HistoryQuickControls';
 import { BarChart, X } from './ui/Icons';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { useAppCommand } from '../hooks/useAppCommand';
 import { useUrlSync } from '../hooks/useUrlSync';
+import { useUrlPanel } from '../hooks/useUrlPanel';
 import { useJupyterPolling } from '../hooks/useJupyterPolling';
 import { useDafcPolling } from '../hooks/useDafcPolling';
 import { useDafcStatusBootstrap } from '../hooks/useDafcStatusBootstrap';
@@ -65,7 +84,9 @@ import { useAnnotationFetch } from '../hooks/useAnnotationFetch';
 import { useSplitPanelStore } from '../stores/splitPanelStore';
 import { beginRun, setRunResult } from '../stores/runResultStore';
 import { formatShare } from '../utils/denominators';
-import { clusterRunHeadline, clusterRunPlan, clusterWindows as sharedClusterWindows, panelTargetLabel, selectedClusterPeakRegions, type ClusterWindow } from '../utils/clusterTargets';
+import { foldedInShownGraph } from '../stores/graphMembership';
+import { extendedPeakScan } from '../utils/peakScanExtensions';
+import { clusterRunHeadline, clusterRunPlan, clusterWindows as sharedClusterWindows, panelTargetLabel, selectedClusterPeakRegions, wholeViewRegion, type ClusterWindow } from '../utils/clusterTargets';
 import { splitShowsAll } from '../utils/splitLocus';
 import { resolveSplitPanels } from '../utils/splitPanels';
 import { SplitPanelsDialogHost } from './controls/SplitPanelsDialog';
@@ -74,13 +95,13 @@ import { KeyboardShortcutsModal } from './controls/KeyboardShortcutsModal';
 import { CommandPaletteHost } from './controls/CommandPalette';
 import { ServerFileBrowserHost } from './controls/files/ServerFileBrowser';
 import { FRONTEND_DIAGNOSTICS } from '../utils/diagnostics';
-import { seedHistoryBaseline, serializeState, type SerializedState } from '../stores/historySlice';
+import { onlyDerivedHistoryChange, sameHistoryState, seedHistoryBaseline, serializeState, type SerializedState } from '../stores/historySlice';
 import { CLUSTER_RULE_MODE_PREFIX, type AnalysisFilterRule, type AnalysisSortRule, type ClusterFeatureRuleTerm, type PeakMode, type TranscriptionStateRuleKind } from '../types';
-import { normalizeAnalysisRuleScope, normalizeTranscriptionStateRuleKind, resolveClusterRuleRegions } from '../utils/analysisRules';
+import { analysisFilterLabel, analysisRuleTermProblem, filterRuleRequestFields, intersectWithCurrentFilter, normalizeAnalysisRuleScope, normalizeTranscriptionStateRuleKind, resolveClusterRuleRegions, sortRuleRequestFields, type FeatureHubRequest } from '../utils/analysisRules';
 import { filterRegionGroups, groupStillShown } from '../utils/filterScopes';
 import { logPerfTiming, nowMs } from '../utils/perfDebug';
 import { clusterBranchDynamicScopeKey, isClusterBranchAtViewport } from '../utils/clusterBranches';
-import { resolveSortRequestScope, selectedPeakWindowsForSort, sortRounds, sortViewGroups, mergeScopedSortOrder, sortStateStillCurrent, sortMovesVisibleReads } from '../utils/sortScope';
+import { liftHapsForRound, resolveSortRequestScope, selectedPeakWindowsForSort, sortRounds, sortViewGroups, mergeScopedSortOrder, sortStateStillCurrent, sortMovesVisibleReads } from '../utils/sortScope';
 import { clusterChartRunPeaks } from './controls/cluster-detail/clusterChartScope';
 import { sameChrom } from '../utils/chromAliases';
 import { formatCoordinates } from '../utils/coordinates';
@@ -100,7 +121,8 @@ import { usePanelGenomeSync } from '../hooks/usePanelGenomeSync';
 import { BrowserHosts } from '../plugins/browserHosts';
 import { panelTraits } from '../utils/panelExtensions';
 import { isSandboxPage, isWorkspacePage } from '../utils/sandbox';
-import { qualityGatesPayload, type QualityGatePayload } from '../utils/ruleMatching';
+import { qualityGatesPayload } from '../utils/ruleMatching';
+import { nucConditionsPayload, ruleTermPayload, type RuleTermPayload } from '../actions/ruleTermPayload';
 
 const DEBUG = FRONTEND_DIAGNOSTICS;
 
@@ -141,6 +163,34 @@ function branchReadScopeForStateKeys(
   return scope;
 }
 
+/** The red error banner under the toolbar: the message, an optional action button (e.g. Retry) and Dismiss. */
+export function ErrorBanner({ error, action, onDismiss }: { error: string; action: ErrorAction | null; onDismiss: () => void }) {
+  return (
+    <div className="flex items-start gap-3 border-b border-red-300 bg-red-100 px-4 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-300">
+      <div className="min-w-0 flex-1 whitespace-pre-line">{error}</div>
+      {action && (
+        <button
+          type="button"
+          data-testid="error-banner-retry"
+          // Dismiss first: the action may set a new error of its own.
+          onClick={() => { onDismiss(); action.run(); }}
+          className="shrink-0 rounded border border-red-300 px-2 py-0.5 text-xs font-medium text-red-700 hover:bg-red-200/60 dark:border-red-700 dark:text-red-200 dark:hover:bg-red-950/40"
+        >
+          {action.label}
+        </button>
+      )}
+      <button
+        type="button"
+        onClick={onDismiss}
+        className="shrink-0 rounded p-0.5 text-red-500 hover:bg-red-200/60 dark:text-red-300 dark:hover:bg-red-950/40"
+        aria-label="Dismiss error"
+      >
+        <X size={15} />
+      </button>
+    </div>
+  );
+}
+
 export function Browser() {
   // The UI size, held down for the top bar and toolbar while it would leave the reads too little room (audit H5).
   const chromeZoom = useChromeZoom();
@@ -150,10 +200,10 @@ export function Browser() {
   const {
     chrom, start, end, datasets,
     loading, error, spanningOnly, downsampleCount, showGenomeOverview,
-    peakRules, peaksByRule, peaksLocked, publicMode, setBrowserError,
+    peakRules, peaksByRule, peaksLocked, publicMode, setBrowserError, errorAction,
   } = useBrowserStore(useShallow(s => ({
     chrom: s.chrom, start: s.start, end: s.end, datasets: s.datasets,
-    loading: s.loading, error: s.error, spanningOnly: s.spanningOnly,
+    loading: s.loading, error: s.error, errorAction: s.errorAction, spanningOnly: s.spanningOnly,
     downsampleCount: s.downsampleCount, showGenomeOverview: s.showGenomeOverview,
     peakRules: s.peakRules, peaksByRule: s.peaksByRule, peaksLocked: s.peaksLocked, publicMode: s.publicMode,
     setBrowserError: s.setError,
@@ -163,7 +213,7 @@ export function Browser() {
 
   // Group 2: Cluster + analysis state
   const {
-    clusterAssignments, clusterPatterns, clusterCentroids, clusterPeakWidths, clusterPeakRegions, clusterFeatureRules, dynamicClustering, dynamicOverlapMode,
+    clusterAssignments, clusterPatterns, clusterCentroids, clusterPeakWidths, clusterMetricCohort, clusterPeakRegions, clusterFeatureRules, dynamicClustering, dynamicOverlapMode,
     selectedPeaks, clusterPeakMode, clusterK, clusterMethod, subnucleosomalThreshold, accessibilityThreshold,
     syncPeaksToBackend, activeReadIds, selectedGenes, peakModes,
     selectedDatasets, selectedFootprints, selectedReadIds,
@@ -171,7 +221,8 @@ export function Browser() {
     activeClusterBranch,
   } = useBrowserStore(useShallow(s => ({
     clusterAssignments: s.clusterAssignments, clusterPatterns: s.clusterPatterns,
-    clusterCentroids: s.clusterCentroids, clusterPeakWidths: s.clusterPeakWidths, dynamicOverlapMode: s.dynamicOverlapMode,
+    clusterCentroids: s.clusterCentroids, clusterPeakWidths: s.clusterPeakWidths, clusterMetricCohort: s.clusterMetricCohort,
+    dynamicOverlapMode: s.dynamicOverlapMode,
     clusterPeakRegions: s.clusterPeakRegions, clusterFeatureRules: s.clusterFeatureRules, dynamicClustering: s.dynamicClustering,
     selectedPeaks: s.selectedPeaks, clusterPeakMode: s.clusterPeakMode, clusterK: s.clusterK, clusterMethod: s.clusterMethod,
     subnucleosomalThreshold: s.subnucleosomalThreshold, accessibilityThreshold: s.accessibilityThreshold,
@@ -197,6 +248,9 @@ export function Browser() {
 
   const [trackList, setTrackList] = useState<TrackListEntry[]>([]);
   const [scanning, setScanning] = useState(false);
+  // An automatic scan stopped by its time budget: the Scan control says so until a scan runs or the view moves.
+  const [scanStopped, setScanStopped] = useState<string | null>(null);
+  useEffect(() => { setScanStopped(null); }, [chrom, start, end]);
   const [clustering, setClustering] = useState(false);
 
   // Export panel state
@@ -206,6 +260,7 @@ export function Browser() {
 
   // --- Extracted hooks ---
   const { handleCopyLink, linkCopied, initialPositionSet, suppressViewportSnapshotKey } = useUrlSync();
+  useUrlPanel();
   useJupyterPolling();
   useTourTabAutostart();
   useDafcPolling();
@@ -321,6 +376,9 @@ export function Browser() {
     }).catch(() => {});
     getTracks().then(res => setTrackList(res.tracks)).catch(() => {});
     const initialDatasets = getDatasets();
+    // A session opened (or a dataset added) while these startup requests are out sets the store's datasets first;
+    // the startup list, fetched before it, must not overwrite them.
+    const datasetsAtStartup = useBrowserStore.getState().datasets;
     const initialStatus = getStatus(!initialPositionSet.current && !linkChoseViewport()).then(res => {
       if (res.config?.prefetch_multiplier) {
         useBrowserStore.getState().setPrefetchMultiplier(res.config.prefetch_multiplier);
@@ -368,6 +426,9 @@ export function Browser() {
     // Settle reference, position and quality gates before the first reads;
     // the initial quality confirmation must not restart an already loading view.
     Promise.all([initialDatasets, initialStatus, initialQualityFilterSync]).then(([res]) => {
+      // A session restore (or dataset add) that won the startup race holds datasets of its own; a metadata refresh that
+      // only re-mapped the still-empty list (e.g. the hub refreshing layers) does not count.
+      if (!startupDatasetsApply(datasetsAtStartup, useBrowserStore.getState().datasets)) return;
       useBrowserStore.getState().setDatasets(res.datasets);
       useBrowserStore.getState().initModTypeDefaults();
     }).catch(() => {});
@@ -522,12 +583,16 @@ export function Browser() {
             sampleSeed: analysisSampleSeed,
             clusterFeatureRules,
             readIds: dynamicReadIds,
+            ...(panels.some(p => p.liftHap) ? { viewports: sharedClusterWindows(useBrowserStore.getState(), datasetIds)
+              .map(({ panel: _panel, ...view }) => ({ ...view, read_ids: dynamicReadIds?.[view.dataset_id] ?? view.read_ids })) } : {}),
             signal: controller.signal,
             overlapMode: dynamicOverlapMode,
             ...(useCentroids ? {
               centroids: clusterCentroids,
               peakWidths: clusterPeakWidths,
             } : {}),
+            // The fit's molecule metric cohort: a scalar-defined cluster keeps its reads when the view changes.
+            metricCohort: clusterMetricCohort,
           }
         );
 
@@ -545,6 +610,8 @@ export function Browser() {
               result.assignments || {},
               { mirror: false, merge: true },
             );
+            if (result.record_sources) adoptLinearSources(sk, datasets.find(d => d.id === datasetId)?.id
+              ?? panels.find(p => (p.stateKey ?? p.datasetId) === sk)?.datasetId ?? datasetId, result.record_sources, true);
             if (result.cluster_counts) {
               const counts = result.cluster_counts as Record<number, number>;
               const order = mergeClusterOrder(
@@ -569,7 +636,7 @@ export function Browser() {
     }, 300);
 
     return () => { clearTimeout(timeoutId); controller.abort(); };
-  }, [chrom, start, end, dynamicClustering, clusterPatterns, clusterCentroids, clusterPeakWidths, dynamicOverlapMode, clusterPeakRegions, clusterFeatureRules, activeClusterBranchDynamicKey, datasets, selectedDatasets, panels, spanningOnly, subnucleosomalThreshold, accessibilityThreshold, analysisSampleSeed]);
+  }, [chrom, start, end, dynamicClustering, clusterPatterns, clusterCentroids, clusterPeakWidths, clusterMetricCohort, dynamicOverlapMode, clusterPeakRegions, clusterFeatureRules, activeClusterBranchDynamicKey, datasets, selectedDatasets, panels, spanningOnly, subnucleosomalThreshold, accessibilityThreshold, analysisSampleSeed]);
 
   // Helper: collect read IDs for scanning
   const collectScanReadIds = useCallback(() => {
@@ -654,6 +721,27 @@ export function Browser() {
           thresholdWeak: rule.thresholds[2],
           thresholdRare: rule.thresholds[3],
         };
+        // A host drawing its graph on this view's contig: the scan runs on graph node columns, every haplotype
+        // pooled per column (graph features; features/graphPanel/graphScan.ts).
+        const graphRes = await extendedPeakScan(useBrowserStore.getState(), {
+          chrom, start, end, source: scanSource, minWidth: rule.minPeakWidth, minReads: rule.minReads, thresholds,
+          sampleSeed: analysisSampleSeed, signal,
+        });
+        if (graphRes) {
+          if (!stillCurrent()) return;
+          const graphPeaks: import('../types').FirePeak[] = graphRes.peaks.map(p => ({
+            start: p.start, end: p.end, index: p.index, layer: p.layer, score: p.score, threshold: p.threshold, width: p.width,
+            ...(p.graph ? { graph: p.graph } : {}),
+            ...(p.graph && p.graph.kind !== 'target' ? { sourceLabel: `Graph: ${p.graph.label ? `insertion ${p.graph.label}` : 'insertion'}` } : {}),
+          }));
+          if (rule.source === 'accessibility' || rule.source === 'fire') {
+            useBrowserStore.setState({ fireSignal: graphRes.signal ?? [], fireTrackType: 'none' });
+          }
+          useBrowserStore.getState().setPeaksByRule(rule.id, graphPeaks);
+          useBrowserStore.getState().setCorrespondenceScans(rule.id, {});
+          if (graphRes.signal) useBrowserStore.getState().setPeakSignalCache(rule.id, graphRes.signal);
+          return;
+        }
         const pooled = await scanEquivalentRegions(state, rule, scanSource, signal);
         if (Object.keys(pooled.summaries).length) {
           const specific = await scanUnsharedRegions(state, rule, scanSource, pooled, signal);
@@ -815,10 +903,18 @@ export function Browser() {
     if (rulesToScan.length === 0) return;
 
     setScanning(true);
+    useLiveJobs.setState({ scanning: true });
+    setScanStopped(null);
     try {
-      await Promise.all(rulesToScan.map(r => scanPeaksForRule(r.id, signal)));
+      const scans = Promise.all(rulesToScan.map(r => scanPeaksForRule(r.id, signal)));
+      // A cancelled scan stops showing "Scanning peaks..." at once, whatever request it still waits on (its results
+      // are for a view or scope that is gone, and are dropped when they arrive).
+      await (signal ? Promise.race([scans, new Promise<void>(resolve => {
+        if (signal.aborted) resolve(); else signal.addEventListener('abort', () => resolve(), { once: true });
+      })]) : scans);
     } finally {
       setScanning(false);
+      useLiveJobs.setState({ scanning: false });
     }
   }, [scanPeaksForRule, datasets]);
 
@@ -912,9 +1008,19 @@ export function Browser() {
       const run = () => {
         if (controller.signal.aborted) return;
         if (DEBUG) console.log(`Auto-scanning peaks for ${regionKey}`);
+        // An automatic scan has a time budget: one the server can't answer in time (busy with other work) stops,
+        // so "Scanning peaks..." never stays up. It is not retried automatically for this view (no loop of
+        // minute-long attempts); Scan runs it again.
+        let disarm: (() => void) | null = null;
         waitForViewIdle(controller.signal)
           .then(() => {
-            if (!controller.signal.aborted) return handleScanPeaksRef.current(controller.signal);
+            if (controller.signal.aborted) return;
+            disarm = armScanBudget(controller, () => {
+              console.warn(`Automatic peak scan of ${chrom}:${start}-${end} stopped after ${AUTO_SCAN_BUDGET_MS / 1000} s; press Scan to run it.`);
+              lastScanRegionRef.current = regionKey;
+              setScanStopped(scanStoppedNote());
+            });
+            return handleScanPeaksRef.current(controller.signal);
           })
           .then(() => {
             if (controller.signal.aborted) return;
@@ -922,6 +1028,7 @@ export function Browser() {
           })
           .catch(() => { /* failed: leave the region unscanned so it is retried */ })
           .finally(() => {
+            disarm?.();
             if (autoScanRef.current === job) autoScanRef.current = null;
           });
       };
@@ -1044,7 +1151,14 @@ export function Browser() {
       if ((store._historyStack?.length ?? 0) === 0 && pendingViewportStartSnapshotRef.current) {
         store.pushSerializedSnapshot('Before navigation', pendingViewportStartSnapshotRef.current, { kind: 'navigation' });
       }
-      store.pushSnapshot(`Navigate to ${formatCoordinates(chrom, start, end)}`, { kind: 'navigation' });
+      const top = store._historyStack[store._historyPointer];
+      // Wheel navigation and panel moves may already have recorded the settled view.
+      const settled = serializeState(store);
+      if (top?.kind === 'navigation' && onlyDerivedHistoryChange(top.state, settled)) {
+        store.foldIntoCurrentSnapshot(settled);
+      } else if (!top || !sameHistoryState(top.state, settled)) {
+        store.pushSnapshot(`Navigate to ${formatCoordinates(chrom, start, end)}`, { kind: 'navigation' });
+      }
       lastStableViewportSnapshotRef.current = serializeState(useBrowserStore.getState());
       pendingViewportStartSnapshotRef.current = null;
       navSnapshotTimer.current = null;
@@ -1056,6 +1170,9 @@ export function Browser() {
   const toggleShortcutsModal = useCallback(() => setShowShortcuts(v => !v), []);
   // While Export is open, keys belong to it, not the view behind (other dialogs say aria-modal).
   useKeyboardShortcuts({ onScanPeaks: handleScanPeaks, onToggleShortcutsModal: toggleShortcutsModal, modalOpen: showExportPanel || showExportDataDialog });
+  // Which workspace fills the window (features/plots/workspace): the reads, or Plots over them.
+  const workspaceView = useWorkspaceStore(st => st.view);
+  const plotsView = workspaceView !== 'browser';
   // The two export dialogs are never open together (one Escape, one modal).
   const openExportFigure = useCallback(() => { setShowExportDataDialog(false); setShowExportPanel(true); }, []);
   const openExportData = useCallback(() => { setShowExportPanel(false); setShowExportDataDialog(true); }, []);
@@ -1090,20 +1207,8 @@ export function Browser() {
     return term.layer ?? null;
   }, []);
 
-  const rulePayloadFromSortTerm = useCallback((term: ClusterFeatureRuleTerm | undefined) => {
-    const base = term?.source === 'label_rule'
-      ? term.rule
-      : term?.source === 'footprint_group'
-        ? term.group
-        : term;
-    return {
-      size_min: Math.max(0, Number(base?.sizeMin ?? term?.sizeMin ?? 0) || 0),
-      size_max: (base?.sizeMax ?? term?.sizeMax) == null ? null : Math.max(0, Number(base?.sizeMax ?? term?.sizeMax) || 0),
-      conditions: [...((base as any)?.conditions ?? [])],
-      // The labeling rule's quality gates too, so a count matches what it paints.
-      quality_gates: qualityGatesPayload((base as any)?.qualityGates ?? term?.qualityGates),
-    };
-  }, []);
+  // Size, conditions, quality gates and a labeling rule's nucleosome conditions (actions/ruleTermPayload.ts).
+  const rulePayloadFromSortTerm = useCallback((term: ClusterFeatureRuleTerm | undefined) => ruleTermPayload(term), []);
 
   const transcriptionStateFromTerm = useCallback((term: ClusterFeatureRuleTerm | undefined): TranscriptionStateRuleKind | null => {
     if (term?.source !== 'transcription_state') return null;
@@ -1144,21 +1249,17 @@ export function Browser() {
     if (datasets.length === 0) return;
     // This run's outcome replaces the last one's (beside the toolbar, not a global banner that outlives it).
     const resultRun = beginRun('cluster');
-    // (`panelIds`: the panels it clustered; the line says "(panel closed)" once they have all gone.)
-    const report = (tone: 'error' | 'note' | 'done', text: string, panelIds?: string[]) =>
-      setRunResult('cluster', { tone, text, ...(panelIds?.length ? { panelIds } : {}) }, resultRun);
-
     // The plan the toolbar showed (utils/clusterTargets.ts clusterRunPlan: what the run clusters on, and which panels),
     // followed here: the Cluster tooltip, the Panels chip and this result line say what this run does (round 3, R6/B5).
     const referenceName = (genome: string | null) => (genome ? panelGenomeLabel(usePanelGenomeStore.getState().genomes[genome], genome) : (useBrowserStore.getState().currentGenome || 'the main genome'));
     const targetPlan = clusterRunPlan(useBrowserStore.getState(), referenceName);
+    const report = clusterRunReporter(resultRun, targetPlan.advice);
     const { basis } = targetPlan;
     // Refused before any request (the feature path too) rather than clustering other panels than the targeted ones.
     if (basis.regions.length > 0 && targetPlan.refusal) {
       report('error', targetPlan.refusal);
       return;
     }
-    if (targetPlan.advice) setRunResult('cluster', { tone: 'note', ...targetPlan.advice }, resultRun);
     const extensionRun = clusterBasisRunner(basis.kind);
     if (extensionRun) {
       ++clusterRunRef.current;
@@ -1214,7 +1315,7 @@ export function Browser() {
         // A read filter applies inside a cluster subset too: the subset's reads
         // that pass it (possibly none).
         const readFilter = state.filteredReadIds[sk];
-        const passing = (ids: string[]) => (readFilter ? ids.filter(id => readFilter.has(id)) : ids);
+        const passing = (ids: string[]) => (readFilter ? ids.filter(id => idSetHas(readFilter, [id], recordKey(id))) : ids);
         const selected = state.selectedClusters[sk];
         if (selected && selected.size > 0 && assignments) {
           const ids: string[] = [];
@@ -1334,7 +1435,9 @@ export function Browser() {
       }
     }
     // Datasets whose every panel is filtered to nothing aren't clustered.
-    const runDatasetIds=filteredToNothing.length>0?datasetIds.filter(id=>clusterWindows.some(view=>view.dataset_id===id)):datasetIds;
+    // (A graph host's folded members of other datasets are windows too: their datasets join the run.)
+    const windowDatasets=[...new Set(clusterWindows.map(view=>view.dataset_id))];
+    const runDatasetIds=[...new Set([...(filteredToNothing.length>0?datasetIds.filter(id=>clusterWindows.some(view=>view.dataset_id===id)):datasetIds),...windowDatasets])];
     // Panels at other loci: each window gets its own matched peaks (see
     // alignWindowPeaks); the shared list is their offsets from the main start.
     let requestPeaks: Array<{ start: number; end: number; mode?: string }> = peakRegions.map(({ start: s, end: e, mode }) => ({ start: s, end: e, mode }));
@@ -1344,7 +1447,11 @@ export function Browser() {
     // Each window's own matched peaks (kept for the cluster charts of that panel).
     let windowPeaks: Record<string, Array<{ start: number; end: number; mode?: string }>> | null = null;
     const atOtherLoci=clusterWindows.some(view=>view.chrom!==chrom||view.start!==start||view.end!==end);
-    if(atOtherLoci){
+    if (basis.scope === 'whole-view') {
+      windowPeaks = Object.fromEntries(clusterWindows.map(view => [view.result_key, [wholeViewRegion(view, peakRegions[0].mode)]]));
+      for (const view of clusterWindows) view.peak_regions = windowPeaks[view.result_key];
+      requestPeaks = [wholeViewRegion(requestLocus, peakRegions[0].mode)];
+    } else if(atOtherLoci){
       const aligned=alignWindowPeaks(clusterWindows,peakRegions,chrom);
       if(!aligned){
         report('error','Select or draw peaks in one of the panels to cluster them together.');
@@ -1362,8 +1469,8 @@ export function Browser() {
     // Explicit window queries only extend it to independently moved windows.
     // Windows at other loci always go explicitly: each is read at its own
     // peaks, coordinates and genomic context.
-    const useExistingChromPath=!runGenome&&!atOtherLoci&&filteredToNothing.length===0&&clusterWindows.length>0&&windowChroms.includes(chrom)
-      &&clusterWindows.every(view=>view.start===start&&view.end===end&&!view.read_ids&&!('strand' in view))
+    const useExistingChromPath=basis.scope !== 'whole-view'&&!runGenome&&!atOtherLoci&&filteredToNothing.length===0&&clusterWindows.length>0&&windowChroms.includes(chrom)
+      &&clusterWindows.every(view=>view.start===start&&view.end===end&&!view.read_ids&&!('strand' in view)&&!view.lift_hap)
       &&datasetIds.every(id=>windowChroms.every(c=>clusterWindows.some(view=>view.dataset_id===id&&view.chrom===c)));
     const extraChroms=useExistingChromPath?windowChroms.filter(value=>value!==chrom):undefined;
 
@@ -1386,11 +1493,13 @@ export function Browser() {
     })));
     const progressive = beginProgressiveAnalysis('cluster', clusterWindows.map(view => view.result_key));
     let previewApplied = false;
+    /** The preview's assignments: the refit's clusters take their numbers (utils/clusterLabelMatch). */
+    let previewAssignments: Record<string, Record<string, number>> | null = null;
     setClustering(true);
     try {
       for (const isPreview of preview ? [true, false] : [false]) {
       if (!progressive.current()) return;
-      const res = await clusterAllReads(
+      const fitted = await clusterAllReads(
         requestLocus.chrom, requestLocus.start, requestLocus.end,
         requestPeaks as typeof peakRegions,
         clusterK,
@@ -1407,6 +1516,12 @@ export function Browser() {
         isPreview ? previewWindows : useExistingChromPath?undefined:clusterWindows,
         { resolution: original.clusterResolution, panelGenome: runGenome, signal: progressive.signal },
       );
+      // A refit after a preview keeps the preview's cluster numbers (colours, labels, profiles stay with their
+      // molecules); combinatorial labels are patterns and keep their meaning as they are.
+      const res: typeof fitted = !isPreview && previewAssignments && clusterMethod !== 'combinatorial' && !Object.keys(fitted.cluster_patterns ?? {}).length
+        ? relabelClusterResponse(fitted, matchRefinedLabels(previewAssignments,
+          Object.fromEntries(Object.entries(fitted.results).map(([k, r]) => [k, r.assignments ?? {}]))))
+        : fitted;
 
       if (DEBUG && res.timings) {
         console.log('Cluster backend timings:', res.timings);
@@ -1425,6 +1540,7 @@ export function Browser() {
       // Flatten backend results to stateKey -> { readId -> cluster }.
       const resultsByKey: Record<string, Record<string, number>> = {};
       const preparationSamples = { ...now.clusterPreparationSamples };
+      useBrowserStore.setState(s => ({ panels: s.panels.map(p => clusterWindows.some(w => w.result_key === (p.stateKey ?? p.datasetId)) ? { ...p, liftGroupByHaplotype: false } : p) }));
       for (const [resultKey, result] of Object.entries(res.results)) {
         const keys=!isPreview&&useExistingChromPath?clusterWindows.filter(view=>(view.chrom===chrom?view.dataset_id:`${view.dataset_id}_${view.chrom}`)===resultKey).map(view=>view.result_key):[resultKey];
         for (const key of keys.length ? keys : [resultKey]) {
@@ -1462,7 +1578,15 @@ export function Browser() {
       report(clusteredReads > 0 ? 'done' : 'error', clusteredReads > 0
         ? `Clustered ${clusteredReads.toLocaleString()} read${clusteredReads === 1 ? '' : 's'}${clusteredPanels.length ? ` in ${clusteredPanels.join(', ')}` : ''} at ${basis.what}`
           + `${basis.unused ? ` (${basis.unused})` : ''}.`
-        : 'No reads covered the selected peaks, so nothing was clustered.', clusteredPanelConfigs.map(p => p.id));
+        : `No reads covered ${basis.scope === 'whole-view' ? basis.what : 'the selected peaks'}, so nothing was clustered.`, clusteredPanelConfigs.map(p => p.id));
+      if (res.joint_cohort && clusteredPanelConfigs.some(p => datasets.find(d => d.id === p.datasetId)?.data_type === 'bam_livelift')) {
+        const joint = res.joint_cohort;
+        report('note', `Joint cohort: ${joint.shared_molecules.toLocaleString()} shared molecules (provenance group + read name); ${joint.policy === 'by_molecule' ? `${joint.removed_rows} duplicate rows removed` : 'native and lifted copies kept'}.`);
+        for (const [key, result] of Object.entries(res.results)) if (result.cohort) {
+          const c = result.cohort;
+          report('note', `${key}: ${Object.keys(result.assignments ?? {}).length} clustered cohort rows; ${c.folded ? 'folding enabled' : 'one row per record/orientation/placement'}. Loaded cohort: ${c.records} records, ${c.supplementary_rows} supplementary rows, ${c.alternative_rows} alternative rows, ${c.excluded_alt} alternatives excluded.`);
+        }
+      }
       for (const note of scopeNotes) report('note', note);
       const performanceNote = performanceSamplingNote(res.results);
       if (performanceNote) report('note', performanceNote);
@@ -1508,27 +1632,11 @@ export function Browser() {
       // child for a subcluster run, or the root for a full run). Combinatorial
       // uses binary patterns; other methods (kmeans, etc.) use per-cluster
       // centroids. Either enables dynamic reassignment as the viewport changes.
-      if (res.cluster_patterns && clusterMethod === 'combinatorial') {
-        useBrowserStore.getState().setClusterPatterns(res.cluster_patterns);
-        useBrowserStore.getState().setClusterCentroids({}, []);
-        useBrowserStore.getState().setClusterPeakRegions(runPeakRegions);
-        useBrowserStore.getState().setDynamicClustering(true);
-        lastDynamicClusterRef.current = { chrom, start, end };
-      } else if (res.cluster_centroids && Object.keys(res.cluster_centroids).length > 0) {
-        useBrowserStore.getState().setClusterPatterns({});
-        useBrowserStore.getState().setClusterCentroids(res.cluster_centroids, res.cluster_peak_widths ?? []);
-        useBrowserStore.getState().setClusterPeakRegions(runPeakRegions);
-        useBrowserStore.getState().setDynamicClustering(true);
-        lastDynamicClusterRef.current = { chrom, start, end };
-      } else {
-        useBrowserStore.getState().setClusterPatterns({});
-        useBrowserStore.getState().setClusterCentroids({}, []);
-        useBrowserStore.getState().setClusterPeakRegions(runPeakRegions);
-        useBrowserStore.getState().setDynamicClustering(false);
-      }
+      if (adoptClusterFit(res, clusterMethod, runPeakRegions)) lastDynamicClusterRef.current = { chrom, start, end };
 
       // With each window's view (locus and reference), so its charts use them only there.
       useBrowserStore.getState().setClusterWindowPeaks(windowPeaks ? {
+        ...(basis.scope ? { scope: basis.scope } : {}),
         regions: runPeakRegions,
         byKey: windowPeaks,
         views: Object.fromEntries(clusterWindows.map(view => [view.result_key, { chrom: view.chrom, start: view.start, end: view.end, genome: runGenome ?? null }])),
@@ -1537,7 +1645,7 @@ export function Browser() {
       // Global dynamic assignment has one chromosome/coordinate scope and no
       // strand. Keep independent-window and one-strand results frozen until an
       // explicit rerun.
-      if(panels.some(panel=>(panel.viewportOverride||panel.strand||panel.readSubset)&&panel.datasetId&&datasetIds.includes(panel.datasetId))){
+      if(basis.scope === 'whole-view'||panels.some(panel=>(panel.viewportOverride||panel.strand||panel.readSubset)&&panel.datasetId&&datasetIds.includes(panel.datasetId))){
         useBrowserStore.getState().setDynamicClustering(false);
       }
 
@@ -1557,6 +1665,16 @@ export function Browser() {
         }
       }
 
+      for (const [resultKey, result] of Object.entries(res.results)) {
+        if (!result.record_sources) continue;
+        const keys = !isPreview && useExistingChromPath ? clusterWindows.filter(view =>
+          (view.chrom === chrom ? view.dataset_id : `${view.dataset_id}_${view.chrom}`) === resultKey).map(view => view.result_key) : [resultKey];
+        for (const key of keys.length ? keys : [resultKey]) {
+          const dsid = clusterWindows.find(w => w.result_key === key)?.dataset_id;
+          if (dsid) adoptLinearSources(key, dsid, result.record_sources, subclusterRun);
+        }
+      }
+
       if (DEBUG) console.log('Unified clustering complete:', Object.fromEntries(
         Object.entries(res.results).map(([k, v]) => [k, v.cluster_counts])
       ));
@@ -1565,6 +1683,7 @@ export function Browser() {
       })) return;
       startBranch = useBrowserStore.getState().activeClusterTreeNodeId;
       if (isPreview) {
+        previewAssignments = Object.fromEntries(Object.entries(res.results).map(([k, r]) => [k, r.assignments ?? {}]));
         previewApplied = true;
         setClustering(false);
         progressive.refine();
@@ -1626,8 +1745,9 @@ export function Browser() {
       return false;
     };
 
-    // Only shown read panels are targets; a split's collapsed source stays untouched.
-    const targetPanels = panels.filter(p => !p.collapsed);
+    // Only shown read panels are targets; a split's collapsed source stays untouched. A member folded into a shown
+    // graph counts as shown (its sub-band is in the host's graph; the band orders its rows by this sort).
+    const targetPanels = panels.filter(p => !p.collapsed || foldedInShownGraph(p, panels));
     const keyMap = getStateKeyMap(selectedDatasets, targetPanels, []);
     const datasetIds = Object.keys(keyMap);
     // Each target panel is sorted at its own locus and reference.
@@ -1653,12 +1773,19 @@ export function Browser() {
     // Plain values (similarity, rule, etc.) pass through unchanged.
     let backendSortBy = sortBy;
     let sortLayer: string | undefined;
-    let sortRulePayload: { size_min: number; size_max: number | null; conditions: any[]; quality_gates?: QualityGatePayload[] } | undefined;
+    let sortRulePayload: RuleTermPayload | undefined;
     let sortDescending = true;
     let sortTranscriptionState: TranscriptionStateRuleKind | null = null;
     let sortGeneIds: string[] | undefined;
+    let sortMoleculeMetric: string | undefined;
+    let sortFeatureHub: FeatureHubRequest | undefined;
     if (analysisSortRule) {
       const term = analysisSortRule.terms[0];
+      const problem = analysisRuleTermProblem(term);
+      if (problem) {
+        reportSort('error', `Sort rule "${analysisSortRule.name}" ${problem}.`);
+        return;
+      }
       sortTranscriptionState = transcriptionStateFromTerm(term);
       sortGeneIds = sortTranscriptionState ? geneIdsForAnalysisRule(analysisSortRule) : undefined;
       if (sortTranscriptionState && (!sortGeneIds || sortGeneIds.length === 0)) {
@@ -1671,11 +1798,20 @@ export function Browser() {
       }
       sortLayer = layerFromSortTerm(term) ?? undefined;
       sortDescending = analysisSortRule.descending;
+      // Molecule metric and hub hit terms read no layer.
+      const layerFree = sortRuleRequestFields(analysisSortRule);
       if (sortTranscriptionState) {
         backendSortBy = 'transcription_state';
         sortLayer = undefined;
         sortRulePayload = undefined;
-      } else if (analysisSortRule.metric === 'count') {
+      } else if (layerFree) {
+        backendSortBy = layerFree.sortBy;
+        sortLayer = undefined;
+        sortRulePayload = undefined;
+        if (layerFree.sortBy === 'value') sortMoleculeMetric = layerFree.moleculeMetric;
+        else sortFeatureHub = layerFree.featureHub;
+      } else if (analysisSortRule.metric === 'count' || analysisSortRule.metric === 'value') {
+        // ('value' belongs to molecule metrics: a layer term saved with it counts.)
         backendSortBy = 'rule';
         sortRulePayload = rulePayloadFromSortTerm(term);
       } else {
@@ -1750,14 +1886,23 @@ export function Browser() {
             // request, not the same reads sorted twice.
             if (roundIds.every(id => full[id] !== undefined && new Set(full[id]).size === sortReadIds[id].length)) continue;
           }
+          // A split lifted panel sorts its own haplotype's rows (one state key per dataset in a round).
+          const liftHapByDataset = liftHapsForRound(round, targetPanels);
           const res = await sortReads(group.chrom, group.start, group.end, spanningOnly, roundIds, backendSortBy, {
+            ...(Object.keys(liftHapByDataset).length ? { liftHapByDataset } : {}),
             rule: sortRulePayload ?? (rule ? {
               size_min: rule.sizeMin, size_max: rule.sizeMax, conditions: rule.conditions,
               quality_gates: qualityGatesPayload(rule.qualityGates),
+              ...nucConditionsPayload(rule),
             } : undefined),
             descending: sortDescending,
+            moleculeMetric: sortMoleculeMetric,
+            featureHub: sortFeatureHub,
             linked: isLinkedGroup(roundIds, panels.filter(p => round[p.datasetId ?? ''] === (p.stateKey ?? p.datasetId))),
-            peakRegions: groupPeakRegions.length > 0 ? groupPeakRegions : undefined,
+            // (Similarity after a graph run: the run's regions, which the datasets do not hold; graph features review.)
+            peakRegions: backendSortBy === 'similarity' && !sortState.clusterPeakRegions.length && sortState.clusterMatchedRun?.graph?.regions?.length
+              ? sortState.clusterMatchedRun.graph.regions.map(r => [r.start, r.end])
+              : groupPeakRegions.length > 0 ? groupPeakRegions : undefined,
             selectedPeakWindows: scopeWindows,
             layer: sortLayer,
             transcriptionState: sortTranscriptionState,
@@ -1769,7 +1914,9 @@ export function Browser() {
             // The Projection tab's map: the clustering's peaks (this view's own
             // matched peaks for a run over several loci), rules and threshold.
             projection: backendSortBy === 'projection' ? {
-              peakRegions: clusterChartRunPeaks(sortState.clusterPeakRegions, sortState.clusterWindowPeaks, roundIds.map(id => round[id]),
+              // (A graph run keeps its regions in the run, not in clusterPeakRegions; graph features review.)
+              peakRegions: clusterChartRunPeaks((sortState.clusterPeakRegions.length ? sortState.clusterPeakRegions
+                : (sortState.clusterMatchedRun?.graph?.regions ?? [])).map(p => ({ ...p, mode: p.mode ?? 'accessibility' })), sortState.clusterWindowPeaks, roundIds.map(id => round[id]),
                 { chrom: group.chrom, start: group.start, end: group.end, genome: group.genome ?? null }, chrom)
                 .map(p => ({ start: p.start, end: p.end, mode: p.mode || 'accessibility' })),
               clusterFeatureRules: sortState.clusterFeatureRules,
@@ -1778,6 +1925,8 @@ export function Browser() {
               // even when only selected or focused clusters are sorted.
               clusterAssignments: Object.fromEntries(Object.entries(sentAssignments)
                 .filter((entry): entry is [string, Record<string, number>] => !!entry[1])),
+              // Metric columns rank against the fit's cohort, as the Projection tab's map does.
+              metricCohort: sortState.clusterMetricCohort,
             } : undefined,
             // A panel on another assembly: its reference (chromosomes, genes).
             panelGenome: group.genome ?? null,
@@ -1921,23 +2070,34 @@ export function Browser() {
     }
 
     const term = analysisFilterRule.terms[0];
+    const problem = analysisRuleTermProblem(term);
+    if (problem) {
+      reportFilter('error', `Filter rule "${analysisFilterRule.name}" ${problem}.`);
+      return;
+    }
     const transcriptionState = transcriptionStateFromTerm(term);
     const geneIds = transcriptionState ? geneIdsForAnalysisRule(analysisFilterRule) : undefined;
     if (transcriptionState && (!geneIds || geneIds.length === 0)) {
       reportFilter('error', `Filter rule "${analysisFilterRule.name}" needs a selected gene.`);
       return;
     }
-    const sortLayer = transcriptionState ? undefined : layerFromSortTerm(term) ?? undefined;
-    const rulePayload = !transcriptionState && analysisFilterRule.metric === 'count'
+    // Molecule metric ('value', between) and hub hit terms read no layer and send no size rule.
+    const fields = filterRuleRequestFields(analysisFilterRule);
+    const sortLayer = transcriptionState || fields.layerFree ? undefined : layerFromSortTerm(term) ?? undefined;
+    const rulePayload = !fields.layerFree && fields.metric === 'count'
       ? rulePayloadFromSortTerm(term)
       : undefined;
+    const combine = analysisFilterRule.combine === 'and';
 
     try {
       const responses = await Promise.all(groups.map(group => filterReadsByAnalysisRule(
         group.chrom, group.start, group.end, spanningOnly, group.datasetIds, {
-        metric: analysisFilterRule.metric,
-        operator: analysisFilterRule.operator,
-        threshold: analysisFilterRule.threshold,
+        metric: fields.metric,
+        operator: fields.operator,
+        threshold: fields.threshold,
+        thresholdMax: fields.thresholdMax,
+        moleculeMetric: fields.moleculeMetric,
+        featureHub: fields.featureHub,
         rule: rulePayload,
         peakRegions: group.peakRegions.length > 0 ? group.peakRegions : undefined,
         scopeWindows: group.windows,
@@ -1966,11 +2126,19 @@ export function Browser() {
         for (const [dsId, result] of Object.entries(responses[i].results)) {
           for (const sk of (group.stateKeysByDataset[dsId] ?? [])) {
             filteredKeys.add(sk);
-            useBrowserStore.getState().setFilteredReadIds(sk, new Set(result.read_ids), {
+            // 'and': only the reads the panel's current filter keeps too (no filter: all of them).
+            const current = combine ? now.filteredReadIds[sk] : null;
+            const ids = intersectWithCurrentFilter(result.read_ids, current);
+            useBrowserStore.getState().setFilteredReadIds(sk, ids, {
               target: 'analysis-filter',
-              label: `Rules > ${analysisFilterRule.name}`,
+              label: analysisFilterLabel(analysisFilterRule.name, current ? now.readFilterSources[sk] ?? {} : null),
             });
+            if (combine) {
+              kept += ids.size;
+              total += current ? current.size : result.total ?? 0;
+            }
           }
+          if (combine) continue;
           kept += result.filtered ?? result.read_ids.length;
           total += result.total ?? 0;
           if (DEBUG) console.log(`Filtered ${dsId} at ${group.chrom}:${group.start}-${group.end}: ${analysisFilterRule.name}, reads=${result.filtered}/${result.total}`);
@@ -1979,9 +2147,10 @@ export function Browser() {
 
       useBrowserStore.getState().setFootprintFilterKey(null);
       useBrowserStore.getState().pushSnapshot(`Filter by ${analysisFilterRule.name}`);
+      const filterName = combine ? `${analysisFilterRule.name} (within the current filter)` : analysisFilterRule.name;
       reportFilter(kept > 0 ? 'done' : 'note', total > 0
-        ? `${analysisFilterRule.name}: kept ${formatShare(kept, total, 'reads', { pct: true })}.`
-        : `${analysisFilterRule.name}: applied.`,
+        ? `${filterName}: kept ${formatShare(kept, total, 'reads', { pct: true })}.`
+        : `${filterName}: applied.`,
       // The panels it filtered (not the ones skipped or moved meanwhile): the line says so once they have closed.
       now.panels.filter(p => p.contentType === 'dataset' && filteredKeys.has((p.stateKey ?? p.datasetId)!)).map(p => p.id));
     } catch (err) {
@@ -2014,7 +2183,8 @@ export function Browser() {
 
   // Autozoom - find optimal window with most spanning reads
   const handleAutozoom = useCallback(async () => {
-    if (datasets.length === 0) return;
+    // A meta-locus's view is its one virtual locus (no other window to zoom to).
+    if (datasets.length === 0 || isMetaChrom(useBrowserStore.getState().chrom)) return;
 
     const datasetIds = getTargetDatasetIds(selectedDatasets, panels, datasets);
 
@@ -2044,7 +2214,7 @@ export function Browser() {
   }, [chrom, start, end, datasets, selectedDatasets, panels, spanningOnly, autozoomDistance]);
 
   // The command bus (menu bar, command palette): the sidebar's Autozoom and Copy Link, the Filter group's Clear.
-  useAppCommand('autozoom', () => { if (datasets.length === 0) return false; void handleAutozoom(); return true; });
+  useAppCommand('autozoom', () => { if (datasets.length === 0 || isMetaChrom(useBrowserStore.getState().chrom)) return false; void handleAutozoom(); return true; });
   useAppCommand('copy-link', () => { handleCopyLink(); return true; });
   useAppCommand('clear-read-filter', () => { handleClearFilter(); return true; });
 
@@ -2100,6 +2270,7 @@ export function Browser() {
   return (
     <div
       data-browser-root
+      data-workspace={workspaceView}
       className="h-full flex flex-col relative overflow-y-auto"
       onDragEnter={handleDragEnter}
       onDragLeave={handleDragLeave}
@@ -2123,6 +2294,7 @@ export function Browser() {
       {/* Crash recovery banner — disabled in public mode (no session save) */}
       {!publicMode && !isSandboxPage() && <CrashRecoveryBanner />}
       {!isRenderMode && <GenomeMismatchBanner />}
+      {!isRenderMode && <ReferenceNotices />}
       {!isRenderMode && <PreviewSessionPrompt />}
       {!publicMode && !isRenderMode && !isSandboxPage() && <DafRunHost />}
       {!publicMode && !isRenderMode && !isSandboxPage() && <LibraryHost />}
@@ -2152,8 +2324,9 @@ export function Browser() {
             aria-describedby={perPanelNavigation ? 'per-panel-nav-reason' : undefined}
           >
           {perPanelNavigation && <span id="per-panel-nav-reason" className="sr-only">{PER_PANEL_NAV_REASON}</span>}
-          <ChromSelector />
-          <button
+          {/* The meta-locus (a virtual contig) has no chromosome list or genome map. */}
+          {!isMetaChrom(chrom) && <ChromSelector />}
+          {!isMetaChrom(chrom) && <button
             onClick={() => useBrowserStore.getState().toggleGenomeOverview()}
             className={`flex items-center gap-1 rounded px-1.5 py-1 text-[11px] transition-colors ${showGenomeOverview ? 'text-blue-600 bg-blue-500/10 dark:text-blue-300' : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-black/5 dark:hover:bg-white/10'}`}
             title={`${showGenomeOverview ? 'Hide' : 'Show'} genome map (G)`}
@@ -2163,8 +2336,9 @@ export function Browser() {
           >
             <BarChart size={13} />
             <span className="hidden min-[1700px]:inline">Genome map</span>
-          </button>
+          </button>}
           <SmartSearchInput disabled={perPanelNavigation} disabledReason={PER_PANEL_NAV_REASON} />
+          <MetaLocusControls />
           <ZoomControls />
           </fieldset>
           <ViewToggles navDisabled={perPanelNavigation} />
@@ -2172,7 +2346,9 @@ export function Browser() {
       </NavBar>
 
       {/* Optional chromosome-wide coverage navigation. Off reserves no space. */}
-      {showGenomeOverview && <GenomeOverview />}
+      {showGenomeOverview && !isMetaChrom(chrom) && <GenomeOverview />}
+      <SessionExpiredBanner />
+      <MetaLocusProgressStrip />
 
       {/* Row 2: Operations toolbar — read/display layers, clustering, datasets. */}
       <div
@@ -2180,6 +2356,8 @@ export function Browser() {
         data-testid="operations-toolbar"
       >
         <div className="flex items-start gap-2">
+          {/* In Plots the read tools fold away (still mounted); Browser · Hub · Plots is in the icon strip. */}
+          <div className={plotsView ? 'hidden' : 'contents'} data-testid="operations-read-tools">
           <ClusterPanel
             onCluster={handleCluster}
             onSort={handleSort}
@@ -2188,8 +2366,10 @@ export function Browser() {
             onClearFilter={handleClearFilter}
             onScanPeaks={handleScanPeaks}
             scanning={scanning}
+            scanNote={scanStopped}
             clustering={clustering}
           />
+          </div>
 
           {/* Layout / Equal widths and Tour sit at the right of the analysis strip,
               keyboard shortcuts and Reset view with the toolbar's utility icons,
@@ -2205,17 +2385,7 @@ export function Browser() {
       {!isRenderMode && <RunResultLines />}
 
       {error && !isRenderMode && (
-        <div className="flex items-start gap-3 border-b border-red-300 bg-red-100 px-4 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-300">
-          <div className="min-w-0 flex-1 whitespace-pre-line">{error}</div>
-          <button
-            type="button"
-            onClick={() => setBrowserError(null)}
-            className="shrink-0 rounded p-0.5 text-red-500 hover:bg-red-200/60 dark:text-red-300 dark:hover:bg-red-950/40"
-            aria-label="Dismiss error"
-          >
-            <X size={15} />
-          </button>
-        </div>
+        <ErrorBanner error={error} action={errorAction} onDismiss={() => setBrowserError(null)} />
       )}
 
       <div className="flex-1 min-h-[240px] overflow-hidden relative flex flex-row" data-testid="tracks-region">
@@ -2224,6 +2394,12 @@ export function Browser() {
             onScanPeaks={handleScanPeaks}
             scanning={scanning}
           />
+          {/* A workspace over the reads (Plots: P, the Feature hub: H; Esc back): the reads stay mounted underneath, scroll and all. */}
+          {plotsView && !isRenderMode && (
+            <Suspense fallback={<div className="absolute inset-0 z-[40] bg-surface-sunken dark:bg-dark-bg" data-testid="plots-loading" />}>
+              {workspaceView === 'hub' ? <HubWorkspace /> : <PlotsWorkspace />}
+            </Suspense>
+          )}
         </div>
 
         {!isRenderMode && <Sidebar
@@ -2246,6 +2422,7 @@ export function Browser() {
       <KeyboardShortcutsModal open={showShortcuts} onClose={() => setShowShortcuts(false)} />
       {/* The command palette (⌘K / Ctrl+K): every action, panel and setting, and Go to a locus or gene. */}
       {!isRenderMode && <CommandPaletteHost />}
+      {!isRenderMode && !publicMode && <MetaLocusDialog />}
       {!isRenderMode && <SplitPanelsDialogHost />}
       {/* Plugin packs' background hooks and dialogs (plugins/browserHosts.tsx). */}
       <BrowserHosts renderMode={Boolean(isRenderMode)} />

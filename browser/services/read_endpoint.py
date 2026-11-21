@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from dataclasses import replace
-import random
 import time
 from typing import Optional
 
@@ -53,6 +52,7 @@ from services.read_selection import (
     filter_reads_by_min_footprints,
     is_read_spanning,
     read_matches_id_filter,
+    cohort_read_id,
 )
 from services.read_quality_filters import active_quality_filters, apply_quality_filters
 from services.query_params import parse_csv_int_set, parse_csv_set
@@ -85,12 +85,12 @@ def _sv_summary_scope(state, working_count: int) -> str:
 
 def _attach_sv(payload: dict, *, summary_reads, display_reads_key: str = "reads",
                chrom: str, start: int, end: int, min_sv_len: int, include_summary: bool,
-               scope: str = "all", precomputed=None) -> dict:
+               scope: str = "all", precomputed=None, conflict_options=None) -> dict:
     """Cut the payload's reads' ``sv`` to the view and add ``sv_summary``."""
     payload[display_reads_key] = finalize_sv_payload(payload.get(display_reads_key) or [], start, end, min_sv_len)
     if include_summary:
         summary = precomputed if precomputed is not None else (
-            sv_summary_for_reads(summary_reads, start, end, min_sv_len, scope=scope, chrom=chrom)
+            sv_summary_for_reads(summary_reads, start, end, min_sv_len, scope=scope, chrom=chrom, conflict_options=conflict_options)
             if summary_reads is not None else None)
         if summary:
             payload["sv_summary"] = summary
@@ -149,8 +149,12 @@ def apply_consensus_display_overlays(
     total_overlapping: int,
     total_spanning: int,
     projection_source=None,
+    layer_key=None,
 ) -> list[dict]:
     """Project active consensus calls onto display reads on every fetch path.
+
+    ``layer_key``: the request's layers (None = every layer). The rows keep only the scan-overlay layers it names:
+    its display quality filters cover only those, so another scan layer would be drawn unfiltered.
 
     ``BrowserState.build_working_set`` already applies this projection, but
     the optimized display sampler and the direct BAM path intentionally bypass
@@ -161,6 +165,11 @@ def apply_consensus_display_overlays(
 
     if not reads:
         return reads
+    if state.__dict__.get('scan_registry'):
+        # fiberhmm-scan states as layers on the display paths too (the fast sampler and the direct BAM path
+        # bypass build_working_set); idempotent, so rows build_working_set already overlaid are unchanged.
+        from services.scan.overlay import apply_scan_overlays
+        reads = apply_scan_overlays(state, dataset_id, chrom, start, end, reads)
     working_set = WorkingSet(
         reads,
         total_overlapping,
@@ -173,6 +182,9 @@ def apply_consensus_display_overlays(
     if active(state,dataset_id,chrom,start,end):
         working_set=project_consensus_working_set(state,dataset_id,chrom,start,end,working_set,
             projection_source=projection_source)
+    if state.__dict__.get('scan_registry'):
+        from services.scan.overlay import without_unrequested_layers
+        return without_unrequested_layers(state, dataset_id, working_set.reads, layer_key)
     return working_set.reads
 
 
@@ -208,7 +220,8 @@ def needs_direct_read_load(
     include_sv_seq: bool = False,
 ) -> bool:
     """Return True when the request cannot use the standard working-set path."""
-    is_bam = getattr(dataset, "data_type", None) == "bam"
+    from services.lift.capability import is_bam_backed
+    is_bam = is_bam_backed(dataset)
     needs_bam_data = is_bam and (include_cigar or min_fp_quality > 0)
     return (
         needs_bam_data
@@ -221,6 +234,15 @@ def needs_direct_read_load(
         # ... and SV events at the default floor, without inserted bases.
         or (is_bam and (int(min_sv_len) < SV_MIN_LEN_DEFAULT or bool(include_sv_seq)))
     )
+
+
+def scan_overlay_before_filters(state, dataset_id: str, chrom: str, start: int, end: int, reads: list[dict]) -> list[dict]:
+    """Rows of ``[start, end)`` with the tables-mode scans' layers, put on before the quality filters (as the working
+    set does), so the display post-pass over the window is a no-op and never restores a filtered mark."""
+    if not state.__dict__.get('scan_registry'):
+        return reads
+    from services.scan.overlay import apply_scan_overlays
+    return apply_scan_overlays(state, dataset_id, chrom, start, end, reads)
 
 
 def apply_quality_filters_to_reads(reads: list[dict], filters) -> list[dict]:
@@ -262,6 +284,8 @@ def load_direct_reads_for_dataset(
     short_terminal_footprint_bp: Optional[int] = None,
     sv_min_len: int = SV_MIN_LEN_DEFAULT,
     include_sv_seq: bool = False,
+    include_mismatches: bool = True,
+    detail_view=None,
     hide_uncalled: bool = True,
 ) -> list[dict]:
     """Load compact reads directly from BAM/BigBed for non-cacheable options.
@@ -285,6 +309,7 @@ def load_direct_reads_for_dataset(
                 ml_threshold=ml_threshold,
                 min_fp_quality=min_fp_quality,
                 include_cigar=include_cigar,
+                include_mismatches=include_mismatches, detail_view=detail_view,
                 hide_terminal_gaps=hide_terminal_gaps,
                 terminal_gap_threshold=terminal_gap_threshold,
                 include_layers=include_layers,
@@ -299,10 +324,14 @@ def load_direct_reads_for_dataset(
                 include_sv_seq=include_sv_seq,
                 hide_uncalled=hide_uncalled,
             )
+            segment_reads = scan_overlay_before_filters(state, getattr(dataset, 'id', '') or '', chrom, segment.ref_start,
+                                                       segment.ref_end, segment_reads)
             shift = segment.logical_start - start
             merged_inputs.extend(shift_compact_read(read, shift, segment.logical_start - segment.ref_start)
                 for read in segment_reads)
         merged = merge_compact_reads_by_id(merged_inputs)
+        from services.scan.overlay import rewindow_receipts
+        merged = rewindow_receipts(merged, chrom, start, end)
         if spanning_only:
             region_width = end - start
             return [read for read in merged if is_read_spanning(read, region_width)]
@@ -312,6 +341,7 @@ def load_direct_reads_for_dataset(
     # files, marks), with the direct-only options on the primary loads.
     from services.working_sets import _load_broad_reads, make_layer_key
     from services.read_sampling import sample_level
+    from services.lift.reads import display_sampling
 
     reads = _load_broad_reads(
         dataset=dataset,
@@ -333,10 +363,11 @@ def load_direct_reads_for_dataset(
         ml_threshold=ml_threshold,
         short_terminal_footprint_bp=short_terminal_footprint_bp,
         sample_level=(sample_level(state, dataset, chrom, start, end)
-                      if getattr(state, 'performance', {}).get('effective') == 'low' else 0),
+                      if getattr(state, 'performance', {}).get('effective') == 'low' or display_sampling(dataset) else 0),
         # Spanning is judged by the loaders on the alignment's extent: with
         # terminal gaps hidden, a read's intervals start at its first footprint.
         bam_read_options=dict(
+            **({"target_fasta": getattr(state, "fasta", None), "include_mismatches": include_mismatches, "detail_view": detail_view} if dataset.data_type == "bam_livelift" else {}),
             spanning_only=spanning_only,
             min_fp_quality=min_fp_quality,
             include_cigar=include_cigar,
@@ -353,6 +384,10 @@ def load_direct_reads_for_dataset(
             include_duplicates=include_duplicates, include_qcfail=include_qcfail,
         ),
     )
+    if getattr(dataset, "data_type", None) == "bam_livelift" and spanning_only:
+        # The source loader never applies target spanning. Direct combined
+        # requests must use the same body rule as compact and broad crops.
+        reads = [read for read in reads if is_read_spanning(read, end - start)]
     return reads
 
 
@@ -466,6 +501,7 @@ def _compact_reads_payload(
     cluster_focus: Optional[str] = None,
     filter_ids: Optional[str | list[str]] = None,  # a list: exact names (a registered read set)
     include_cigar: bool = False,
+    include_mismatches: bool = True,
     hide_terminal_gaps: bool = True,
     terminal_gap_threshold: int = 500,
     infer_legacy_layers: bool = True,
@@ -480,9 +516,11 @@ def _compact_reads_payload(
     min_sv_len: int = SV_MIN_LEN_DEFAULT,
     include_sv_seq: bool = False,
     include_sv_summary: bool = True,
+    sv_conflict_options=None,
     full_working_set: bool = False,
     viewport_start: Optional[int] = None,
     viewport_end: Optional[int] = None,
+    lift_hap: Optional[str] = None,
 ) -> dict:
     """Build the `/api/reads/compact` payload for one dataset.
 
@@ -492,6 +530,7 @@ def _compact_reads_payload(
     min_sv_len = normalize_min_sv_len(unwrap_query_default(min_sv_len, SV_MIN_LEN_DEFAULT))
     include_sv_seq = query_bool(include_sv_seq, False)
     include_sv_summary = query_bool(include_sv_summary, True)
+    lift_hap = unwrap_query_default(lift_hap, None) or None
     sv_floor = sv_extraction_floor(min_sv_len)
     from services.read_strand import cached_read_strand, filter_reads_by_strand, normalize_strand, strand_calls, strand_totals
     strand = normalize_strand(unwrap_query_default(strand, None))
@@ -515,6 +554,7 @@ def _compact_reads_payload(
     requested_metaprofile_layers = normalize_requested_layers(metaprofile_layers) or requested_layers
     query = AnalysisReadQuery.from_request(
         state,
+        capability="compact_reads",
         chrom=chrom,
         start=start,
         end=end,
@@ -532,7 +572,24 @@ def _compact_reads_payload(
     )
     sample_seed = query.sample_seed
     dataset_id = query.dataset_ids[0] if query.dataset_ids else None
-    calls = strand_calls(state, dataset_id) if strand else None
+    # Classified after the dataset is resolved: a request without dataset_id gets the default dataset,
+    # which may be lifted (its display filter, SV summary and reuse rules depend on it).
+    from services.lift.capability import is_lifted
+    lifted_dataset = is_lifted(state.datasets.get(dataset_id)) if dataset_id else False
+    if lifted_dataset:
+        # A live-lift panel: no SV summary (its connectors are not SVs; capability table §3.10) and no
+        # metaprofile (§3.10: forced off until the body-span helpers land, with a notice).
+        include_sv_summary = False
+        include_metaprofile = False
+    else:
+        lift_hap = None  # a haplotype rule means nothing to a native dataset
+    from services.lift.reads import filter_lift_display
+    lift_dataset = state.datasets.get(dataset_id) if lifted_dataset else None
+
+    def filter_lift_hap(reads, hap):
+        # A lifted panel's rows: its haplotype, and the display settings for supplementary/alternative rows.
+        return filter_lift_display(reads, lift_dataset, hap)
+    calls = strand_calls(state, dataset_id) if strand or lifted_dataset else None
     chrom = query.chrom
     start = query.start
     end = query.end
@@ -625,8 +682,10 @@ def _compact_reads_payload(
         # Low memory samples direct loads too (load_direct_reads_for_dataset): the level, and
         # the pinned reads outside the sample that load parses, are part of its identity.
         from services.read_sampling import sample_level as _sample_level
+        from services.lift.reads import display_sampling, lift_identity
         direct_level = (_sample_level(state, dataset, chrom, start, end)
-                        if getattr(state, 'performance', {}).get('effective') == 'low' else 0)
+                        if getattr(state, 'performance', {}).get('effective') == 'low' or display_sampling(dataset) else 0)
+        from services.sv_alleles import reference_identity
         methyl_cache_key = (
             dataset_id,
             chrom,
@@ -646,9 +705,13 @@ def _compact_reads_payload(
             include_duplicates, include_qcfail,
             direct_min_footprints,
             read_load_token(state, chrom, direct_terminal_bp, sample_level=direct_level),
-            sv_floor,
+            min_sv_len,
             include_sv_seq,
             hide_uncalled,
+            (getattr(getattr(state, "fasta", None), "filename", None), id(getattr(state, "fasta", None))),
+            lift_identity(dataset),
+            bool(include_mismatches), viewport_start, viewport_end,
+            reference_identity(state),
         )
 
         if not hasattr(state, "_methylation_cache"):
@@ -659,12 +722,14 @@ def _compact_reads_payload(
                 state, dataset, chrom=chrom, start=start, end=end, spanning_only=False,
                 include_methylation=include_methylation, ml_threshold=ml_threshold,
                 min_fp_quality=min_fp_quality, include_cigar=include_cigar,
+                include_mismatches=query_bool(include_mismatches, True),
+                detail_view=(viewport_start, viewport_end) if viewport_start is not None and viewport_end is not None else (start, end),
                 hide_terminal_gaps=hide_terminal_gaps, terminal_gap_threshold=terminal_gap_threshold,
                 include_layers=include_layers, requested_layers=requested_layers,
                 include_layer_qualities=include_layer_qualities, infer_legacy_layers=infer_legacy_layers,
                 legacy_nuc_min_size=legacy_nuc_min_size, include_duplicates=include_duplicates, include_qcfail=include_qcfail,
                 min_footprints=direct_min_footprints, short_terminal_footprint_bp=direct_terminal_bp,
-                sv_min_len=sv_floor, include_sv_seq=include_sv_seq, hide_uncalled=hide_uncalled,
+                sv_min_len=min_sv_len, include_sv_seq=include_sv_seq, hide_uncalled=hide_uncalled,
             )
 
         generation = dataset_generation(state, dataset_id)
@@ -784,13 +849,22 @@ def _compact_reads_payload(
             log_read_diagnostic(f"  Loaded methylation data: {len(all_reads)} reads (cached)")
 
         from services.read_sampling import sampling_info
-        direct_sampling = sampling_info(all_reads, start, end, len(all_reads), 0)
-        # The quality gates the working-set path applies (cached reads stay raw).
+        sampling_reads = all_reads
+        # The quality gates the working-set path applies (cached reads stay raw), after the scan overlay.
         all_reads = apply_quality_filters_to_reads(
-            all_reads,
+            scan_overlay_before_filters(state, dataset_id, chrom, start, end, all_reads),
             quality_filters_for_display_layers(active_quality_filters(state), layer_key),
         )
 
+        if lifted_dataset:
+            # Prepare molecule properties before strand, spanning, IDs and caps.
+            all_reads = apply_min_footprint_filter(filter_lift_hap(all_reads, lift_hap), dataset, min_footprints)
+            for r in all_reads:
+                # The molecule's strand (read_strand._lifted_strand): also on a record with no marks of its own.
+                call = cached_read_strand(r, calls)
+                explicit = r.get("strand") in ("CT", "GA", ".") and not r.get("_fiberbrowser_inferred_strand")
+                if call and not explicit:
+                    r["strand"], r["_fiberbrowser_inferred_strand"] = call, True
         if strand:
             # A one-strand panel's counts are that strand's reads.
             all_reads = filter_reads_by_strand(all_reads, strand, calls)
@@ -798,6 +872,8 @@ def _compact_reads_payload(
             start, end, circular_chrom_size(state, chrom))
 
         def spans(read):
+            if read.get("live_lift"):
+                return is_read_spanning(read, region_width)
             # A wrapped circular view's coordinates aren't the alignment's: its
             # merged intervals decide, as before.
             if view_wraps:
@@ -814,6 +890,11 @@ def _compact_reads_payload(
 
         total_overlapping = len(all_reads)
         total_spanning = sum(1 for read in all_reads if spans(read))
+        direct_sampling = sampling_info(sampling_reads, start, end, total_overlapping, total_spanning)
+        if lifted_dataset and direct_sampling:
+            from services.lift.reads import scoped_sampling_info
+            direct_sampling = scoped_sampling_info(direct_sampling)
+            total_overlapping, total_spanning = direct_sampling['total'], direct_sampling['total_spanning']
         reads_to_sample = [
             read
             for read in all_reads
@@ -837,6 +918,9 @@ def _compact_reads_payload(
             # A focused cluster shows (and profiles) its own reads only, as on the working-set path.
             reads_to_sample = filter_reads_by_cluster_focus(reads_to_sample, cluster_assignments, focus_clusters)
 
+        cap = int(getattr(state, "max_working_reads", 0) or 0)
+        if cap > 0 and len(reads_to_sample) > cap and (not filter_ids or getattr(state, "performance", {}).get("effective") == "low"):
+            reads_to_sample = sample_stable_by_id(reads_to_sample, cap, seed=f"{sample_seed}:working_set:{dataset_id}:{chrom}")
         working_count = len(reads_to_sample)
         direct_projection = None
         if active_consensus and reads_to_sample:
@@ -871,6 +955,7 @@ def _compact_reads_payload(
             total_overlapping=total_overlapping,
             total_spanning=total_spanning,
             projection_source=direct_projection,
+            layer_key=layer_key,
         )
         server_timings["display_sample_ms"] = phase_ms(phase_t0)
         has_methylation = compact_reads_have_methylation(display_reads)
@@ -884,6 +969,7 @@ def _compact_reads_payload(
         )
 
         payload = _attach_sv(compact_reads_response_payload(
+            multi_library=len(getattr(dataset, "paths", None) or ()) > 1,
             display_reads=display_reads,
             width=region_width,
             dataset_id=dataset_id,
@@ -906,13 +992,15 @@ def _compact_reads_payload(
             metaprofile_read_count=metaprofile_read_count,
             profile_max_reads=profile_max_reads if include_metaprofile else None,
         ), summary_reads=None if view_wraps else reads_to_sample, chrom=chrom, start=start, end=end,
-            min_sv_len=min_sv_len, include_summary=include_sv_summary)
+            min_sv_len=min_sv_len, include_summary=include_sv_summary, conflict_options=sv_conflict_options)
         from services.read_binary import binary_read_context
         if binary_read_context.get():
             payload['_region_reuse_safe'] = (
                 not quality_filters_for_display_layers(active_quality_filters(state), layer_key) and not active_consensus
                 and not circular_chrom_size(state, chrom)
                 and layer_key is not None and set(layer_key) <= {'nuc', 'tf', 'footprint'}
+                # The client re-projects from intervals only: live-lift geometry would be left unshifted.
+                and not lifted_dataset
             )
         if direct_sampling:
             payload['working_sampling'] = direct_sampling
@@ -929,7 +1017,7 @@ def _compact_reads_payload(
         else 0
     )
     # Read filters (IDs, cluster focus, strand) need the full working set before sampling.
-    use_broad_cache = filter_id_set or (focus_clusters and cluster_assignments) or strand
+    use_broad_cache = filter_id_set or (focus_clusters and cluster_assignments) or strand or lifted_dataset
     metaprofile = None
     metaprofile_read_count = 0
 
@@ -957,18 +1045,25 @@ def _compact_reads_payload(
             hide_uncalled=hide_uncalled,
         )
         server_timings["broad_cache_lookup_ms"] = phase_ms(phase_t0)
+        if lifted_dataset:
+            # The shared builder reuses this broad cache itself, with the
+            # display/sample identity, filters and working cap on every hit.
+            broad_reads, broad_key = None, None
         viewport_offset = start - broad_key[2] if broad_key else 0
 
         if broad_reads is None:
             log_read_diagnostic("  No broad cache available, using working set")
             phase_t0 = time.perf_counter()
-            working_set = query.build_working_set(
-                state,
-                dataset_id,
-                read_ids=list(filter_id_set) if filter_id_set is not None else None,
-                include_layer_qualities=include_layer_qualities,
-                quality_filters=display_quality_filters,
-            )
+            from services.lift.reads import lift_display_hap
+            # A lifted panel's haplotype rule applies inside the build, before its working-read cap.
+            with lift_display_hap(lift_hap):
+                working_set = query.build_working_set(
+                    state,
+                    dataset_id,
+                    read_ids=list(filter_id_set) if filter_id_set is not None else None,
+                    include_layer_qualities=include_layer_qualities,
+                    quality_filters=display_quality_filters,
+                )
             server_timings["working_set_ms"] = phase_ms(phase_t0)
             # BrowserState.build_working_set projects an active run; the filtered
             # subsets below keep its rows (and so its projection).
@@ -985,12 +1080,18 @@ def _compact_reads_payload(
                 total_overlapping, total_spanning = strand_totals(
                     working_set.reads, stranded, working_set.total_overlapping, end - start)
                 reads_to_sample = stranded
+            if lifted_dataset:
+                one_hap = filter_lift_hap(reads_to_sample, lift_hap)
+                total_overlapping, total_spanning = strand_totals(
+                    reads_to_sample, one_hap, total_overlapping, end - start)
+                reads_to_sample = one_hap
             if focus_clusters and cluster_assignments:
                 reads_to_sample = filter_reads_by_cluster_focus(
                     reads_to_sample,
                     cluster_assignments,
                     focus_clusters,
                 )
+            sampling_metadata = getattr(working_set, "sampling", None)
             working_set = WorkingSet(
                 reads_to_sample,
                 total_overlapping,
@@ -999,18 +1100,25 @@ def _compact_reads_payload(
                 start,
                 end,
             )
+            working_set.sampling = sampling_metadata
         else:
             server_timings["broad_cache_hit"] = 1.0
             phase_t0 = time.perf_counter()
-            def matches_cluster(read_id: str) -> bool:
+            def matches_cluster(read) -> bool:
                 if not focus_clusters:
                     return True
-                return cluster_assignments.get(read_id) in focus_clusters
+                return cluster_assignments.get(cohort_read_id(read)) in focus_clusters
 
             reads_to_sample = []
             total_overlapping_in_viewport = 0
             total_in_viewport = 0
             total_spanning_in_viewport = 0
+            # Tables-mode scans' layers before the quality filters (as the working set does), so the display
+            # post-pass over this window is a no-op and never restores a filtered mark.
+            scan_overlay = None
+            if state.__dict__.get('scan_registry'):
+                from services.scan.overlay import prepare_scan_overlay
+                scan_overlay = prepare_scan_overlay(state, dataset_id, chrom, start, end)
             for read in iter_broad_reads_overlapping_viewport(
                 state,
                 broad_reads,
@@ -1031,6 +1139,8 @@ def _compact_reads_payload(
                 # A one-strand panel's counts are that strand's reads.
                 if strand and cached_read_strand(read, calls) != strand:
                     continue
+                if lifted_dataset and not filter_lift_hap([read], lift_hap):
+                    continue
 
                 total_overlapping_in_viewport += 1
                 if is_spanning:
@@ -1040,12 +1150,14 @@ def _compact_reads_payload(
                     continue
 
                 total_in_viewport += 1
-                if filter_id_set and not read_matches_id_filter(read["id"], filter_id_set):
+                if filter_id_set and not read_matches_id_filter(read, filter_id_set):
                     continue
 
-                if not matches_cluster(read["id"]):
+                if not matches_cluster(read):
                     continue
 
+                if scan_overlay is not None:
+                    adjusted_read = scan_overlay(adjusted_read)
                 if display_quality_filters and "layers" in adjusted_read:
                     adjusted_read = apply_quality_filters(adjusted_read, display_quality_filters)
                     if adjusted_read is None:
@@ -1137,6 +1249,7 @@ def _compact_reads_payload(
                 profile_requested_layers=requested_metaprofile_layers if include_metaprofile else None,
                 timings=server_timings,
                 sv_min_len=min_sv_len if include_sv_summary else None,
+                sv_conflict_options=sv_conflict_options,
                 full_working_set=full_working_set,
             )
             server_timings["display_working_set_ms"] = phase_ms(phase_t0)
@@ -1189,6 +1302,7 @@ def _compact_reads_payload(
         total_spanning=working_set.total_spanning,
         # Projected already on every path but the sampled display set's.
         projection_source=working_set,
+        layer_key=layer_key,
     )
 
     if fill_gap_size and fill_gap_size > 0:
@@ -1221,6 +1335,7 @@ def _compact_reads_payload(
         log_read_request(f"  /api/reads/compact: sampled {sampling['kept']:,} of {sampling['total']:,} reads "
                          f"(level {sampling['level']})", elapsed)
     payload = _attach_sv(compact_reads_response_payload(
+        multi_library=len(getattr(dataset, "paths", None) or ()) > 1,
         display_reads=display_reads,
         width=region_width,
         dataset_id=dataset_id,
@@ -1241,7 +1356,7 @@ def _compact_reads_payload(
         profile_max_reads=profile_max_reads if include_metaprofile else None,
     ), summary_reads=sv_summary_reads, chrom=chrom, start=start, end=end, min_sv_len=min_sv_len,
         include_summary=include_sv_summary and not sv_wraps, scope=_sv_summary_scope(state, working_count),
-        precomputed=precomputed_sv)
+        precomputed=precomputed_sv, conflict_options=sv_conflict_options)
     if sampling and isinstance(payload, dict):
         # The panel says "N of M reads (sampled)" and offers to load them all.
         payload["working_sampling"] = sampling
@@ -1250,6 +1365,8 @@ def _compact_reads_payload(
         payload["_region_reuse_safe"] = (
             not active_quality_filters(state) and not active_consensus
             and not circular_chrom_size(state, chrom)
+            # The client re-projects from intervals only: live-lift geometry would be left unshifted.
+            and not lifted_dataset
         )
     return payload
 
@@ -1277,7 +1394,7 @@ def _store_direct_reads_cache(cache, key, value, max_reads=100_000):
     cache[key] = value
 
 
-def compact_reads_payload_for_request(state, *, pin_ids: Optional[str] = None, **kwargs) -> dict:
+def compact_reads_payload_for_request(state, *, pin_ids: Optional[str] = None, insertion_ids: Optional[str] = None, **kwargs) -> dict:
     """Build the `/api/reads/compact` payload for one dataset.
 
     When the "Min footprints" filter leaves no read in view, the payload says
@@ -1294,8 +1411,19 @@ def compact_reads_payload_for_request(state, *, pin_ids: Optional[str] = None, *
     """
     kwargs = normalize_min_footprints_choice(kwargs)
     from services.read_pins import parse_pin_ids, pinned_reads
-    with pinned_reads(parse_pin_ids(unwrap_query_default(pin_ids, None))):
+    from services.lift.reads import lift_display_hap
+    with pinned_reads(parse_pin_ids(unwrap_query_default(pin_ids, None))), lift_display_hap(
+            unwrap_query_default(kwargs.get("lift_hap"), None),
+            sample=not query_bool(kwargs.get("full_working_set"), False)):
         payload = _compact_reads_payload(state, **kwargs)
+    if insertion_ids:
+        from services.lift.reads import enrich_display_insertions
+        payload = enrich_display_insertions(state, payload, insertion_ids, kwargs)
+    from services.lift.capability import lifted_display_notices
+    notices = lifted_display_notices(state, payload.get("dataset_id"),
+                                     include_metaprofile=query_bool(kwargs.get("include_metaprofile"), False))
+    if notices:
+        payload["live_lift_notices"] = notices
     min_footprints = int(query_int(kwargs.get("min_footprints", 0), 0) or 0)
     if min_footprints > 0 and _empty_payload(payload):
         # Only Min footprints changes: layers, qualities and marks stay as asked,
@@ -1398,6 +1526,31 @@ def hidden_by_min_footprints_for_dataset(result, *, query, min_footprints: int, 
         data["hidden_by_min_footprints"] = hidden
 
 
+def select_compact_all_display_reads(reads, *, start: int, end: int, spanning: bool, max_reads: int,
+                                     downsample: Optional[int], coverage_sample: bool, sample_seed: str,
+                                     dataset_id: str, chrom: str) -> list:
+    """The reads ``/api/reads/compact_all`` draws for one dataset, in display order.
+
+    The first-paint path (services/first_paint.py) runs this same function on
+    the reads it decoded first, so both paths pick the same reads."""
+    display_reads = sort_compact_reads_for_display(reads)
+    target_count = downsample if (downsample is not None and downsample > 0) else max_reads
+
+    if target_count and target_count > 0 and len(display_reads) > target_count:
+        if coverage_sample and not spanning:
+            display_reads = sample_by_coverage(display_reads, target_count, start, end)
+        else:
+            # The stable sampling rule (services/stable_sample, 3.1.0): the reads with the smallest blake2b keys of
+            # (seed, dataset, read name), the same read in or out whatever the window or its neighbours.
+            from services.stable_sample import lowest_k, seed_int, stable_key
+            s_int = seed_int(sample_seed)
+            display_reads = lowest_k(display_reads, target_count, key=lambda r: stable_key(s_int, dataset_id, str(compact_read_id(r))),
+                                     ident=lambda r: str(compact_read_id(r)))
+        # Reads the request pins (a read gone to by name) stay in the sample.
+        display_reads = sort_compact_reads_for_display(with_pinned(display_reads, reads, compact_read_id))
+    return display_reads
+
+
 def compact_all_dataset_result(
     *,
     state,
@@ -1430,12 +1583,19 @@ def compact_all_dataset_result(
     include_qcfail: bool = False,
     min_sv_len: int = SV_MIN_LEN_DEFAULT,
     include_sv_summary: bool = True,
+    sv_conflict_options=None,
+    first_paint=None,
     hide_uncalled: Optional[bool] = None,
 ):
     """Build one dataset payload for `/api/reads/compact_all`.
 
     SV events come from the cache's floor: a ``min_sv_len`` below it is
-    served at the floor (the browser asks /api/reads/compact for those)."""
+    served at the floor (the browser asks /api/reads/compact for those).
+
+    ``first_paint``: a ``services.first_paint.FirstPaintSet``, the reads decoded
+    for a first response instead of the whole view. The payload then draws the
+    same reads, says it is partial (``first_paint``) and leaves out what is
+    computed over every read (SV summary, metaprofile)."""
     min_sv_len = max(SV_MIN_LEN_DEFAULT, normalize_min_sv_len(unwrap_query_default(min_sv_len, SV_MIN_LEN_DEFAULT)))
     t0 = time.time()
     server_timings: dict[str, float] = {}
@@ -1445,6 +1605,13 @@ def compact_all_dataset_result(
     dataset = state.get_dataset(dataset_id)
     if not dataset:
         return None
+    from services.lift.capability import lifted_display_notices
+    # Live lift (§3.10, enforced here, not only by the router): no metaprofile and no SV summary.
+    lift_notices = lifted_display_notices(state, dataset_id, include_metaprofile=bool(include_metaprofile))
+    from services.lift.capability import is_lifted as _lifted_entry
+    if _lifted_entry(dataset):
+        include_metaprofile = False
+        include_sv_summary = False
 
     effective_requested_layers = requested_layers
     effective_include_layers = include_layers
@@ -1504,11 +1671,12 @@ def compact_all_dataset_result(
             hide_uncalled=hide_uncalled,
         )
         server_timings["direct_load_ms"] = phase_ms(phase_t0)
-        # Working sets apply the active quality gates; so must this path.
-        reads = apply_quality_filters_to_reads(reads, active_quality_filters(state))
+        # Working sets apply the active quality gates (after the scan overlay); so must this path.
+        reads = apply_quality_filters_to_reads(scan_overlay_before_filters(state, dataset_id, chrom, start, end, reads),
+                                               active_quality_filters(state))
     else:
         phase_t0 = time.perf_counter()
-        working_set = query.build_working_set(
+        working_set = first_paint.working_set if first_paint is not None else query.build_working_set(
             state,
             dataset_id,
             include_layers=effective_include_layers,
@@ -1516,8 +1684,19 @@ def compact_all_dataset_result(
             include_layer_qualities=effective_include_layer_qualities,
         )
         server_timings["working_set_ms"] = phase_ms(phase_t0)
+        if first_paint is not None:
+            server_timings.update(first_paint.timings)
+            # Every read in view is not loaded yet: what is computed over all of them waits for the full set.
+            include_metaprofile = False
+            include_sv_summary = False
         reads = list(working_set.reads)
 
+    lift_ds = state.datasets.get(dataset_id)
+    from services.lift.capability import is_lifted as _is_lifted
+    if _is_lifted(lift_ds):
+        # A lifted dataset in the combined request: the display's supplementary/alternative settings.
+        from services.lift.reads import filter_lift_display
+        reads = apply_min_footprint_filter(filter_lift_display(reads, lift_ds), lift_ds, min_footprints)
     if fill_gap_size and fill_gap_size > 0:
         phase_t0 = time.perf_counter()
         reads = [fill_small_gaps_in_read(read, fill_gap_size) for read in reads]
@@ -1528,11 +1707,18 @@ def compact_all_dataset_result(
             1 for read in reads if is_read_spanning(read, region_width)
         )
         total_overlapping = len(reads)
+    elif first_paint is not None:
+        total_spanning = first_paint.total_spanning
+        total_overlapping = first_paint.total_overlapping
     else:
         total_spanning = working_set.total_spanning
         total_overlapping = working_set.total_overlapping
 
-    total_count = len(reads)
+    if direct:
+        cap = int(getattr(state, "max_working_reads", 0) or 0)
+        if cap > 0 and len(reads) > cap:
+            reads = sample_stable_by_id(reads, cap, seed=f"{sample_seed}:working_set:{dataset_id}:{chrom}")
+    total_count = len(reads) if first_paint is None else first_paint.total_overlapping
     has_methylation = compact_reads_have_methylation(reads)
 
     phase_t0 = time.perf_counter()
@@ -1545,21 +1731,9 @@ def compact_all_dataset_result(
     server_timings["profile_pool_ms"] = phase_ms(phase_t0)
 
     phase_t0 = time.perf_counter()
-    display_reads = sort_compact_reads_for_display(reads)
-    target_count = downsample if (downsample is not None and downsample > 0) else max_reads
-
-    if target_count and target_count > 0 and len(display_reads) > target_count:
-        if coverage_sample and not spanning:
-            display_reads = sample_by_coverage(display_reads, target_count, start, end)
-        elif downsample is not None and downsample > 0:
-            region_seed = stable_seed_int(sample_seed, "compact_all", dataset_id, chrom, start, end)
-            rng = random.Random(region_seed)
-            display_reads = rng.sample(display_reads, target_count)
-        else:
-            step = len(display_reads) / target_count
-            display_reads = [display_reads[int(i * step)] for i in range(target_count)]
-        # Reads the request pins (a read gone to by name) stay in the sample.
-        display_reads = sort_compact_reads_for_display(with_pinned(display_reads, reads, compact_read_id))
+    display_reads = select_compact_all_display_reads(
+        reads, start=start, end=end, spanning=spanning, max_reads=max_reads, downsample=downsample,
+        coverage_sample=coverage_sample, sample_seed=sample_seed, dataset_id=dataset_id, chrom=chrom)
     display_reads = apply_consensus_display_overlays(
         state,
         dataset_id,
@@ -1607,6 +1781,7 @@ def compact_all_dataset_result(
             compact_reads_available_layers(display_reads),
         ),
         "metaprofile": metaprofile,
+        **({"live_lift_notices": lift_notices} if lift_notices else {}),
         "metaprofile_read_count": len(profile_reads) if include_metaprofile else 0,
         "profile_max_reads": profile_max_reads,
         "sample_seed": sample_seed,
@@ -1614,12 +1789,32 @@ def compact_all_dataset_result(
     }
     if warning:
         result["warning"] = warning
+    if first_paint is not None:
+        result["first_paint"] = first_paint.info(len(display_reads))
     sv_wraps = bool(circular_chrom_size(state, chrom)) and circular_region_wraps(
         start, end, circular_chrom_size(state, chrom))
     phase_t0 = time.perf_counter()
+    include_summary = query_bool(include_sv_summary, True) and not sv_wraps
+    summary_scope = _sv_summary_scope(state, total_count)
+    # A cached working set's reads never change: its SV summary for the same
+    # view and settings is kept on it (the reads it was built from are these
+    # unless lift display rows replaced them).
+    memo = memo_key = precomputed = None
+    if include_summary and not direct and not _is_lifted(lift_ds) and reads is not None:
+        import json as _json
+        memo = working_set.__dict__.setdefault("_sv_summary_memo", {})
+        memo_key = (chrom, start, end, min_sv_len, summary_scope, len(reads),
+                    _json.dumps(sv_conflict_options, sort_keys=True, default=str))
+        precomputed = memo.get(memo_key)
+        if precomputed:
+            import copy as _copy
+            precomputed = _copy.deepcopy(precomputed)  # responses never share mutable summaries
     _attach_sv(result, summary_reads=None if sv_wraps else reads, chrom=chrom, start=start, end=end,
-               min_sv_len=min_sv_len, include_summary=query_bool(include_sv_summary, True) and not sv_wraps,
-               scope=_sv_summary_scope(state, total_count))
+               min_sv_len=min_sv_len, include_summary=include_summary,
+               scope=summary_scope, conflict_options=sv_conflict_options, precomputed=precomputed)
+    if memo is not None and precomputed is None:
+        import copy as _copy
+        memo[memo_key] = _copy.deepcopy(result.get("sv_summary", False))
     server_timings["sv_summary_ms"] = phase_ms(phase_t0)
     from services.signal_counts import attach_signal_counts
     phase_t0 = time.perf_counter()

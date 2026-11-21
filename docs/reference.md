@@ -75,6 +75,11 @@ a lab server's accounts and audit log. `fiberbrowser --open-link URL` hands a
 | `FIBERBROWSER_SETTINGS` | Use another settings file instead of `~/.fiberhmm/browser_settings.json`. |
 | `FIBERBROWSER_NO_UPDATE_CHECK=1`, `FIBERBROWSER_UPDATE_URL` | Turn update checks off, or read the update manifest from another address (see [Updates](updates.md)). |
 | `FIBERBROWSER_RECENT_TRACKS_FILE` | Where the Tracks panel keeps its **Recent** list (default `~/.fiberhmm/recent_tracks.json`). |
+| `FIBERBROWSER_LIVE_LIFT=0` (or `1`) | Turn live lift off (it is on by default), or on for a lab server, where it is off by default. A public server never offers it. See [Setting up live lift and graph mode](workflows/pangenome-setup.md#live-lift-is-on). |
+| `FIBERBROWSER_GRAPH_HELPER=/path/to/fiberbrowser-graph` | Use this graph helper instead of the `fiberbrowser[graph]` companion package or the macOS app's copy. |
+| `FIBERBROWSER_GRAPH_PACKAGES=dir[:dir…]` | Register these graph packages at start-up. |
+| `FIBERBROWSER_GRAPH_REGISTRY` | Where registered graph packages are remembered (default `~/.fiberhmm/graph_registrations.json`). |
+| `FIBERBROWSER_FRONTEND_DIST` | Serve a frontend built outside the checkout (development). |
 
 `~/.fiberhmm/browser_settings.json` holds a few per-computer settings for
 source and pip runs: `fiberhmm_source_dir` (as `FIBERHMM_SOURCE_DIR`),
@@ -302,7 +307,8 @@ merges and unmerges datasets, and **Equal widths** evens out panel widths.
 
 A **Search settings** field at the top of the sidebar filters its sections
 as you type. The display caps limit only what is drawn. Clustering and other analyses use
-every eligible read unless you set **Analysis cap** (Read Stats describes the
+every eligible read unless you set **Analysis cap**, or the **Low memory**
+performance mode applies its 2,000-read working-set cap (Read Stats describes the
 selected or shown reads).
 
 ## Panels
@@ -317,24 +323,24 @@ PNG/SVG/PDF save buttons.
 | Analyze | **Footprints** | Classes, Saved, Co-occupancy | Cmd/Ctrl+click a footprint |
 | Analyze | **Transcription** | Filters, Distribution, Co-occur, Pol II COM | Cmd/Ctrl+click a gene |
 | Analyze | **Read Stats** | Summary, Table, Distributions | Shift+click a read |
-| Analyze | **Co-accessibility** | Matrix | Its tile in the rail |
 | Analyze | **Contacts** | Map, Compare regions, Settings (with a contact map); Compare loci, Compare haplotypes (without one) | In the rail once a `.cool`/`.mcool` is loaded. Haplotype comparison is also in **Regions**. |
 | Analyze | **NFRs** | NFRs, NFR pairs | Its tile in the rail. Runs FiberHMM's `fiberhmm-nfr` on the view: NFR variants and their prevalence, which NFRs open together, motifs at each NFR ([Motifs at NFR variants](lab/workflows/nfr-motifs.md)). |
 | Analyze | **Synchronise regions** | — | Its tile in the rail: oriented maps of several regions, matched-region groups, pooled scans and co-clustering across them. |
 | Analyze | **Insertion lens** | — (with **Identify**) | **Open insertion lens** in the read menu, or **Open this insertion in the lens** on the SV row. The chromatin inside a large insertion; Identify gives candidate TE families and genome copies ([Identify](identify.md)). |
 | Analyze | **Variants** | SNPs, Combinations, SVs | Its tile in the rail. SNPs and small indels in view, the reads grouped by their alleles (or HP tags), SVs; split the reads into panels by allele, combination or SV ([guide](guide.md#variants)). |
+| Workspace | **Plots** | Plot, Gallery | **P**, or **Plots** at the top of the icon strip on the right; ⌘K **Open Plots**; **Open in Plots** in the Clusters, Footprints, Read Stats and Peak panels. Co-accessibility is a plot type here ([Plots](workflows/plots.md)) |
 | View | **Tracks** | — | Add files, JASPAR motifs, sequences; **Browse hubs** (UCSC, ENCODE, ChIP-Atlas); **+ Metaprofile**; **+ Combined track** |
 | View | **Library** | — | Your datasets, runs and watched folders ([The Library](workflows/library.md)) |
 | View | **Labeling** | Rules, Quality | How footprints are coloured; quality filters |
 | View | **Rules** | Peaks, Cluster, Sort, Filter | Reusable peak, cluster, sort and filter rules |
 | View | **Layout** | Layout | Dataset merge, link groups, renaming |
-| View | **Regions** | Regions, Map, Compare haplotypes | **Regions**: saved regions in categories (**Save view**, **Scan regions**, **Import BED**, **Export BED**, N/P to step through a category). **Map**: whole-chromosome or circular map, **Load plasmid map…**, **Open plasmid dataset…**. [Haplotype comparison](workflows/haplotype-comparison.md) |
+| View | **Regions** | Regions, Map, Compare haplotypes | **Regions**: saved regions in categories (**Save view**, **Scan regions**, **Import BED**, **Export BED**, N / Shift+N to step through a category). **Map**: whole-chromosome or circular map, **Load plasmid map…**, **Open plasmid dataset…**. [Haplotype comparison](workflows/haplotype-comparison.md) |
 | Tools | **Primers** | Design (Standard PCR, 3C, 4C), Order list, Capture | Needs the reference FASTA. **Capture** collects regions for capture-probe design. Hidden on `--public` servers |
 | Tools | **Tutorial** | Guided tour, Copilot | See the [User guide](guide.md) and [Copilot](copilot.md) |
 
 Peak-detection rules are in **Rules → Peaks**. Preview features (the
-insert-expanded panels) carry a **Preview** badge; see
-[What 3.0 includes](release-scope.md). Python plugins add their own panels to
+insert-expanded panels, the meta-locus) carry a **Preview** badge; see
+[What 3.1 includes](release-scope.md). Python plugins add their own panels to
 the rail ([Plugins](plugins.md)).
 
 ## Online genomes
@@ -350,6 +356,12 @@ and gene annotation (cached in `~/.fiberhmm/genomes`):
 | mm10 | Mouse (GRCm38) | GENCODE vM25 Basic |
 | dm6 | *D. melanogaster* | Ensembl r113 |
 | sacCer3 | *S. cerevisiae* | Ensembl r113 |
+
+Downloads have no size limit. A genome you load or download here that is larger than the **download warning
+size** (Settings → App; default 4 GB, above every genome here: hg38 and hg19 are about 3.3 GB) asks first and shows
+its size. When the server doesn't say the size, the download warns once it passes the warning size and carries
+on. A FASTA URL opened another way (at start-up, from a session or a link) goes ahead, with a warning in the log. `FIBERBROWSER_DOWNLOAD_WARN_BYTES` sets
+the size for one run; 0 turns the warning off.
 
 ## Motifs from a published logo
 
@@ -393,15 +405,16 @@ to the palette too.
 | ↑ / ↓, + / − | Zoom in / out |
 | Alt+← / Alt+→ | Back / forward in navigation history |
 | R | Reset view: clear clustering, filters, excluded reads and selections |
-| N / P | Next / previous saved region of the current category (Regions) |
+| N / Shift+N | Next / previous saved region of the current category (Regions) |
+| P | Plots workspace: open it, or go back to the browser |
 | Shift+drag a ruler | Highlight a region (with **Highlight** on, a plain drag does too) |
 | Cmd/Ctrl+B | Show / hide the settings sidebar |
 | 1–9 | Focus cluster by number |
 | 0 | Clear cluster focus |
-| Escape | Clear peak selection and cluster focus |
+| Escape | In Plots: back to the browser. Otherwise: clear peak selection and cluster focus |
 | S | Scan for accessibility peaks |
 | [ / ] | Decrease / increase read row height |
-| Cmd/Ctrl+scroll over reads | Change read row height |
+| Shift+scroll over reads | Change read row height |
 | G | Toggle genome overview |
 | ? | Show keyboard shortcuts |
 | Cmd/Ctrl+K | Search commands and settings (the command palette) |

@@ -98,7 +98,7 @@ PUBLIC_ALLOWED: frozenset[tuple[str, str]] = frozenset({
     (_POST, "/api/scan_peaks"), (_POST, "/api/detect_peaks"),
     (_POST, "/api/cluster"), (_POST, "/api/cluster_all"), (_POST, "/api/cluster_expand"),
     (_POST, "/api/cluster_matched_views"),
-    (_POST, "/api/cluster_projection"), (_POST, "/api/cluster/vplot"), (_POST, "/api/assign_to_clusters"),
+    (_POST, "/api/cluster_projection"), (_POST, "/api/cluster_molecules"), (_POST, "/api/cluster/vplot"), (_POST, "/api/assign_to_clusters"),
     (_POST, "/api/dissolve_cluster"), (_POST, "/api/auto_cull_clusters"),
     (_POST, "/api/filter"), (_POST, "/api/filter_by_analysis_rule"), (_POST, "/api/filter_by_transcription_state"),
     (_POST, "/api/sort_reads"), (_POST, "/api/pol2_com"), (_POST, "/api/autozoom"),

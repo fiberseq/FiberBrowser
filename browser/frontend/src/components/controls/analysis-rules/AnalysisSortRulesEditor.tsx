@@ -21,6 +21,16 @@ import {
   summarizeAnalysisRuleScope,
 } from '../../../utils/analysisRules';
 import { AnalysisButton } from '../shared';
+import {
+  HubHitsControls,
+  MoleculeMetricSelect,
+  MoleculeMetricUnit,
+  hubHitsTerm,
+  hubSourceNote,
+  layerFreeScope,
+  moleculeMetricTerm,
+  useHubSelectionHits,
+} from './RuleTermSources';
 
 interface LayerOption {
   value: string;
@@ -67,6 +77,13 @@ const METRIC_OPTIONS: Array<{ value: AnalysisSortMetric; label: string }> = [
   { value: 'rate', label: 'FP rate' },
   { value: 'accessibility', label: 'Accessibility' },
 ];
+
+/** The metric a term is measured by: a molecule metric's value, a hub term's count (else the rule's own). */
+function metricForSource(source: ClusterFeatureRuleTerm['source'] | undefined, metric: AnalysisSortMetric): AnalysisSortMetric {
+  if (source === 'molecule_metric') return 'value';
+  if (source === 'feature_hub') return 'count';
+  return metric === 'value' ? 'count' : metric;
+}
 
 function uid(prefix: string): string {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
@@ -176,6 +193,7 @@ export function AnalysisSortRulesEditor({
   const [message, setMessage] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const ruleLayerLabels = useMemo(() => layerLabelMap(layerOptions), [layerOptions]);
+  const hub = useHubSelectionHits();
 
   const showMessage = (text: string) => {
     setMessage(text);
@@ -187,6 +205,11 @@ export function AnalysisSortRulesEditor({
     updates: Partial<AnalysisSortRule>,
   ): Partial<AnalysisSortRule> => {
     const next = { ...rule, ...updates };
+    const metric = metricForSource(next.terms[0]?.source, next.metric);
+    if (metric !== next.metric) {
+      next.metric = metric;
+      updates = { ...updates, metric };
+    }
     const autoName = buildAnalysisSortRuleAutoName(next, ruleLayerLabels);
     return {
       ...updates,
@@ -399,15 +422,21 @@ export function AnalysisSortRulesEditor({
 
               <div className="mt-2 flex flex-wrap items-center gap-1.5 rounded bg-white px-1.5 py-1 ring-1 ring-gray-200 dark:bg-black/10 dark:ring-white/10">
                 <span className="text-[11px] font-medium text-gray-400">Sort</span>
-                <select
-                  value={rule.metric}
-                  onChange={event => updateRule(rule, { metric: event.target.value as AnalysisSortMetric })}
-                  className="input-tool text-xs"
-                >
-                  {METRIC_OPTIONS.map(option => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
+                {term.source === 'molecule_metric' ? (
+                  <MoleculeMetricUnit metric={term.moleculeMetric} />
+                ) : term.source === 'feature_hub' ? (
+                  <span className="text-[11px] text-gray-500" title="Number of the hits where the read is in the chosen state">hits in state</span>
+                ) : (
+                  <select
+                    value={rule.metric}
+                    onChange={event => updateRule(rule, { metric: event.target.value as AnalysisSortMetric })}
+                    className="input-tool text-xs"
+                  >
+                    {METRIC_OPTIONS.map(option => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                )}
                 <select
                   value={rule.descending ? 'desc' : 'asc'}
                   onChange={event => updateRule(rule, { descending: event.target.value !== 'asc' })}
@@ -430,6 +459,14 @@ export function AnalysisSortRulesEditor({
 	                      applyFootprintGroup(rule, term, footprintGroups[0].id);
 	                    } else if (source === 'transcription_state') {
 	                      applyTranscriptionState(rule, term);
+	                    } else if (source === 'molecule_metric') {
+	                      updateRule(rule, { scope: layerFreeScope(rule.scope), terms: [moleculeMetricTerm(term)] });
+	                    } else if (source === 'feature_hub') {
+	                      if (hub.hits.length === 0) {
+	                        showMessage(`Hub hits: ${hubSourceNote(hub)}.`);
+	                        return;
+	                      }
+	                      updateRule(rule, { scope: layerFreeScope(rule.scope), terms: [hubHitsTerm(term, hub.hits)] });
 	                    } else {
 	                      updateRule(rule, { terms: [{ ...term, source: 'layer', layer: layerOptions[0]?.value ?? null }] });
 	                    }
@@ -446,6 +483,10 @@ export function AnalysisSortRulesEditor({
 		                  <option value="transcription_state" disabled={selectedGenes.length === 0}>
 		                    Pol II state {selectedGenes.length === 0 ? '(select gene first)' : '(Pause/PIC/Elongating)'}
 		                  </option>
+	                  <option value="molecule_metric">Molecule metric</option>
+	                  <option value="feature_hub" disabled={hub.hits.length === 0 && term.source !== 'feature_hub'}>
+	                    Hub hits{hub.hits.length === 0 ? ` (${hubSourceNote(hub)})` : ''}
+	                  </option>
 	                </select>
 
                 {term.source === 'layer' && (
@@ -525,6 +566,25 @@ export function AnalysisSortRulesEditor({
 	                    </select>
 	                    <span className="text-[11px] text-gray-500">uses Transcription panel definitions</span>
 	                  </>
+	                )}
+
+	                {term.source === 'molecule_metric' && (
+	                  <>
+	                    <MoleculeMetricSelect
+	                      value={term.moleculeMetric}
+	                      onChange={metric => updateRuleTerm(rule, term.id, { moleculeMetric: metric })}
+	                    />
+	                    <span className="text-[11px] text-gray-500">per molecule; reads without a value sort last</span>
+	                  </>
+	                )}
+
+	                {term.source === 'feature_hub' && (
+	                  <HubHitsControls
+	                    term={term}
+	                    hub={hub}
+	                    onSnapshot={() => updateRuleTerm(rule, term.id, { hubHits: hub.hits })}
+	                    onState={state => updateRuleTerm(rule, term.id, { hubState: state })}
+	                  />
 	                )}
 	              </div>
 

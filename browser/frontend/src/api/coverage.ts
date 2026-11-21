@@ -1,4 +1,5 @@
 import { fetchJson, fetchJsonSharedGet, withSortedParams } from './sharedFetch';
+import { readPolicyParams } from '../utils/readPolicyParams';
 
 const API_BASE = '/api';
 
@@ -31,7 +32,8 @@ export async function getRandomCoveredWindow(
     min_coverage: Math.max(1, Math.round(minCoverage)).toString(),
   });
   if (datasetId) params.set('dataset_id', datasetId);
-  return fetchJson(`${API_BASE}/reads/random_window?${params}`);
+  // The read track's duplicate / QC-fail toggles: windows of the reads it shows.
+  return fetchJson(`${API_BASE}/reads/random_window?${readPolicyParams(params)}`);
 }
 
 export interface CoverageResponse {
@@ -39,6 +41,22 @@ export interface CoverageResponse {
   max: number;
   /** Reads (molecules) counted in the window: the read panel's reads there before its filters. */
   reads?: number;
+  /** Map correspondence accompanies depth, including bins with no mapped bases (distinct from zero reads). */
+  live_lift?: LiveLiftCoverage;
+}
+
+export interface LiveLiftCoverage {
+  haplotypes: Record<string, { depth: Array<number | null> | null; correspondence: number[] }>;
+  pooled: { depth: Array<number | null> | null; correspondence: number[]; mode: string };
+  hatching: boolean;
+}
+
+export interface CoverageLiftOptions {
+  liftHap?: string | null;
+  liftKey?: string;
+  refreshGeneration?: number;
+  /** Map-only hatching must never pay for BAM decoding or molecular depth. */
+  correspondenceOnly?: boolean;
 }
 
 export function coverageQueryKey(params: URLSearchParams): string {
@@ -53,6 +71,7 @@ export async function getCoverage(
   datasetId?: string,
   options?: RequestInit,
   includeDuplicates = false,
+  lift?: CoverageLiftOptions,
   includeQcFail = false,
   hideUncalled = true,
 ): Promise<CoverageResponse> {
@@ -65,6 +84,11 @@ export async function getCoverage(
   if (datasetId) params.set('dataset_id', datasetId);
   // Duplicate-flagged molecules count only when the read panel shows them.
   if (includeDuplicates) params.set('include_duplicates', 'true');
+  if (lift?.liftHap) params.set('lift_hap', lift.liftHap);
+  // Identity and refresh are URL fields as well as hook keys: shared in-flight requests must not cross settings.
+  if (lift?.liftKey) params.set('lift_key', lift.liftKey);
+  if (lift?.refreshGeneration !== undefined) params.set('refresh_generation', String(lift.refreshGeneration));
+  if (lift?.correspondenceOnly) params.set('lift_correspondence_only', 'true');
   if (includeQcFail) params.set('include_qcfail', 'true');
   // Reads without footprint calls count only when the read panel shows them.
   params.set('hide_uncalled', String(hideUncalled));
@@ -92,5 +116,5 @@ export async function getTopCoveredWindows(span: number, datasetId?: string, n =
   if (genome) params.set('panel_genome', genome);
   // Narrow each window to its reads when they cover much less than span (amplicons).
   if (fit) params.set('fit', 'true');
-  return fetchJson(`${API_BASE}/reads/top_windows?${params}`, init);
+  return fetchJson(`${API_BASE}/reads/top_windows?${readPolicyParams(params)}`, init);
 }

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { isMetaChrom } from '../../features/metaLocus/metaChrom';
 import { useShallow } from 'zustand/react/shallow';
 import { useBrowserStore } from '../../stores/browserStore';
 import { formatBp } from '../../utils/coordinates';
@@ -44,6 +45,7 @@ export function ZoomControls() {
       const result = await findTopLocus(currentSize, undefined, { signal: controller.signal });
       if (isTopLocusStep(result)) {
         setLocus(result);
+        useBrowserStore.getState().recordJump(null, { to: result.window });  // Back (Alt+←) returns here
         setViewport(result.window.chrom, result.window.start, result.window.end);
       } else if (result.reason !== 'cancelled') {
         useBrowserStore.getState().setError(result.message);
@@ -118,7 +120,7 @@ export function ZoomControls() {
       </button>
       <span
         className="hidden sm:inline text-[13px] font-mono tabular-nums text-tool-500 min-w-14 text-center"
-        title="Current viewport width. Use ↑/↓ or +/- to zoom the genomic viewport. Cmd/Ctrl+scroll over reads adjusts row height."
+        title="Current viewport width. Use ↑/↓ or +/- to zoom the genomic viewport. Cmd/Ctrl+scroll zooms the genomic region around the pointer in any panel. Shift+scroll sizes read rows in all panels together."
       >
         {formatBp(currentSize)}
       </span>
@@ -134,7 +136,8 @@ export function ZoomControls() {
 
       {/* Step through the best-covered loci at this zoom, deepest first
           (for sparse or targeted data, where most of the genome is empty). */}
-      <span className="flex items-center gap-1" title={topLocusTitle}>
+      {/* (Not on a meta-locus: its one virtual locus has no "best-covered window" elsewhere.) */}
+      {!isMetaChrom(chrom) && <span className="flex items-center gap-1" title={topLocusTitle}>
         <button
           onClick={handleTopLocus}
           title={topLocusTitle}
@@ -147,7 +150,7 @@ export function ZoomControls() {
           <Crosshair size={14} />
         </button>
         {shownLocus && <span className="text-[11px] tabular-nums text-tool-500" data-testid="top-locus-position">{shownLocus.index + 1}/{shownLocus.total}</span>}
-      </span>
+      </span>}
 
     </div>
   );

@@ -169,15 +169,21 @@ async def get_meta_all(
 
 @router.get("/api/genes")
 async def get_genes(
+    request: Request,
     chrom: str = Query(...),
     start: int = Query(...),
     end: int = Query(...),
     state=Depends(get_state),
 ):
-    """Get genes in region. Response is cached for 5 minutes as gene annotations rarely change."""
+    """Get genes in region. Revalidated on every request (ETag: the loaded annotation), so another annotation's
+    genes are never served from the browser's cache."""
+    from services.read_auxiliary_endpoint import genes_etag
+    tag = genes_etag(state, chrom)
+    if request.headers.get("if-none-match") == tag:
+        return Response(status_code=304, headers={"ETag": tag, "Cache-Control": "no-cache"})
     # Requested on every navigation (for a padded window): pandas work, so off the event loop.
     payload = await asyncio.to_thread(get_genes_payload, state, chrom=chrom, start=start, end=end)
-    return JSONResponse(content=payload["content"], headers=payload["headers"])
+    return JSONResponse(content=payload["content"], headers={**payload["headers"], "ETag": tag})
 
 
 @router.get("/api/fire")
@@ -198,13 +204,17 @@ async def get_coverage(
     bins: int = Query(1000),
     dataset_id: Optional[str] = Query(None),
     include_duplicates: bool = Query(False),
+    lift_hap: Optional[str] = Query(None, description="Live lift: one haplotype's coverage (a split panel)"),
+    lift_correspondence_only: bool = Query(False, description="Live lift: map correspondence only, without decoding BAM records"),
     include_qcfail: bool = Query(False, description="Include SAM QC-fail reads (0x200)"),
     hide_uncalled: bool = Query(True, description="Leave out BAM reads without footprint calls, as the read panel does"),
     state=Depends(get_state),
 ):
     """Return binned read counts across a region (duplicate-flagged molecules
     only with ``include_duplicates``, reads without footprint calls only
-    without ``hide_uncalled``: as the read panel shows them)."""
+    without ``hide_uncalled``: as the read panel shows them). A live-lift
+    dataset's payload adds ``live_lift``: per-haplotype depth and correspondence
+    (hatching where a bin has no correspondence)."""
     # Reads every alignment in the region (3.3 s for 5 Mb of the E02 DddB BAM):
     # off the event loop.
     return await asyncio.to_thread(
@@ -216,6 +226,8 @@ async def get_coverage(
         bins=bins,
         dataset_id=dataset_id,
         include_duplicates=include_duplicates, include_qcfail=include_qcfail,
+        lift_hap=lift_hap,
+        lift_correspondence_only=lift_correspondence_only,
         hide_uncalled=hide_uncalled,
     )
 

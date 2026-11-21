@@ -38,8 +38,18 @@ def get_read_boundaries_from_bam(
                 return []
 
             count = 0
+            from services.graph_lift import lift_hidden_predicate
+            hidden = lift_hidden_predicate(getattr(bam, "header", None))
+            from services.bam_tags import record_passes_call_rule, record_passes_read_policy
             for read in bam.fetch(actual_chrom, int(start), int(end)):
                 if read.is_unmapped or read.is_secondary or read.is_supplementary:
+                    continue
+                if hidden is not None and hidden(read):
+                    continue
+                # The duplicate / QC-fail toggles, then Min footprints' uncalled-read rule (request).
+                if not record_passes_read_policy(read):
+                    continue
+                if not record_passes_call_rule(read):
                     continue
                 boundaries.append((read.reference_start, read.reference_end))
                 count += 1

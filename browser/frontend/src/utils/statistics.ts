@@ -162,7 +162,8 @@ export function bootstrapMedianCI(
   return bootstrapStatisticCI(values, sampleMedian, options);
 }
 
-/** Benjamini-Hochberg adjusted p-values in the same order as the input. */
+/** Benjamini-Hochberg adjusted p-values in the same order as the input: the front end's one BH (non-finite p count as 1),
+ *  pinned to the backend's browser/services/fdr.py (missing="one") by golden values in statistics.test.ts. */
 export function benjaminiHochberg(pValues: number[]): number[] {
   if (pValues.length === 0) return [];
   const indexed = pValues.map((p, index) => ({

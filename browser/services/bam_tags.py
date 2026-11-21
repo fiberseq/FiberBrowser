@@ -1,6 +1,9 @@
 """BAM molecular tag parsing helpers."""
 from __future__ import annotations
 
+from functools import lru_cache
+
+import json
 import re
 from typing import Dict, List, Optional
 
@@ -40,6 +43,48 @@ def has_interval_tags(read, start_tag: str, length_tag: str) -> bool:
 _CALL_GROUPS = ("nuc", "msp", "tf")
 
 
+def ma_head_strand_index(head: str) -> int:
+    """Position of an MA section head's strand character: the first ``+``, ``-`` or ``.`` (FiberHMM 3.2.0's
+    ``parse_ma_tag`` split), -1 when it has none."""
+    return next((i for i, c in enumerate(head) if c in "+-."), -1)
+
+
+# One interval token as FiberHMM's parse_ma_tag reads it (``int(start)``-``int(length)``); empty tokens are skipped.
+# Python's int() also takes digit groups joined by single underscores (1_000).
+_MA_INT = r"\d+(?:_\d+)*"
+_MA_BODY_RE = re.compile(rf"(?:\s*\+?{_MA_INT}\s*-\s*[+-]?{_MA_INT}\s*)?(?:,(?:\s*\+?{_MA_INT}\s*-\s*[+-]?{_MA_INT}\s*)?)*")
+
+
+def ma_tag_is_spec(ma: str) -> bool:
+    """Whether an MA/Ma value parses as FiberHMM 3.2.0's ``parse_ma_tag`` parses it: an integer read length first,
+    and every non-empty section a head with a strand character, a colon and ``start-length`` integer intervals.
+    FiberHMM rejects the whole tag otherwise ("MA head missing strand", a bad interval), so its scan, extract,
+    peaks and uncalled rule see no calls in it; FiberBrowser's MA readers do the same (no calls, no layers)."""
+    pieces = str(ma).split(";")
+    try:
+        int(pieces[0])
+    except ValueError:
+        return False
+    for section in pieces[1:]:
+        if not section:
+            continue
+        head, colon, body = section.partition(":")
+        if not colon or ma_head_strand_index(head) < 0 or not _MA_BODY_RE.fullmatch(body):
+            return False
+    return True
+
+
+def _ma_has_call_group(ma: str) -> bool:
+    """Whether a spec MA/Ma value (``ma_tag_is_spec``) holds a non-empty nuc/msp/tf group."""
+    if not ma_tag_is_spec(ma):
+        return False
+    for section in ma.split(";")[1:]:
+        head, _colon, body = section.partition(":")
+        if head[:ma_head_strand_index(head)] in _CALL_GROUPS and body.strip(","):
+            return True
+    return False
+
+
 def read_has_footprint_calls(read) -> bool:
     """Whether a BAM record carries any footprint caller annotation.
 
@@ -55,13 +100,8 @@ def read_has_footprint_calls(read) -> bool:
         return True
     for tag in ("MA", "Ma"):
         try:
-            if read.has_tag(tag):
-                ma = str(read.get_tag(tag))
-                for section in ma.split(";")[1:]:
-                    head, _, body = section.partition(":")
-                    name = head.rstrip("PQ").rstrip("+-.")
-                    if name in _CALL_GROUPS and body.strip(","):
-                        return True
+            if read.has_tag(tag) and _ma_has_call_group(str(read.get_tag(tag))):
+                return True
         except (KeyError, ValueError, TypeError):
             continue
     for start_tag, length_tag in (("ns", "nl"), ("as", "al")):
@@ -73,6 +113,41 @@ def read_has_footprint_calls(read) -> bool:
         except (ValueError, TypeError):
             continue
     return False
+
+
+def record_passes_call_rule(read, hide_uncalled=None) -> bool:
+    """Min footprints' uncalled-read rule on one BAM record, for paths that read records themselves (not through
+    the compact loader or a working set): kept unless the rule is on and the record has no footprint calls
+    (``read_has_footprint_calls``). ``hide_uncalled`` None: as the request asked (default hide;
+    services/signal_evidence.request_hide_uncalled). As the loaders: a QC-fail record is exempt (shown only by
+    choice; FiberHMM chimeras carry no calls by design), and a supplementary record is kept (record-scoped: its
+    calls sit on the primary)."""
+    if hide_uncalled is None:
+        from services.signal_evidence import request_hide_uncalled
+        hide_uncalled = request_hide_uncalled()
+    if not hide_uncalled:
+        return True
+    if getattr(read, "is_qcfail", False) or getattr(read, "is_supplementary", False):
+        return True
+    return read_has_footprint_calls(read)
+
+
+def record_passes_read_policy(read, include_duplicates=None, include_qcfail=None) -> bool:
+    """The read track's read policy on one BAM record, for paths that read records themselves (not through the
+    compact loader or a working set): duplicate (0x400) and QC-fail (0x200) records are hidden unless shown.
+    None: as the request asked (default hidden; services/signal_evidence.request_include_duplicates /
+    request_include_qcfail)."""
+    if include_duplicates is None:
+        from services.signal_evidence import request_include_duplicates
+        include_duplicates = request_include_duplicates()
+    if include_qcfail is None:
+        from services.signal_evidence import request_include_qcfail
+        include_qcfail = request_include_qcfail()
+    if getattr(read, "is_qcfail", False) and not include_qcfail:
+        return False
+    if getattr(read, "is_duplicate", False) and not include_duplicates:
+        return False
+    return True
 
 
 _ALIGNED_OPS = (0, 7, 8)  # M, =, X
@@ -114,10 +189,11 @@ def _mapped_legacy_count(read, starts, lengths, legacy_frame) -> int:
     # op (M/=/X) right inside the clips (S/H). Anything else (no aligned block, or an I, D,
     # N or P next to a clip) and a single aligned block with insertions go through the
     # loader's exact mapper.
+    # A zero-length op (pysam accepts ``50S0M20I200M``) would pass for an aligned edge: exact mapper.
     head = next((op for op, _length in cigar if op not in (4, 5)), None)
     tail = next((op for op, _length in reversed(cigar) if op not in (4, 5)), None)
     if (aligned_blocks == 0 or head not in (0, 7, 8) or tail not in (0, 7, 8)
-            or (aligned_blocks == 1 and blocks[1])):
+            or (aligned_blocks == 1 and blocks[1]) or any(length == 0 for _op, length in cigar)):
         return _exact_mapped_count(read, starts, lengths)
     first, last = read.query_alignment_start, read.query_alignment_end  # aligned span [first, last)
     leading_clip = first > 0
@@ -154,7 +230,8 @@ def footprint_call_count(read, legacy_frame=None) -> int:
             return _mapped_legacy_count(read, comp_starts, comp_lengths, legacy_frame)
         from services.compact_read_loader import ma_footprint_count
         for tag in ("MA", "Ma"):
-            if read.has_tag(tag):
+            # A rejected MA beside an Ma: the Ma's calls (as read_has_footprint_calls and the loaders take them).
+            if read.has_tag(tag) and (tag == "Ma" or not read.has_tag("Ma") or ma_tag_is_spec(str(read.get_tag(tag)))):
                 return ma_footprint_count(read.get_tag(tag))
     except (KeyError, ValueError, TypeError, AttributeError):
         pass
@@ -446,7 +523,7 @@ def read_has_frame_dependent_annotations(read) -> bool:
                 value = read.get_tag(start_tag)
                 if hasattr(value, "__len__") and len(value):
                     return True
-        if read.has_tag("MA"):
+        if read.has_tag("MA") and ma_tag_is_spec(str(read.get_tag("MA"))):
             for group in str(read.get_tag("MA")).split(";")[1:]:
                 head, _, body = group.partition(":")
                 match = _MA_GROUP_HEAD_RE.match(head)
@@ -577,6 +654,35 @@ M5C_GROUPS = frozenset({"ddda_mcg", "ddda_ucg", "ddda_mcg_hemi"})
 CONSENSUS_MOLECULAR_COORDINATES = "original_source_call_in_molecular_frame"
 
 
+SCAN_CONTRACT_PREFIX = "FIBERHMM-SCAN-MA:v1:"
+
+
+def scan_ma_contracts(header) -> dict:
+    """``group -> contract`` of the fiberhmm-scan MA groups a header declares (``@CO FIBERHMM-SCAN-MA:v1:<json>``;
+    the last valid line of a group wins)."""
+    try:
+        hd = header if isinstance(header, dict) else header.to_dict()
+    except Exception:
+        return {}
+    out = {}
+    for comment in hd.get("CO", []) or []:
+        text = str(comment)
+        if not text.startswith(SCAN_CONTRACT_PREFIX):
+            continue
+        try:
+            value = json.loads(text[len(SCAN_CONTRACT_PREFIX):])
+        except ValueError:
+            continue
+        if isinstance(value, dict) and isinstance(value.get("group"), str):
+            out[value["group"]] = value
+    return out
+
+
+def scan_molecular_groups(header) -> frozenset:
+    """The scan groups a header declares molecular (every scan group is, unless its contract says otherwise)."""
+    return frozenset(g for g, v in scan_ma_contracts(header).items() if v.get("coordinates", "molecular") == "molecular")
+
+
 class MAGroupFrame:
     """The frame of each ``MA`` group of a BAM: FiberHMM's ``fiberhmm.io.annotation_frame.MAGroupFrame`` (3.0.1),
     kept here so FiberBrowser reads the same with FiberHMM 3.0.0 (docs/reference/footprint-tag-frame.md).
@@ -597,6 +703,9 @@ class MAGroupFrame:
     def of_header(cls, header) -> "MAGroupFrame":
         layers = {layer for layer, contract in bam_consensus_contracts(header).items()
                   if isinstance(contract, dict) and contract.get("coordinates") == CONSENSUS_MOLECULAR_COORDINATES}
+        # fiberhmm-scan groups (fpcls, nfrvar, nfrmol, nucsz, ...) are molecular whatever the header rule says
+        # (contract fiberhmm.scan.v1 §6.2): a group named in a FIBERHMM-SCAN-MA line is never mirrored.
+        layers |= scan_molecular_groups(header)
         return cls(bam_ma_aq_tags_are_molecular(header), legacy_tag_frame_report(header)["source"] != "default", layers)
 
     def is_molecular(self, name: str, strand: str) -> bool:
@@ -619,12 +728,20 @@ def ma_group_frame(value) -> MAGroupFrame:
     return value if isinstance(value, MAGroupFrame) else MAGroupFrame(bool(value), False)
 
 
+class FramePolicyError(RuntimeError):
+    """The annotation coordinate policy could not be determined safely."""
+
+
 def bam_ma_group_frame(header) -> MAGroupFrame:
-    """:class:`MAGroupFrame` of a BAM header (SEQ, no evidence, when it can't be read)."""
+    """Read the header frame; policy/import failures must not silently mirror reads.
+
+    Missing optional FiberHMM helpers have their own declared-header fallback.
+    Unexpected runtime errors propagate rather than changing molecular to SEQ.
+    """
     try:
         return MAGroupFrame.of_header(header)
-    except Exception:
-        return MAGroupFrame(False, False)
+    except Exception as exc:
+        raise FramePolicyError(str(exc)) from exc
 
 
 def ma_group_is_molecular(strand: str, header_molecular: bool, header_evidence: bool = False) -> bool:
@@ -708,7 +825,10 @@ def _original_sequence(read) -> Optional[str]:
     return sequence
 
 
-def _decode_mm_ml_calls(read):
+_MM_DELTAS_RE = re.compile(r"[0-9]+(?:,[0-9]+)*")
+
+
+def _decode_mm_ml_calls(read, *, columns=False):
     """Decode raw MM/ML tags (query/SEQ coordinates, as get_aligned_pairs).
 
     Each MM section is decoded with numpy (cumulative deltas into the
@@ -716,6 +836,8 @@ def _decode_mm_ml_calls(read):
     tag, is the same as ``_decode_mm_ml_calls_reference``, which still runs
     for anything outside this path's assumptions (an ML tag that is not a
     uint8 array, a delta written with leading zeros or too many digits).
+    ``columns=True`` keeps each section's positions and probabilities as arrays;
+    nonstandard tags return ``_MM_REFERENCE`` for the caller's fallback.
     """
     import array
     from itertools import repeat
@@ -727,7 +849,7 @@ def _decode_mm_ml_calls(read):
         return []
     ml_values = _get_optional_tag(read, "ML", "Ml")
     if ml_values is not None and not (isinstance(ml_values, array.array) and ml_values.typecode == "B"):
-        return _decode_mm_ml_calls_reference(read)  # not the pysam uint8 array the fast path assumes
+        return _MM_REFERENCE if columns else _decode_mm_ml_calls_reference(read)  # nonstandard ML
 
     original_sequence = _original_sequence(read)
     if original_sequence is None:
@@ -769,6 +891,7 @@ def _decode_mm_ml_calls(read):
         ml_length = 0
 
     max_delta_digits = len(str(sequence_length))
+    long_delta = re.compile(r"[0-9]{%d}" % (max_delta_digits + 1))
     candidate_cache = {}
     calls = []
     ml_index = 0
@@ -776,8 +899,8 @@ def _decode_mm_ml_calls(read):
         section = raw_section.strip()
         if not section:
             continue
-        fields = section.split(",")
-        match = _MM_SECTION_RE.fullmatch(fields[0])
+        header, separator, delta_text = section.partition(',')
+        match = _MM_SECTION_RE.fullmatch(header)
         if match is None:
             _warn_bad_mm_tag(read, "invalid MM section header")
             return None
@@ -790,19 +913,15 @@ def _decode_mm_ml_calls(read):
         else:
             modification_codes = tuple(raw_codes)
 
-        delta_fields = fields[1:]
-        n = len(delta_fields)
-        if n:
-            # == any(not f.isascii() or not f.isdigit() for f in delta_fields)
-            joined = "".join(delta_fields)
-            if "" in delta_fields or not (joined.isascii() and joined.isdigit()):
-                _warn_bad_mm_tag(read, "invalid MM delta")
-                return None
+        n = delta_text.count(',') + 1 if separator else 0
+        if n and _MM_DELTAS_RE.fullmatch(delta_text) is None:
+            _warn_bad_mm_tag(read, "invalid MM delta")
+            return None
         if n > sequence_length:
             _warn_bad_mm_tag(read, "too many MM positions")
             return None
-        if n and max(map(len, delta_fields)) > max_delta_digits:
-            return _decode_mm_ml_calls_reference(read)  # leading zeros or an oversized delta: the original decides
+        if n and long_delta.search(delta_text) is not None:
+            return _MM_REFERENCE if columns else _decode_mm_ml_calls_reference(read)  # unusual delta
 
         if fundamental_base not in candidate_cache:
             if fundamental_base == "N":
@@ -816,7 +935,7 @@ def _decode_mm_ml_calls(read):
         if not n:
             continue
 
-        deltas = np.fromiter(map(int, delta_fields), dtype=np.int64, count=n)
+        deltas = np.fromstring(delta_text, dtype=np.int64, sep=",")
         if int(deltas.max()) > sequence_length:
             _warn_bad_mm_tag(read, "MM delta exceeds sequence length")
             return None
@@ -834,16 +953,17 @@ def _decode_mm_ml_calls(read):
             probs = np.full(total, -1, dtype=np.int64)
             available = ml_array[ml_index:ml_index + total]
             probs[:len(available)] = available
-            prob_list = probs.tolist()
         else:
-            prob_list = [-1] * total
+            probs = np.full(total, -1, dtype=np.int64)
         ml_index += total
-        if n_codes == 1:
+        if columns:
+            calls.append((fundamental_base, modification_codes, positions, probs.reshape(n, n_codes)))
+        elif n_codes == 1:
             calls.extend(zip(repeat(fundamental_base, total), repeat(modification_codes[0], total),
-                             positions.tolist(), prob_list))
+                             positions.tolist(), probs.tolist()))
         else:
             calls.extend(zip(repeat(fundamental_base, total), modification_codes * n,
-                             np.repeat(positions, n_codes).tolist(), prob_list))
+                             np.repeat(positions, n_codes).tolist(), probs.tolist()))
 
     if ml_values is not None and ml_index != ml_length:
         _warn_bad_mm_tag(read, "ML length does not match MM calls")
@@ -993,7 +1113,68 @@ def _decode_mm_ml_calls_reference(read):
     return calls
 
 
+_MM_REFERENCE = object()
+
+
 def parse_mm_ml_tags_by_type(read, region_start, region_end, ml_threshold=125):
+    """Keep MM sections as arrays through quality filtering and reference mapping.
+
+    The tuple-returning decoder remains available to callers and unusual tags
+    retain the reference path. Padding retains pysam's aligned-pairs semantics.
+    """
+    import numpy as np
+
+    cigar = getattr(read, 'cigartuples', None)
+    if not cigar or any(op not in (0, 1, 2, 3, 4, 5, 7, 8) for op, _ in cigar):
+        return _parse_mm_ml_tags_by_type_reference(read, region_start, region_end, ml_threshold)
+    sections = _decode_mm_ml_calls(read, columns=True)
+    if sections is _MM_REFERENCE:
+        return _parse_mm_ml_tags_by_type_reference(read, region_start, region_end, ml_threshold)
+    by_type = _empty_mm_layers()
+    if not sections:
+        return by_type
+    # Map only called bases. Expanding all of SEQ to a Python reference-position
+    # list (then an array) costs more than decoding sparse modification calls.
+    starts, ends, offsets = [], [], []
+    q, r = 0, read.reference_start
+    for op, length in cigar:
+        if op in (0, 7, 8):
+            starts.append(q)
+            ends.append(q + length)
+            offsets.append(r - q)
+            q += length
+            r += length
+        elif op in (1, 4):
+            q += length
+        elif op in (2, 3):
+            r += length
+    if not ends:
+        return by_type
+    starts, ends, offsets = (np.asarray(values, dtype=np.int64) for values in (starts, ends, offsets))
+    for base, codes, positions, probs in sections:
+        for i, code in enumerate(codes):
+            key = 'm6a' if code == 'a' else 'm5c' if code == 'm' else 'deam' if code in ('u', 55797) else None
+            if key is None:
+                continue
+            query = positions[probs[:, i] >= ml_threshold]
+            blocks = np.searchsorted(ends, query, side='right')
+            valid = blocks < len(ends)
+            query, blocks = query[valid], blocks[valid]
+            aligned = query >= starts[blocks]
+            mapped = query[aligned] + offsets[blocks[aligned]]
+            relative = (mapped[(mapped >= region_start) & (mapped < region_end)] - region_start).tolist()
+            if key == 'deam':
+                flavor = (0 if base.upper() == 'G' else 1) ^ bool(getattr(read, 'is_reverse', False))
+                by_type[key].extend([pos, flavor] for pos in relative)
+            else:
+                by_type[key].extend(relative)
+    by_type['m6a'].sort()
+    by_type['m5c'].sort()
+    by_type['deam'].sort(key=lambda event: event[0])
+    return by_type
+
+
+def _parse_mm_ml_tags_by_type_reference(read, region_start, region_end, ml_threshold=125):
     """
     Parse methylation positions from BAM MM/ML tags, split by modification type.
 
@@ -1295,6 +1476,8 @@ def parse_deamination_opportunities(read, region_start, region_end, deam_events=
                 return {"ct": [], "ga": []}
             joint_masks = {'ct': set(), 'ga': set()}
             try:
+                if not ma_tag_is_spec(str(read.get_tag('MA'))):
+                    return {"ct": [], "ga": []}
                 for group in str(read.get_tag('MA')).split(';')[1:]:
                     head, sep, body = group.partition(':')
                     if head not in ('deam+', 'deam-') or not sep: continue
@@ -1389,6 +1572,223 @@ def parse_deamination_opportunities(read, region_start, region_end, deam_events=
 DEAM_STRAND_LAYERS = {"+": "deam_ct", "-": "deam_ga"}
 
 
+def ma_intervals(intervals_str):
+    """Immutable SEQ-independent MA parse, shared by footprint and layer readers.
+
+    Annotation offsets count malformed interval tokens too; AQ offsets count
+    only valid intervals. Neither mapping, frame nor viewport is cached.
+    Bound the cache by section count and bypass unusually large sections.
+    """
+    return (_ma_intervals if len(intervals_str) > 32768 else _cached_ma_intervals)(intervals_str)
+
+
+@lru_cache(maxsize=1024)
+def _cached_ma_intervals(intervals_str):
+    return _ma_intervals(intervals_str)
+
+
+def _ma_intervals(intervals_str):
+    parsed = []
+    annotations = 0
+    for token in intervals_str.split(','):
+        token = token.strip()
+        if not token or '-' not in token:
+            continue
+        annotation = annotations
+        annotations += 1
+        try:
+            start, length = map(int, token.split('-', 1))
+        except ValueError:
+            continue
+        parsed.append((start - 1, start - 1 + length, length, annotation))
+    return annotations, tuple(parsed)
+
+
+@lru_cache(maxsize=1024)
+def _cached_ma_query_arrays(intervals_str):
+    return _ma_query_arrays(ma_intervals(intervals_str)[1])
+
+
+def _ma_query_arrays(parsed):
+    import numpy as np
+    n = len(parsed)
+    starts = np.fromiter((iv[0] for iv in parsed), dtype=np.int64, count=n)
+    ends = np.fromiter((iv[1] for iv in parsed), dtype=np.int64, count=n)
+    starts.flags.writeable = False
+    ends.flags.writeable = False
+    return starts, ends
+
+
+class _MASection:
+    """One MA section's intervals as the parser walks them: (query start, query end, length, AQ offset, annotation
+    name, call index), SEQ frame, sorted by start (reverse reads in molecular coordinates are flipped and re-sorted,
+    stably, as before). Tuples are built on access, so intervals outside the view cost nothing."""
+
+    __slots__ = ("parsed", "intervals_str", "aq_base", "n_qual", "names", "ann_base", "flip", "order", "_arrays")
+
+    def __init__(self, parsed, intervals_str, aq_base, n_qual, names, ann_base, flip_length):
+        self.parsed, self.intervals_str = parsed, intervals_str
+        self.aq_base, self.n_qual, self.names, self.ann_base = aq_base, n_qual, names, ann_base
+        self.flip = int(flip_length or 0)
+        self._arrays = None
+        if self.flip and parsed:
+            import numpy as np
+            _starts, ends = self.query_arrays(raw=True)
+            self.order = np.argsort(self.flip - ends, kind="stable").tolist()
+        else:
+            self.order = None
+
+    def __len__(self):
+        return len(self.parsed)
+
+    def __getitem__(self, i):
+        k = self.order[i] if self.order is not None else i
+        qs, qe, length, ann = self.parsed[k]
+        if self.flip:
+            qs, qe = self.flip - qe, self.flip - qs
+        a = self.ann_base + ann
+        return (qs, qe, length, self.aq_base + k * self.n_qual, self.names[a] if a < len(self.names) else '', k)
+
+    def __iter__(self):
+        return (self[i] for i in range(len(self.parsed)))
+
+    def query_arrays(self, raw=False):
+        """(query starts, query ends) as int64 arrays in walk order (``raw``: MA order, unflipped)."""
+        if raw or self._arrays is None:
+            base = (_ma_query_arrays(self.parsed) if len(self.intervals_str) > 32768
+                    else _cached_ma_query_arrays(self.intervals_str))
+            if raw:
+                return base
+            if self.flip:
+                import numpy as np
+                order = np.asarray(self.order, dtype=np.int64)
+                starts, ends = base
+                base = (self.flip - ends[order], self.flip - starts[order])
+            self._arrays = base
+        return self._arrays
+
+
+def _ma_aligned_arrays(mapper, intervals):
+    """The standard CIGAR mapper's MA interval projection, batched: (indices of the mapped intervals, their
+    reference starts, their reference ends) as numpy arrays; None for adapters and short lists (stay scalar)."""
+    from models.domain import CigarCoordMapper
+    import numpy as np
+
+    if type(mapper) is not CigarCoordMapper or len(intervals) < 16:
+        return None
+    if getattr(mapper.aligned_query_interval_to_ref, '__func__', None) is not CigarCoordMapper.aligned_query_interval_to_ref:
+        return None
+    if not mapper._aligned_starts:
+        empty = np.zeros(0, dtype=np.int64)
+        return empty, empty, empty
+    try:
+        if isinstance(intervals, _MASection):
+            q0, q1 = intervals.query_arrays()
+        else:
+            query = np.asarray([(iv[0], iv[1]) for iv in intervals], dtype=np.int64)
+            q0, q1 = query[:, 0], query[:, 1]
+    except (OverflowError, ValueError):
+        return None
+    # Inclusive query endpoints in the scalar mapper, half-open in MA.
+    arrays = mapper._aligned_arrays
+    if arrays is None:
+        # One read's sections share its mapper: convert its aligned blocks once.
+        arrays = mapper._aligned_arrays = tuple(np.asarray(values, dtype=np.int64) for values in (
+            mapper._aligned_starts, mapper._aligned_ends, mapper._aligned_offsets))
+    starts, ends, offsets = arrays
+    first = np.searchsorted(ends, q0, side='right')
+    last = np.searchsorted(starts, q1 - 1, side='right') - 1
+    valid = (q1 > q0) & (first <= last)
+    indices = np.flatnonzero(valid)
+    first, last = first[valid], last[valid]
+    left = np.maximum(q0[valid], starts[first]) + offsets[first]
+    right = np.minimum(q1[valid], ends[last]) + offsets[last]
+    return indices, left, right
+
+
+def _ma_aligned_intervals(mapper, intervals):
+    """Batch the standard CIGAR mapper's MA interval projection; adapters stay scalar."""
+    arrays = _ma_aligned_arrays(mapper, intervals)
+    if arrays is None:
+        return None
+    indices, left, right = arrays
+    result = [(None, None)] * len(intervals)
+    for index, lo, hi in zip(indices.tolist(), left.tolist(), right.tolist()):
+        result[index] = (lo, hi)
+    return result
+
+
+def _ma_region_plan(mapper, intervals, region_start: int, region_end: int, keep_unmapped: bool):
+    """For a batched section: (interval indices that can reach [region_start, region_end), their reference spans by
+    index, whether any interval maps to a non-empty span). Intervals mapped wholly outside the region are left out
+    before the per-interval loop (it would skip them); unmapped ones stay when ``keep_unmapped`` (nucleosome envelope
+    groups map them to the nearest aligned base). None: not batched, walk every interval."""
+    import numpy as np
+
+    arrays = _ma_aligned_arrays(mapper, intervals)
+    if arrays is None:
+        return None
+    indices, left, right = arrays
+    present = bool(np.any(right > left))
+    inside = (right > region_start) & (left < region_end)
+    keep = indices[inside]
+    spans = dict(zip(keep.tolist(), zip(left[inside].tolist(), right[inside].tolist())))
+    if keep_unmapped and len(indices) < len(intervals):
+        unmapped = np.setdiff1d(np.arange(len(intervals)), indices, assume_unique=True)
+        order = np.union1d(keep, unmapped).tolist()
+        for index in unmapped.tolist():
+            spans[index] = (None, None)
+    else:
+        order = keep.tolist()
+    return order, spans, present
+
+
+def _aq_array(aq_values, aq_list):
+    import numpy as np
+    try:
+        return np.asarray(aq_values if aq_values is not None else aq_list, dtype=np.int64)
+    except (TypeError, ValueError):
+        return np.asarray(aq_list, dtype=np.int64)
+
+
+def _ma_fast_section(section, walk, spans, region_start: int, region_end: int, aq, n_qual: int, keep_source: bool,
+                     edges):
+    """The per-interval loop of parse_ma_aq_tags_into_layers for a batched section, in numpy: (intervals, source
+    intervals, annotation names, quality columns or None), exactly as the loop builds them. None (use the loop)
+    when an interval to walk has no aligned base (envelope groups) or a quality slice would run past the AQ bytes."""
+    import numpy as np
+
+    pairs = [spans[i] for i in walk]
+    if any(p[0] is None for p in pairs):
+        return None
+    n = len(pairs)
+    lo = np.fromiter((p[0] for p in pairs), dtype=np.int64, count=n)
+    hi = np.fromiter((p[1] for p in pairs), dtype=np.int64, count=n)
+    cs = np.maximum(lo, region_start)
+    ce = np.minimum(hi, region_end)
+    keep = ce > cs
+    kept_walk = [i for i, k in zip(walk, keep.tolist()) if k]
+    parsed, order, names, ann_base = section.parsed, section.order, section.names, section.ann_base
+    ks = [order[i] for i in kept_walk] if order is not None else kept_walk
+    lengths = [int(parsed[k][2]) for k in ks]
+    n_names = len(names)
+    annotation_names = [str((names[ann_base + parsed[k][3]] if ann_base + parsed[k][3] < n_names else '') or "") for k in ks]
+    intervals = [[a, b, l] for a, b, l in zip((cs[keep] - region_start).tolist(), (ce[keep] - region_start).tolist(), lengths)]
+    sources = ([[a, b, l] for a, b, l in zip((lo[keep] - region_start).tolist(), (hi[keep] - region_start).tolist(), lengths)]
+               if keep_source else [])
+    if not n_qual:
+        return intervals, sources, annotation_names, None
+    starts = section.aq_base + np.asarray(ks, dtype=np.int64) * n_qual
+    if len(starts) and (aq is None or int(starts.max()) + n_qual > len(aq)):
+        return None
+    columns = [aq[starts + c] for c in range(n_qual)] if len(starts) else [np.zeros(0, dtype=np.int64) for _ in range(n_qual)]
+    if edges is not None:
+        left, right = edges
+        if 0 <= left < n_qual and 0 <= right < n_qual:
+            columns[left], columns[right] = columns[right], columns[left]
+    return intervals, sources, annotation_names, [c.tolist() for c in columns]
+
+
 def parse_ma_aq_tags_into_layers(ma_str: str, aq_values, coord_mapper,
                                  region_start: int, region_end: int,
                                  include_names=None,
@@ -1401,7 +1801,9 @@ def parse_ma_aq_tags_into_layers(ma_str: str, aq_values, coord_mapper,
                                  skip_query_spans=None,
                                  skip_span_layers=(),
                                  skipped_in_region=None,
-                                 present_names=None) -> Dict[str, Dict]:
+                                 skipped_spans=None,
+                                 present_names=None,
+                                 call_meta=None) -> Dict[str, Dict]:
     """Parse fiberseq MA:Z + AQ:B:C tags into a layers dict.
 
     By default MA/AQ intervals are treated as SEQ/query-frame offsets, matching
@@ -1418,17 +1820,23 @@ def parse_ma_aq_tags_into_layers(ma_str: str, aq_values, coord_mapper,
     ``skip_span_layers`` sections that are left out (dropped read-end
     footprints); their quality bytes and names are still stepped over.
     ``skipped_in_region``: a list that receives the layer name of each skipped
-    call that would have been drawn in the region.
+    call that would have been drawn in the region; ``skipped_spans`` one that
+    receives its absolute reference span (live lift's per-record rules).
     ``present_names``: a set receiving mapped layer names before viewport clipping.
+    ``call_meta``: ``(read_length, lead_hard_clip, is_reverse)`` of the record, for
+    live lift (services/lift): each layer then carries ``_fiberbrowser_calls``,
+    parallel to its intervals, ``[call_id, mol_start, mol_end)`` with the stable
+    ``call_id`` ``"MA<section>:<index>"`` and the call's molecular span.
     """
     group_frame = ma_group_frame(tags_are_molecular)
     if not ma_str or not isinstance(ma_str, str):
         return {}
     parts = ma_str.split(";")
-    if len(parts) < 2:
+    if len(parts) < 2 or not ma_tag_is_spec(ma_str):
         return {}
 
     aq_list = list(aq_values) if include_qualities and aq_values is not None else []
+    aq_array = None  # numpy view of the AQ bytes, made on first use by the batched path
     aq_cursor = 0
     annotation_names = (
         [name if name != "." else "" for name in an_str.split(",")]
@@ -1460,6 +1868,19 @@ def parse_ma_aq_tags_into_layers(ma_str: str, aq_values, coord_mapper,
         ("tf_cross_consensus", 6): ["tq", "fi", "fq", "op", "sq", "q0"],
         ("msp", 1): ["aq"],
         ("fp_v2", 1): ["nq"],
+        # fiberhmm-scan nuc groups (CONTRACTS §11.3, their header declarations): the coarse code (+16 TF),
+        # round(255 x posterior), the z byte (FiberHMM before 3.2.0 wrote a named-class code second: its position
+        # keeps its name and nothing reads it, named classes were removed; nuc/sizebytes.py); the segment / event
+        # code, posterior or 10 x LLR, q-hat - 100 or the event's count.
+        ("nucsz", 4): ["coarse", "named", "posterior", "z"],
+        ("nucsz", 3): ["coarse", "posterior", "z"],
+        ("nucseg", 3): ["code", "posterior_or_llr10", "q_hat_minus_100_or_count"],
+        # nucreg (FiberHMM fiberhmm.nuc.regularity): the score byte (1 + round(clip((log2 SNR + 2) / 10) x 254), 0 =
+        # no score) and the period byte (period - 100, 0 = none).
+        ("nucreg", 2): ["score", "period"],
+        # nucpatch (fiberhmm.nuc.patches): score byte, period byte, flags (bit 0/1 open start/end, 2/3 snapped
+        # start/end in molecular orientation, 4 low regularity)
+        ("nucpatch", 3): ["score", "period", "flags"],
     }
 
     # One logical MA type may be written as several strand sections (e.g.
@@ -1469,22 +1890,22 @@ def parse_ma_aq_tags_into_layers(ma_str: str, aq_values, coord_mapper,
     # skipped (its AQ bytes and AN names are still stepped over).
     spec_by_name: Dict[str, str] = {}
 
-    for part in parts[1:]:
+    for section_index, part in enumerate(parts[1:]):
         if ":" not in part:
             continue
         type_sig, intervals_str = part.split(":", 1)
-        strand_chars = ("+", "-", ".")
-        strand_idx = -1
-        for sc in strand_chars:
-            idx = type_sig.find(sc)
-            if idx >= 0:
-                strand_idx = idx
-                break
+        strand_idx = ma_head_strand_index(type_sig)
         if strand_idx < 0:
             continue
         name = type_sig[:strand_idx]
         qualspec = type_sig[strand_idx + 1:]
         if not name:
+            # A nameless group (FiberHMM reads it, no layer has it): its quality bytes and names are stepped over,
+            # so the next group's line up.
+            interval_count = sum(1 for iv_str in intervals_str.split(",") if iv_str.strip() and "-" in iv_str)
+            if include_qualities:
+                aq_cursor += len(qualspec) * interval_count
+            ann_cursor += interval_count
             continue
         strand_layer = DEAM_STRAND_LAYERS.get(type_sig[strand_idx]) if name == "deam" else None
         want_strand_layer = strand_layer is not None and (include_set is None or strand_layer in include_set)
@@ -1529,29 +1950,11 @@ def parse_ma_aq_tags_into_layers(ma_str: str, aq_values, coord_mapper,
             ann_cursor += interval_count
             continue
 
-        parsed_intervals = []
-        for iv_str in intervals_str.split(","):
-            iv_str = iv_str.strip()
-            if not iv_str or "-" not in iv_str:
-                continue
-            ann_name = annotation_names[ann_cursor] if ann_cursor < len(annotation_names) else ""
-            ann_cursor += 1
-            try:
-                s_str, l_str = iv_str.split("-", 1)
-                s_one = int(s_str)
-                l = int(l_str)
-            except ValueError:
-                continue
-
-            if not keep_layer:
-                aq_cursor += n_qual_per
-                continue
-
-            query_start = s_one - 1
-            query_end = query_start + l
-            parsed_intervals.append((query_start, query_end, l, aq_cursor, ann_name))
-            if include_qualities:
-                aq_cursor += n_qual_per
+        annotation_count, parsed = ma_intervals(intervals_str)
+        section_aq, section_ann = aq_cursor, ann_cursor
+        ann_cursor += annotation_count
+        if include_qualities:
+            aq_cursor += len(parsed) * n_qual_per
 
         # Molecular -> SEQ frame for reverse reads. Flipping reverses interval
         # order, so re-sort by SEQ start (the qual cursor rides along with each
@@ -1563,18 +1966,14 @@ def parse_ma_aq_tags_into_layers(ma_str: str, aq_values, coord_mapper,
         molecular=(group_frame.is_molecular(name, type_sig[strand_idx])
                    or contract.get('coordinates')==CONSENSUS_MOLECULAR_COORDINATES)
         flip_molecular_reverse = bool(molecular and is_reverse and read_length)
-        if flip_molecular_reverse:
-            parsed_intervals = sorted(
-                (
-                    (read_length - qe, read_length - qs, l, qstart, ann)
-                    for (qs, qe, l, qstart, ann) in parsed_intervals
-                ),
-                key=lambda t: t[0],
-            )
+        # (query start, query end, length, AQ offset, annotation name, call index) per interval, in SEQ-frame start
+        # order, built only for the intervals the loop walks.
+        parsed_intervals = _MASection(parsed, intervals_str, section_aq, n_qual_per if include_qualities else 0,
+                                      annotation_names, section_ann, read_length if flip_molecular_reverse else 0)
 
         query_positions = []
         if not callable(query_interval_to_ref):
-            for (q_start, q_end, _l, _qstart, _ann) in parsed_intervals:
+            for (q_start, q_end, _l, _qstart, _ann, _k) in parsed_intervals:
                 query_positions.extend([q_start, q_end - 1])
 
         if parsed_intervals and not callable(query_interval_to_ref):
@@ -1589,69 +1988,112 @@ def parse_ma_aq_tags_into_layers(ma_str: str, aq_values, coord_mapper,
         else:
             mapped_positions = []
 
+        # Batched sections walk only the intervals that can reach the region (the rest would be skipped below);
+        # "present" (mapped before viewport clipping) is decided over every interval.
+        plan = (_ma_region_plan(coord_mapper, parsed_intervals, region_start, region_end, name in NUC_ENVELOPE_GROUPS)
+                if callable(query_interval_to_ref) else None)
+        if plan is not None:
+            walk, aligned_spans, any_present = plan
+            if present_names is not None and any_present:
+                present_names.add(name)
+        else:
+            walk, aligned_spans = range(len(parsed_intervals)), None
         layer_annotation_names = []
+        layer_calls = []
         keep_source_intervals = "fi" in qual_names
         skip_here = skip_query_spans if skip_query_spans and name in skip_span_layers else None
-        for interval_index, (query_start, query_end, l, qual_start, ann_name) in enumerate(parsed_intervals):
-            if callable(query_interval_to_ref):
-                ref_start, ref_end = query_interval_to_ref(query_start, query_end - 1)
-                if ref_start is None or ref_end is None:
-                    continue
-            else:
-                ref_start = mapped_positions[interval_index * 2]
-                ref_end = mapped_positions[interval_index * 2 + 1]
-                if ref_start is None:
-                    continue
-                if ref_end is not None:
-                    ref_end += 1
-                else:
-                    ref_end = ref_start + l
-
-            if present_names is not None and ref_end > ref_start:
-                present_names.add(name)
-            cs = max(ref_start, region_start)
-            ce = min(ref_end, region_end)
-            if ce <= cs:
+        fast = None
+        if (plan is not None and not skip_here and call_meta is None
+                and not (flip_molecular_reverse and name == "nucpatch")):
+            if aq_array is None and include_qualities and n_qual_per > 0:
+                aq_array = _aq_array(aq_values, aq_list)
+            fast = _ma_fast_section(parsed_intervals, walk, aligned_spans, region_start, region_end, aq_array,
+                                    n_qual_per if include_qualities else 0, keep_source_intervals,
+                                    (edge_l_idx, edge_r_idx) if flip_molecular_reverse else None)
+        if fast is not None:
+            layer_intervals, layer_source_intervals, layer_annotation_names, qualities = fast
+            if not layer_intervals:
                 continue
-            if skip_here and (query_start, query_end) in skip_here:
-                if skipped_in_region is not None:
-                    skipped_in_region.append(name)
-                continue
-            interval = [int(cs - region_start), int(ce - region_start), int(l)]
-            source_interval = [
-                int(ref_start - region_start),
-                int(ref_end - region_start),
-                int(l),
-            ] if keep_source_intervals else None
-            if include_qualities and n_qual_per > 0:
-                qual_slice = list(aq_list[qual_start:qual_start + n_qual_per])
-                # Reverse molecular read: molecular-left is genomic-right.
-                if (flip_molecular_reverse and edge_l_idx >= 0 and edge_r_idx >= 0
-                        and edge_l_idx < len(qual_slice) and edge_r_idx < len(qual_slice)):
-                    qual_slice[edge_l_idx], qual_slice[edge_r_idx] = (
-                        qual_slice[edge_r_idx], qual_slice[edge_l_idx])
-                ivs.append((interval, source_interval, qual_slice, ann_name))
-            else:
-                layer_intervals.append(interval)
-                if keep_source_intervals:
-                    layer_source_intervals.append(source_interval)
-                layer_annotation_names.append(str(ann_name or ""))
-
-        if not ivs and not layer_intervals:
-            continue
-
-        if include_qualities and n_qual_per > 0:
-            layer_intervals = [x[0] for x in ivs]
-            if keep_source_intervals:
-                layer_source_intervals = [x[1] for x in ivs]
-            layer_annotation_names = [str(x[3] or "") for x in ivs]
-            qualities = [
-                [int(x[2][i]) if i < len(x[2]) else 0 for x in ivs]
-                for i in range(n_qual_per)
-            ]
         else:
-            qualities = None
+            for interval_index in walk:
+                query_start, query_end, l, qual_start, ann_name, call_index = parsed_intervals[interval_index]
+                if callable(query_interval_to_ref):
+                    ref_start, ref_end = (aligned_spans[interval_index] if aligned_spans is not None
+                                          else query_interval_to_ref(query_start, query_end - 1))
+                    if (ref_start is None or ref_end is None) and name in NUC_ENVELOPE_GROUPS:
+                        # A nucleosome mark with no aligned base (inside an insertion or a clip): drawn as the nearest
+                        # aligned base, as fiberhmm-scan gives it a zero-width envelope there (_ref_envelope).
+                        ref_start, ref_end = _nearest_aligned_base(coord_mapper, query_start, query_end)
+                    if ref_start is None or ref_end is None:
+                        continue
+                else:
+                    ref_start = mapped_positions[interval_index * 2]
+                    ref_end = mapped_positions[interval_index * 2 + 1]
+                    if ref_start is None:
+                        continue
+                    if ref_end is not None:
+                        ref_end += 1
+                    else:
+                        ref_end = ref_start + l
 
+                if present_names is not None and ref_end > ref_start:
+                    present_names.add(name)
+                cs = max(ref_start, region_start)
+                ce = min(ref_end, region_end)
+                if ce <= cs:
+                    continue
+                if skip_here and (query_start, query_end) in skip_here:
+                    if skipped_in_region is not None:
+                        skipped_in_region.append(name)
+                    if skipped_spans is not None:
+                        skipped_spans.append([int(cs), int(ce)])
+                    continue
+                interval = [int(cs - region_start), int(ce - region_start), int(l)]
+                if call_meta is not None:
+                    layer_calls.append([f"MA{section_index}:{call_index}",
+                                        *seq_span_to_molecular(query_start, query_end, *call_meta)])
+                source_interval = [
+                    int(ref_start - region_start),
+                    int(ref_end - region_start),
+                    int(l),
+                ] if keep_source_intervals else None
+                if include_qualities and n_qual_per > 0:
+                    qual_slice = list(aq_list[qual_start:qual_start + n_qual_per])
+                    # Reverse molecular read: molecular-left is genomic-right.
+                    if (flip_molecular_reverse and edge_l_idx >= 0 and edge_r_idx >= 0
+                            and edge_l_idx < len(qual_slice) and edge_r_idx < len(qual_slice)):
+                        qual_slice[edge_l_idx], qual_slice[edge_r_idx] = (
+                            qual_slice[edge_r_idx], qual_slice[edge_l_idx])
+                    if flip_molecular_reverse and name == "nucpatch" and len(qual_slice) > 2:
+                        from services.nuc.layers import flip_patch_flags
+                        qual_slice[2] = flip_patch_flags(qual_slice[2])
+                    ivs.append((interval, source_interval, qual_slice, ann_name))
+                else:
+                    layer_intervals.append(interval)
+                    if keep_source_intervals:
+                        layer_source_intervals.append(source_interval)
+                    layer_annotation_names.append(str(ann_name or ""))
+
+            if not ivs and not layer_intervals:
+                continue
+
+            if include_qualities and n_qual_per > 0:
+                layer_intervals = [x[0] for x in ivs]
+                if keep_source_intervals:
+                    layer_source_intervals = [x[1] for x in ivs]
+                layer_annotation_names = [str(x[3] or "") for x in ivs]
+                qualities = [
+                    [int(x[2][i]) if i < len(x[2]) else 0 for x in ivs]
+                    for i in range(n_qual_per)
+                ]
+            else:
+                qualities = None
+
+        if name == "nucsz" and qualities is not None and len(qual_names) == 4 and qual_names[1] == "named":
+            # FiberHMM before 3.2.0: a named-class byte second. Named classes were removed (owner, 20 Nov 2026):
+            # the byte is dropped here, so no picker, gate or rule can read it (nuc/sizebytes.py).
+            qualities = [qualities[0], qualities[2], qualities[3]]
+            qual_names = ["coarse", "posterior", "z"]
         layer_payload = {
             "intervals": layer_intervals,
             "qualities": qualities,
@@ -1664,6 +2106,8 @@ def parse_ma_aq_tags_into_layers(ma_str: str, aq_values, coord_mapper,
         if any(layer_annotation_names):
             layer_payload["annotation_names"] = layer_annotation_names
             layer_payload["circular_ids"] = layer_annotation_names
+        if call_meta is not None:
+            layer_payload["_fiberbrowser_calls"] = layer_calls
 
         if (family_contracts or {}).get(name,{}).get('fq','').startswith('zero_unavailable'):
             layer_payload['family_confidence_kind']='unavailable'
@@ -1681,6 +2125,40 @@ def parse_ma_aq_tags_into_layers(ma_str: str, aq_values, coord_mapper,
             layers[name] = layer_payload
 
     return layers
+
+
+# fiberhmm-scan nucleosome groups keep marks with no aligned base at the nearest aligned base (CONTRACTS §6.2).
+NUC_ENVELOPE_GROUPS = frozenset({"nucsz", "nucseg", "nucreg", "nucpatch"})
+
+
+def _nearest_aligned_base(coord_mapper, query_start: int, query_end: int):
+    """(ref, ref + 1) at the aligned base nearest a SEQ span's midpoint (block boundaries, as FiberHMM's
+    ``_ref_envelope``), or (None, None) when the record has no aligned base."""
+    starts = getattr(coord_mapper, "_aligned_starts", None)
+    ends = getattr(coord_mapper, "_aligned_ends", None)
+    offsets = getattr(coord_mapper, "_aligned_offsets", None)
+    if not starts or ends is None or offsets is None:
+        return None, None
+    mid = (query_start + query_end) / 2.0
+    best = None
+    for q0, q1, off in zip(starts, ends, offsets):
+        for q in (q0, q1 - 1):
+            d = abs(q - mid)
+            if best is None or d < best[0]:
+                best = (d, q + off)
+    p = int(best[1])
+    return p, p + 1
+
+
+def seq_span_to_molecular(seq_start: int, seq_end: int, read_length: int, lead_hard_clip: int,
+                          is_reverse: bool) -> list:
+    """A half-open SEQ-frame query span as a half-open molecular span (the
+    original read, hard clips included; reverse records count from the read's
+    other end)."""
+    a, b = int(seq_start) + int(lead_hard_clip), int(seq_end) + int(lead_hard_clip)
+    if is_reverse:
+        return [int(read_length) - b, int(read_length) - a]
+    return [a, b]
 
 
 def _merge_layer_sections(existing: Dict, section: Dict) -> None:
@@ -1720,6 +2198,11 @@ def _merge_layer_sections(existing: Dict, section: Dict) -> None:
         merged_names = [names[i] for i in order]
         existing["annotation_names"] = merged_names
         existing["circular_ids"] = merged_names
+
+    if "_fiberbrowser_calls" in existing or "_fiberbrowser_calls" in section:
+        calls = (list(existing.get("_fiberbrowser_calls") or [None] * old_n)
+                 + list(section.get("_fiberbrowser_calls") or [None] * new_n))
+        existing["_fiberbrowser_calls"] = [calls[i] for i in order]
 
 
 def generate_msp_from_nuc_gaps(intervals, min_nuc_size: int = 90) -> List:

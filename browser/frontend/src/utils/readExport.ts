@@ -15,8 +15,12 @@ function readCount(element: HTMLElement, attribute: string): number {
   return Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
 }
 
+/** Hidden by full view (kept mounted, not in the figure): never counted, matched or waited for. */
+export const FULL_VIEW_HIDDEN = '[data-full-view-hidden]';
+
 export function readExportTrackSnapshots(root: ParentNode): ReadExportTrackSnapshot[] {
-  return Array.from(root.querySelectorAll<HTMLElement>('[data-read-track-dataset-id]')).map(element => ({
+  return Array.from(root.querySelectorAll<HTMLElement>('[data-read-track-dataset-id]'))
+    .filter(element => !element.closest(FULL_VIEW_HIDDEN)).map(element => ({
     element,
     datasetId: element.dataset.readTrackDatasetId ?? '',
     workingCount: readCount(element, 'data-read-track-working-count'),
@@ -64,6 +68,19 @@ export function waitForReadTracks(
     };
     frame = requestAnimationFrame(() => { frame = requestAnimationFrame(check); });
   });
+}
+
+/** After a capture: a read track that failed or started loading meanwhile means the image shows an error or a
+ * loading state, not the reads. Its refetch (e.g. one the export's render scale starts a few frames later) can begin
+ * after `waitForReadTracks` settled on the tracks already drawn, so the result is checked again before it is saved. */
+export function assertReadTracksIntact(root: ParentNode | null = document.querySelector('[data-export-container]')): void {
+  if (!root) return;
+  const tracks = readExportTrackSnapshots(root);
+  const failed = tracks.find(track => track.error && !track.loading);
+  if (failed) throw new Error(failed.error!);
+  if (tracks.some(track => track.loading)) {
+    throw new Error('The tracks did not finish drawing. Wait for reads to load, or use a smaller view or lower resolution, then export again.');
+  }
 }
 
 export function matchedReadCount(counts: number[], displayCap: number): number | null {

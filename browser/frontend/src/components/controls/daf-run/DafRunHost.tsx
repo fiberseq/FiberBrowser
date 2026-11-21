@@ -3,16 +3,15 @@ import { runDatasetQc, type QcPayload } from '../../../api/pipeline';
 import { getStatus } from '../../../api/status';
 import { useBrowserStore } from '../../../stores/browserStore';
 import { describeJob } from '../../../utils/pipelineProgress';
-import { markJobOpened, openJobResult, openedJobs } from '../../../utils/pipelineResults';
+import { markJobOpened } from '../../../api/pipeline';
+import { autoOpenCandidate, openJobResult, pageOpenerId } from '../../../utils/pipelineResults';
 import { DafRunJobList } from './DafRunJobList';
 import { DafRunWizard } from './DafRunWizard';
 import { activeJobs, OPEN_DAF_RUN_EVENT, useDafRunStore, type DafRunTab } from './dafRunStore';
 import { QcFilePicker } from './QcFilePicker';
 import { QcReport } from './QcReport';
-import { isOwnRun, labRunsAvailable } from '../../../utils/labServer';
+import { labRunsAvailable } from '../../../utils/labServer';
 import { Dna, X } from '../../ui/Icons';
-
-const AUTO_OPEN_WINDOW_S = 24 * 3600;
 
 const QC_ENZYMES: { id: string; label: string }[] = [
   { id: 'auto', label: 'Chemistry: automatic' },
@@ -166,7 +165,8 @@ export function DafRunHost() {
   const open = useDafRunStore(s => s.open);
   const setOpen = useDafRunStore(s => s.setOpen);
   const refresh = useDafRunStore(s => s.refresh);
-  const pageLoaded = useRef(Date.now() / 1000);
+  // Runs this page asked the server to open (a claim is asked for once, whatever it answers).
+  const asked = useRef(new Set<string>());
   const [notice, setNotice] = useState<string | null>(null);
   // Only on a local server (a public one refuses the pipeline routes): ask first.
   const [enabled, setEnabled] = useState(false);
@@ -199,20 +199,24 @@ export function DafRunHost() {
     return () => { stopped = true; window.clearInterval(timer); };
   }, [publicMode, enabled, anyActive, open, refresh]);
 
-  // Auto-open: runs that asked for it and finished recently, once per browser.
+  // Auto-open: a run this page started, that asked for it, once. The server grants the claim to the page
+  // that started the run and only the first time, so other windows, browser profiles, origins and restarts
+  // never open it.
   useEffect(() => {
     if (publicMode) return;
-    const opened = openedJobs();
-    const now = Date.now() / 1000;
-    // On a lab server every member sees every run; only open your own.
-    const ready = jobs.find(j => j.status === 'done' && j.auto_open && j.outputs && !opened.has(j.id) && isOwnRun(j)
-      && (j.finished_at ?? 0) > Math.min(pageLoaded.current, now) - AUTO_OPEN_WINDOW_S);
+    const opener = pageOpenerId();
+    const ready = autoOpenCandidate(jobs, opener, asked.current);
     if (!ready) return;
-    markJobOpened(ready.id);
-    void openJobResult(ready).then(result => {
-      setNotice(result.success ? `${ready.sample} finished and is open.` : `${ready.sample} finished; opening failed: ${result.error}`);
-      window.setTimeout(() => setNotice(null), 8000);
-    });
+    asked.current.add(ready.id);
+    void markJobOpened(ready.id, { auto: true, opener }).then(claim => {
+      if (!claim.claimed) return;
+      return openJobResult(ready, { claimed: true }).then(result => {
+        setNotice(result.success ? (result.ownPanel
+          ? `${ready.sample} finished and is open in its own panel, with its reference.`
+          : `${ready.sample} finished and is open.`) : `${ready.sample} finished; opening failed: ${result.error}`);
+        window.setTimeout(() => setNotice(null), 8000);
+      });
+    }).catch(() => { /* the server could not be asked: not opened */ });
   }, [jobs, publicMode]);
 
   if (publicMode) return null;

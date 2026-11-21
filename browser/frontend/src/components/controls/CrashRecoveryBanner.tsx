@@ -1,8 +1,9 @@
+import { normalizeSvConflictOptions } from '../../utils/svConflicts';
 import { useReadActionsStore } from '../../stores/readActionsStore';
 import { useEffect, useRef, useState } from 'react';
 import { useBrowserStore } from '../../stores/browserStore';
 import { loadAutoSave, clearAutoSave, markRestoredWork } from '../../stores/historyStorage';
-import { addDataset, getDatasets } from '../../api/datasets';
+import { addDataset, getDatasets, type Dataset } from '../../api/datasets';
 import { loadGenome, loadFasta, restoreGenomeDeclarations } from '../../api/reference';
 import { fetchJson } from '../../api/sharedFetch';
 import { deserializeSavedState, remapDatasetIds, type SerializedState, type SerializedDataset } from '../../stores/historySlice';
@@ -22,21 +23,48 @@ import {
   setLaunchOfferPending, setLaunchUi, supersedeLastSession, type LaunchOffer,
 } from '../../utils/launchSession';
 import type { SavedCluster } from '../../types/clustering';
-import { genomeLoadHasFasta, serverGenomeLoaded } from '../../utils/genomeAutoload';
+import { genomeLoadHasFasta } from '../../utils/genomeAutoload';
+import { restoredReferenceConflict } from '../../utils/startupReference';
+import { findChromInfo } from '../../utils/chromAliases';
+import { markReferenceChosen, useReferenceNoticeStore } from '../../stores/referenceNoticeStore';
+import { getStatus } from '../../api/status';
 import { otherTabLive, startTabHeartbeat, stopTabHeartbeat, watchOtherTabs } from '../../utils/tabPresence';
 import { restoreSavedProjection } from '../../utils/projectionExport';
 import { withoutMissingPackState } from '../../api/sessionPacks';
 import { clampMinSvSupport, SV_MIN_SUPPORT_DEFAULT } from '../tracks/read-track/svDrawing';
 import { DEFAULT_MIN_FOOTPRINTS } from '../../stores/uiSlice';
+import { recoverExtensions } from '../../stores/storeExtensions';
+import { restoreGallery } from '../../features/plots/gallery';
+import { emptyPlotsWorkspace, normalizePlotsWorkspace, type PlotsWorkspaceState } from '../../features/plots/plotsState';
+import { isMetaChrom } from '../../features/metaLocus/metaChrom';
+import { restoreMetaLocusSession, savedMetaPoolChrom, useMetaLocusStore, type MetaLocusSession } from '../../features/metaLocus/metaLocusStore';
 
 /** Normalize path for comparison (resolve trailing slashes, case on macOS). */
 function normPath(p: string): string {
   return p.replace(/\/+$/, '');
 }
 
+/** JSON settings compared by value, including nested records, regardless of object key order. */
+function orderedSettings(_key: string, value: unknown): unknown {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b))) : value;
+}
+
+/** The same files can be opened natively or with several different lift configurations. */
+function sameDatasetConfiguration(saved: SerializedDataset, loaded: Dataset): boolean {
+  // Older ordinary BAM snapshots and servers did not always include data_type.
+  if ((saved.data_type ?? 'bam') !== (loaded.data_type ?? 'bam')) return false;
+  const a = saved.live_lift;
+  const b = loaded.live_lift;
+  if (!a || !b) return !a && !b;
+  return normPath(a.manifest) === normPath(b.manifest)
+    && JSON.stringify([...a.haplotypes].sort()) === JSON.stringify([...b.haplotypes].sort())
+    && JSON.stringify(a.settings, orderedSettings) === JSON.stringify(b.settings, orderedSettings);
+}
+
 /**
  * Reconcile saved datasets with current backend state.
- * - Matches existing backend datasets by paths (avoids duplicates)
+ * - Matches existing backend datasets by paths, type and lift configuration (avoids duplicates)
  * - Only adds datasets not already on the backend
  * - Returns the final dataset list + an ID mapping (saved ID → actual ID)
  */
@@ -61,7 +89,7 @@ async function reconcileDatasets(savedDatasets: SerializedDataset[]): Promise<{
     // Reuse a backend dataset only when it holds exactly the saved files: a
     // merged [A, B] isn't restored by a loaded A alone. The saved dataset's
     // own id first (the same server run).
-    const free = currentDatasets.filter((d: { id: string }) => !taken.has(d.id));
+    const free = currentDatasets.filter(d => !taken.has(d.id) && sameDatasetConfiguration(saved, d));
     const sameId = free.find((d: { id: string }) => d.id === saved.id);
     const existingDs = (sameId && matchSavedDataset(saved.paths, [sameId])) || matchSavedDataset(saved.paths, free);
 
@@ -69,17 +97,40 @@ async function reconcileDatasets(savedDatasets: SerializedDataset[]): Promise<{
       // Dataset already on backend — just record the ID mapping
       idMap[saved.id] = existingDs.id;
       taken.add(existingDs.id);
+      // A restarted server opened it from its files (no molecule provenance): declare the saved one again.
+      const have = existingDs as { molecule_groups?: [string, string][]; joint_dedup?: string };
+      if (!saved.live_lift && (JSON.stringify(have.molecule_groups ?? []) !== JSON.stringify(saved.molecule_groups ?? [])
+          || (have.joint_dedup ?? 'off') !== (saved.joint_dedup ?? 'off'))) {
+        try {
+          const { restoreMoleculeProvenance } = await import('../../utils/datasetUndo');
+          await restoreMoleculeProvenance(saved, existingDs);
+        } catch {
+          console.warn(`Crash recovery: could not restore the molecule provenance of ${saved.id}`);
+        }
+      }
       continue;
     }
 
     // Not on backend — add it
     try {
       const pathArg = saved.paths.length === 1 ? saved.paths[0] : saved.paths;
-      const result = await addDataset(pathArg, saved.label);
+      const result = saved.live_lift
+        ? await (await import('../../features/liveLift/api')).addLiveLiftDataset({
+          paths: saved.paths, label: saved.label, manifest: saved.live_lift.manifest,
+          haplotypes: saved.live_lift.haplotypes, settings: saved.live_lift.settings,
+        })
+        : await addDataset(pathArg, saved.label);
       if (result.success && result.dataset) {
         idMap[saved.id] = result.dataset.id;
         addedIds.add(result.dataset.id);
         taken.add(result.dataset.id);
+        // A native dataset's shared-molecule groups and joint dedup policy (the final list below shows them).
+        try {
+          const { restoreMoleculeProvenance } = await import('../../utils/datasetUndo');
+          await restoreMoleculeProvenance(saved, result.dataset);
+        } catch {
+          console.warn(`Crash recovery: could not restore the molecule provenance of ${saved.id}`);
+        }
       }
     } catch {
       console.warn(`Crash recovery: failed to reload dataset ${saved.id}`);
@@ -189,7 +240,7 @@ export async function restoreReference(s: Pick<SerializedState, 'fastaPath' | 'r
 export async function restoreSnapshot(saved: SerializedState) {
   // Saved by a build with plugin packs this one lacks: their panels, and the datasets only those showed, are left out
   // before anything is reopened (api/sessionPacks.ts).
-  const s = withoutMissingPackState(saved);
+  let s = withoutMissingPackState(saved);
   // Highlights, pins and exclusions belong to the workspace being replaced.
   useReadActionsStore.getState().reset();
   // 1. Reconcile datasets with backend (avoids duplicates, builds ID map)
@@ -208,10 +259,20 @@ export async function restoreSnapshot(saved: SerializedState) {
   // loaded becomes the page's: otherwise the page keeps the one the server has
   // (the saved name over another loaded reference would mislabel every locus).
   let referenceRestored = false;
-  if (s.currentGenome) {
+  // The server was started with a reference of its own (--fasta) that is not the saved one: it stays, and the page
+  // says so in one line (utils/startupReference.ts). A session file the user opens keeps its own reference.
+  const serverNow = (s.currentGenome || s.fastaPath) ? await getStatus(false).catch(() => null) : null;
+  const keptOut = serverNow ? restoredReferenceConflict(
+    { currentGenome: s.currentGenome, fastaPath: s.fastaPath },
+    { startupReference: serverNow.startup_reference, currentGenome: serverNow.current_genome ?? null, fastaPath: serverNow.fasta_path ?? null },
+  ) : null;
+  if (keptOut) {
+    useReferenceNoticeStore.getState().setNotice(keptOut);
+  } else if (s.currentGenome) {
     try {
-      // Already the server's (with its FASTA, maybe the user's own): kept as it is, never loaded again.
-      const loaded = await serverGenomeLoaded(s.currentGenome);
+      // Already the server's (with its FASTA, maybe the user's own): kept as it is, never loaded again (the status
+      // asked above; serverGenomeLoaded's rule).
+      const loaded = serverNow && serverNow.has_fasta && serverNow.current_genome === s.currentGenome ? serverNow : null;
       if (loaded) {
         referenceRestored = true;
         // The page's own FASTA label stays (the start-up hydration set it); the saved one only when it is the server's.
@@ -248,6 +309,9 @@ export async function restoreSnapshot(saved: SerializedState) {
     }
   }
 
+  // A reference put back by the user's Restore is theirs: nothing switches it on its own.
+  if (referenceRestored || keptOut) markReferenceChosen();
+
   // 1a'. Genomes declared for custom FASTAs (motif species, TE library): before anything genome-keyed runs.
   if (s.genomeDeclarations && s.genomeDeclarations.length) {
     try {
@@ -266,6 +330,15 @@ export async function restoreSnapshot(saved: SerializedState) {
   // 1c. Layers the datasets had attached that their files don't bring back
   // (footprint classes, loaded .fiberlayers bundles).
   await restoreSavedDerivedLayers(s.datasets ?? [], idMap, problems);
+
+  // 1d. A meta-locus whose pool comes back under another id (its datasets reopened under other ids): the pool's new
+  // contig is asked first, and the saved view, clusters and selections on the old contig are renamed to it, so the
+  // reopen below finds the page already on its contig and keeps them (moving there would clear them).
+  {
+    const savedPool = (s.metaLocus as Partial<MetaLocusSession> | undefined)?.pool_id;
+    const oldChroms = [savedPool ? `meta:${savedPool}` : null, isMetaChrom(s.chrom) ? s.chrom : null];
+    if (oldChroms.some(Boolean)) s = renameMetaChroms(s, await savedMetaPoolChrom(recoveredMetaPayload(s.metaLocus, idMap)), oldChroms);
+  }
 
   // 2. The snapshot under the recovered datasets' ids (exact ids and
   // `<id>:…` state keys alike, in panels, records, cluster branches) and the
@@ -292,15 +365,21 @@ export async function restoreSnapshot(saved: SerializedState) {
 
   // 6. Restore UI state: everything undo knows how to put back (so fields
   // added to snapshots later come back too), then the recovery specifics.
-  const base = deserializeSavedState(r) as Record<string, unknown>;
+  // Crash recovery puts back what an undo step leaves alone (the Plots builder: extensions' ``recover``).
+  const base = { ...deserializeSavedState(r), ...recoverExtensions(r as unknown as Record<string, unknown>) } as Record<string, unknown>;
   delete base.datasets;  // the backend's list, reconciled above
   delete base.currentGenome;  // set by the genome reload above when it succeeded
   const currentPrimer = useBrowserStore.getState().primer;
+  // The saved reference was kept out (--fasta): a saved locus on a contig this reference lacks (chrI under dm6)
+  // is not put back; the view stays where it is.
+  const now = useBrowserStore.getState();
+  const view = keptOut && r.chrom && !findChromInfo(now.chroms, r.chrom)
+    ? { chrom: now.chrom, start: now.start, end: now.end } : { chrom: r.chrom, start: r.start, end: r.end };
   useBrowserStore.setState({
     ...base,
-    chrom: r.chrom,
-    start: r.start,
-    end: r.end,
+    chrom: view.chrom,
+    start: view.start,
+    end: view.end,
     isReversed: r.isReversed,
     showRelativeCoords: r.showRelativeCoords,
     relativeTSS: r.relativeTSS,
@@ -324,6 +403,7 @@ export async function restoreSnapshot(saved: SerializedState) {
     clusterPatterns: r.clusterPatterns,
     clusterCentroids: r.clusterCentroids,
     clusterPeakWidths: r.clusterPeakWidths,
+    clusterMetricCohort: r.clusterMetricCohort ?? {},
     clusterPeakRegions: r.clusterPeakRegions,
     dynamicClustering: r.dynamicClustering,
     dynamicOverlapMode: r.dynamicOverlapMode,
@@ -377,6 +457,7 @@ export async function restoreSnapshot(saved: SerializedState) {
     enabledCigarTypes: r.enabledCigarTypes,
     svDisplayEnabled: r.svDisplayEnabled ?? true,
     svMinLen: r.svMinLen ?? 50,
+    svConflictOptions: normalizeSvConflictOptions(r.svConflictOptions),
     svMinSupport: clampMinSvSupport(r.svMinSupport ?? SV_MIN_SUPPORT_DEFAULT),
     darkMode: r.darkMode,
     peakSettings: r.peakSettings,
@@ -392,7 +473,7 @@ export async function restoreSnapshot(saved: SerializedState) {
     readScrollOffsets: r.readDisplayMode === 'all' ? r.readScrollOffsets ?? {} : {},
     refreshGeneration: useBrowserStore.getState().refreshGeneration + 1,
     // Keep the saved clusters exactly; re-derive only after navigating away.
-    restoredClusterViewport: r.chrom ? { chrom: r.chrom, start: r.start, end: r.end } : null,
+    restoredClusterViewport: view.chrom ? { chrom: view.chrom, start: view.start, end: view.end } : null,
     showGenomeOverview: r.showGenomeOverview ?? false,
     publicMode: r.publicMode ?? false,
     fullViewPanelId: r.fullViewPanelId,
@@ -471,10 +552,78 @@ export async function restoreSnapshot(saved: SerializedState) {
     useBrowserStore.setState({ readProjection: restoreSavedProjection(s.readProjection, idMap, useBrowserStore.getState()) } as any);
   }
 
+  // 12b. The Plots Gallery the autosave kept, its browser states under the reopened dataset ids (its cards keep
+  // their own data, panel keys and dataset names); an older save without one leaves the Gallery as it is.
+  if (s.plotsGallery && typeof s.plotsGallery === 'object') {
+    const gallery = s.plotsGallery as { states?: unknown };
+    // Each saved state on its own (remapDatasetIds renames a state's datasets and dataset-keyed records at its top
+    // level); the state ids stay.
+    const states = gallery.states && typeof gallery.states === 'object' && !Array.isArray(gallery.states)
+      ? Object.fromEntries(Object.entries(gallery.states as Record<string, unknown>).map(([id, st]) => [id, remapDatasetIds(st, idMap)]))
+      : {};
+    restoreGallery({ ...gallery, states });
+  }
+
   // 13. The rest is back; say what isn't.
   if (problems.length > 0) {
     useBrowserStore.getState().setError(`Reopened, except ${problems.join('; ')}.`);
   }
+  // 14. The meta-locus the page was on: its pool is process-local (gone after a restart), so it is reopened from
+  // the autosaved spec and working set (its datasets under their reopened ids), as a saved session does. Not
+  // awaited: a pool may take a while to build (its progress strip shows it).
+  void restoreMetaLocusAfterRecovery(s.metaLocus, r.chrom, idMap);
+}
+
+/** A saved meta-locus with its datasets, and the dataset of each added read (``[dataset id, read name, site index]``),
+ *  under their reopened ids. */
+function recoveredMetaPayload(saved: unknown, idMap: Record<string, string>): Partial<MetaLocusSession> | null {
+  const raw = saved && typeof saved === 'object' ? saved as Partial<MetaLocusSession> : null;
+  if (!raw) return null;
+  return { ...raw, ...(raw.dataset_ids ? { dataset_ids: raw.dataset_ids.map(id => remapId(id, idMap)) } : {}),
+    ...(Array.isArray(raw.extra_entries) ? { extra_entries: raw.extra_entries.map(entry => (Array.isArray(entry) && typeof entry[0] === 'string'
+      ? [remapId(entry[0], idMap), ...entry.slice(1)] as typeof entry : entry)) } : {}) };
+}
+
+/** Every reference to an old meta contig (``from``: values and record keys alike) renamed to ``to``; the saved
+ *  meta-locus keeps its own payload (its pool id is the server's to give). */
+export function renameMetaChroms<T>(value: T, to: string | null, from: Array<string | null | undefined>): T {
+  const old = new Set(from.filter((c): c is string => !!c && c !== to));
+  if (!to || old.size === 0) return value;
+  const walk = (v: unknown): unknown => {
+    if (typeof v === 'string') return old.has(v) ? to : v;
+    if (Array.isArray(v)) return v.map(walk);
+    if (!v || typeof v !== 'object') return v;
+    const proto = Object.getPrototypeOf(v);
+    if (proto !== Object.prototype && proto !== null) return v;  // (only plain records: a saved state is JSON)
+    return Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, x]) => [old.has(k) ? to : k, walk(x)]));
+  };
+  const out = walk(value) as T;
+  const meta = (value as { metaLocus?: unknown })?.metaLocus;
+  return meta !== undefined && out && typeof out === 'object' ? { ...out, metaLocus: meta } as T : out;
+}
+
+/**
+ * Reopen a recovered page's meta-locus pool (``saved``: the autosave's metaLocus payload). When the page was on the
+ * meta contig but its pool cannot come back (an older autosave without the payload, a moved BED, a failed build),
+ * the view falls back to the last real locus with a message instead of an empty contig.
+ */
+export function restoreMetaLocusAfterRecovery(saved: unknown, chrom: string | null | undefined, idMap: Record<string, string>): Promise<void> {
+  const onMeta = isMetaChrom(chrom);
+  const raw = saved && typeof saved === 'object' ? saved as Partial<MetaLocusSession> : null;
+  const fallBack = (reason: string) => {
+    if (!isMetaChrom(useBrowserStore.getState().chrom)) return;
+    const real = raw?.lastRealLocus ?? useMetaLocusStore.getState().lastRealLocus;
+    if (real) useBrowserStore.getState().setViewport(real.chrom, real.start, real.end);
+    useBrowserStore.getState().setError(`The meta-locus could not be reopened (${reason})${real ? '; showing the last real locus' : ''}.`);
+  };
+  if (!raw?.bed_path) {
+    if (onMeta) fallBack('its pool was not saved: open it again from its BED');
+    return Promise.resolve();
+  }
+  return restoreMetaLocusSession(recoveredMetaPayload(raw, idMap), onMeta).then(() => {
+    const { error } = useMetaLocusStore.getState();
+    if (error) fallBack(error);
+  }, error => fallBack(error instanceof Error ? error.message : String(error)));
 }
 
 /**
@@ -653,7 +802,18 @@ export function autoSaveHasWork(state: SerializedState): boolean {
   if (['clusterAssignments', 'selectedPeaks', 'footprintGroups', 'filteredReadIds', 'excludedReadIds', 'readSortOrder',
     'captureRegions', 'selectedGenes', 'catalog', 'savedTracks', 'primerSavedPrimers'].some(key => nonEmpty(s[key]))) return true;
   const composites = Array.isArray(s.compositeTracks) ? s.compositeTracks as Array<{ id?: string }> : [];
-  return composites.some(track => track.id !== '__default_metaprofile__');
+  if (composites.some(track => track.id !== '__default_metaprofile__')) return true;
+  // Plots: a kept (or imported) Gallery card, or a builder changed from its defaults. Neither makes a history step.
+  const gallery = s.plotsGallery as { entries?: Array<{ status?: string }> } | undefined;
+  if (Array.isArray(gallery?.entries) && gallery!.entries.some(e => e && e.status !== 'working')) return true;
+  return plotsBuilderChanged(s.plotsWorkspace);
+}
+
+/** The autosaved Plots builder differs from a new one (its plot's id aside). */
+function plotsBuilderChanged(saved: unknown): boolean {
+  if (!saved || typeof saved !== 'object') return false;
+  const comparable = (ws: PlotsWorkspaceState) => JSON.stringify({ ...ws, current: { ...ws.current, id: '' } });
+  return comparable(normalizePlotsWorkspace(saved)) !== comparable(emptyPlotsWorkspace());
 }
 
 /** The longest the Welcome card waits for the launch offer to be decided (ms). */
@@ -808,9 +968,11 @@ export function CrashRecoveryBanner() {
         adoptOpenDatasets();
         setDismissed(false);
       }
-      if (next === 'reopen' && cliIds.length > 0) {
+      if ((next === 'reopen' || next === 'auto-reopen') && cliIds.length > 0) {
         // Data opened on the command line takes precedence: no Welcome card, so no "Reopen last session" either. The
-        // offer is declined (Start fresh, not remembered): this session is saved from now on.
+        // offer is declined (Start fresh, not remembered): this session is saved from now on. Reopened without asking
+        // (remembered), the last session's datasets and reference would replace the file just opened (the app opened
+        // with a BAM): declined too.
         decidedNoOffer();
         supersedeLastSession();
         setLaunchOfferPending(false);

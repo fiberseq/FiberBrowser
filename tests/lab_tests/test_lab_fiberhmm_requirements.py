@@ -13,11 +13,16 @@ def tree(root, engine=True, schema="fiberhmm.accessibility.preview.v1"):
     pkg = root / "fiberhmm"
     for sub in ("inference/consensus", "io"):
         (pkg / sub).mkdir(parents=True, exist_ok=True)
-    (pkg / "__init__.py").write_text('__version__ = "3.0.0"\n')
+    (pkg / "__init__.py").write_text('__version__ = "3.2.0"\n')
     (pkg / "inference" / "strand_rescue.py").write_text("")
     (pkg / "inference" / "consensus" / "workflow.py").write_text("")
     (pkg / "io" / "provenance.py").write_text("def basecaller_provenance(h):\n    pass\ndef parse_ds_tokens(d):\n"
                                               "    pass\ndef parse_override(b=None):\n    pass\n")
+    for feature in runtime.CORE_REQUIREMENTS["features"]:  # the core modules a FiberHMM for this build has
+        path = root.joinpath(*feature["module"].split(".")).with_suffix(".py")
+        if not path.exists():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("".join(f"def {n}(*a, **k):\n    pass\n" for n in feature.get("names") or []))
     if engine:
         (pkg / "inference" / "accessibility").mkdir()
         (pkg / "inference" / "accessibility" / "__init__.py").write_text("from .workflow import SCHEMA\n")
@@ -35,7 +40,7 @@ def lab(tmp_path, monkeypatch):
     monkeypatch.setattr(runtime, "_APP_CHOICE", None)
     bundled = tree(tmp_path / "bundle")
     monkeypatch.setattr(runtime, "default_package_dir", lambda exclude=(): bundled / "fiberhmm")
-    monkeypatch.setattr(runtime, "_default_version", lambda d: "3.0.0")
+    monkeypatch.setattr(runtime, "_default_version", lambda d: "3.2.0")
     return tmp_path
 
 
@@ -51,7 +56,7 @@ def test_lab_app_with_a_release_checkout_falls_back_to_its_bundled_fiberhmm(lab,
     sel = runtime.fiberhmm_selection()
     assert sel["source"] == "bundled" and sel["root"] is None and sel["missing"] == []
     assert sel["notices"] == [f"Custom FiberHMM at {release.resolve()} lacks the NFR engine; "
-                              "using the bundled FiberHMM 3.0.0."]
+                              "using the bundled FiberHMM 3.2.0."]
 
 
 def test_lab_app_ignores_the_settings_file_release_checkout(lab, monkeypatch):

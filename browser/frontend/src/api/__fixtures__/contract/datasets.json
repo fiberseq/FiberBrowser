@@ -1,0 +1,76 @@
+{
+ "datasets": [
+  {
+   "available_layers": {
+    "deam": true,
+    "fire": false,
+    "footprint": true,
+    "m5c": false,
+    "m6a": false,
+    "msp": true,
+    "nuc": true,
+    "tf": true
+   },
+   "chemistry_metadata": {
+    "chemistry": "ddda",
+    "files": [
+     {
+      "chemistry": "ddda",
+      "declaration": {
+       "assay": "daf",
+       "enzyme": "ddda",
+       "mode": "daf",
+       "platform": "pacbio"
+      },
+      "declarations": [
+       {
+        "assay": "daf",
+        "enzyme": "ddda",
+        "mode": "daf",
+        "platform": "pacbio"
+       }
+      ],
+      "message": "authoritative FIBERHMM-CHEMISTRY:v1 declaration",
+      "path": "/data/napa_ddda.bam",
+      "source": "declared-v1",
+      "status": "declared"
+     }
+    ],
+    "message": "all BAMs carry authoritative declarations",
+    "source": "declared-v1",
+    "status": "declared"
+   },
+   "color": "#3b82f6",
+   "companion_layers": {},
+   "consensus_chemistry": "ddda",
+   "data_type": "bam",
+   "derived_layers": {},
+   "family_scan_chemistry": "ddda",
+   "genome_check": {
+    "assembly": "hg38",
+    "confidence": "high",
+    "kind": "genome",
+    "message": "demo was aligned to hg38; no reference genome is loaded.",
+    "severity": "info",
+    "status": "no_reference",
+    "suggested_genome": "hg38"
+   },
+   "has_circular_annotations": false,
+   "id": "demo",
+   "is_remote": false,
+   "joint_dedup": "off",
+   "label": "demo",
+   "layer_type": "bam",
+   "molecule_groups": [],
+   "patch_labels_identity": "",
+   "path": "/data/napa_ddda.bam",
+   "paths": [
+    "/data/napa_ddda.bam"
+   ],
+   "regularity_identity": "",
+   "sample_keys": [],
+   "signal_tags": false,
+   "source_identity": "61a6561f3a26a50ae47d308566534fb1377c226e8b4d97c6933a2d9dac3dd03a"
+  }
+ ]
+}

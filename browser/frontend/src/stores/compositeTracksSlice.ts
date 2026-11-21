@@ -6,7 +6,7 @@ import type {
 import { DEFAULT_METAPROFILE_ID } from '../types/dataset';
 import type { SubTrackType, SubTrackConfig, PanelConfig } from '../types';
 import { TRACK_COLORS } from '../components/tracks/TrackContainerConstants';
-import { getLayerColor, getMetaprofileSourceEntries, hasKnownLayerColor, isExtraPaletteColor, legacyHashLayerColor, setLayerColorSource } from '../utils/layerColors';
+import { getDefaultLayerColor, getLayerColor, getLayerColorOverride, getMetaprofileSourceEntries, hasKnownLayerColor, isExtraPaletteColor, legacyHashLayerColor, setLayerColorSource } from '../utils/layerColors';
 import {
   applyFollowActiveLayers, canonicalMetaprofileKey, isDefaultMetaprofile, isLayerSource, layerToggleOn, metaprofileLayerKeys,
 } from '../utils/defaultMetaprofile';
@@ -196,7 +196,7 @@ function reconcileDefaultMetaprofileSources(state: BrowserState, existingSources
       id: crypto.randomUUID(),
       ref: { kind: 'metaprofile' as const, ruleId: entry.key },
       color: getLayerColor(entry.key),
-      ...(hasKnownLayerColor(entry.key) ? {} : { autoColor: true }),
+      ...(hasKnownLayerColor(entry.key) && !getLayerColorOverride(entry.key) ? {} : { autoColor: true }),
       visible: defaultMetaprofileSourceVisible(state, entry.key),
       negate: false,
       scale: 1,
@@ -213,22 +213,30 @@ function reconcileDefaultMetaprofileSources(state: BrowserState, existingSources
   return [...desiredSources, ...preserved];
 }
 
+const sameColor = (a: string | null | undefined, b: string | null | undefined) =>
+  !!a && !!b && a.toLowerCase() === b.toLowerCase();
+
 /**
- * The default metaprofile's sources with default colours of uncurated layers (`autoColor`, or 3.0.6's
- * name-hash colour on an older source) moved to the layer's current colour, so they match the read track
- * whatever the load order or session; a colour the user picked (autoColor false) is kept. Same array when
- * nothing changes.
+ * The default metaprofile's sources with default colours (`autoColor`, a curated layer's source still holding its
+ * layer's colour, or 3.0.6's name-hash colour on an older source) moved to the layer's current colour, the user's
+ * layer colour included (Labels → Layer colours), so they match the read track whatever the load order or session;
+ * a colour the user picked for the source (autoColor false) is kept. Same array when nothing changes.
  */
 export function refreshAutoSourceColors(sources: TrackSource[]): TrackSource[] {
   let changed = false;
   const next = sources.map(source => {
     if (source.ref.kind !== 'metaprofile') return source;
     const key = source.ref.ruleId;
-    if (hasKnownLayerColor(key)) return source;
+    const known = hasKnownLayerColor(key);
+    // A curated layer's source without the flag follows while it holds the layer's colour (built-in, or the user's
+    // layer colour it was last given); 3.0.6's name-hash colour marks an older uncurated source as automatic.
     const auto = source.autoColor === true
-      || (source.autoColor === undefined && source.color?.toLowerCase() === legacyHashLayerColor(key));
+      || (source.autoColor === undefined && (known
+        ? sameColor(source.color, getDefaultLayerColor(key)) || sameColor(source.color, getLayerColor(key))
+        : source.color?.toLowerCase() === legacyHashLayerColor(key)));
     if (!auto) return source;
     const color = getLayerColor(key);
+    if (known && source.autoColor === undefined && color === source.color) return source;
     if (color === source.color && source.autoColor === true) return source;
     changed = true;
     return { ...source, color, autoColor: true };
@@ -248,7 +256,7 @@ function addMissingLayerSources(state: BrowserState, sources: TrackSource[]): Tr
       id: crypto.randomUUID(),
       ref: { kind: 'metaprofile' as const, ruleId: entry.key },
       color: getLayerColor(entry.key),
-      ...(hasKnownLayerColor(entry.key) ? {} : { autoColor: true }),
+      ...(hasKnownLayerColor(entry.key) && !getLayerColorOverride(entry.key) ? {} : { autoColor: true }),
       visible: defaultMetaprofileSourceVisible(state, entry.key),
       negate: false,
       scale: 1,
@@ -310,7 +318,8 @@ export function bindDefaultMetaprofileFollow(store: {
     if (previous
       && state.compositeTracks === previous.compositeTracks
       && state.enabledModTypes === previous.enabledModTypes
-      && state.datasets === previous.datasets) return;
+      && state.datasets === previous.datasets
+      && state.layerColorVersion === previous.layerColorVersion) return;
     // The loaded set's layer colours before the cart reads them (browserStore keeps them in step too).
     if (!previous || state.datasets !== previous.datasets) setLayerColorSource(state.datasets ?? []);
     const followed = applyFollowActiveLayers(state.compositeTracks ?? [], state.enabledModTypes ?? {}, state.datasets ?? []);

@@ -68,6 +68,10 @@ async def start_consensus_workflow(request: dict, state=Depends(get_state)):
         if consensus_queue_full():
             raise HTTPException(status_code=429, detail='This public server is busy with other footprint-class '
                                                         'runs; try again in a few minutes.')
+    if isinstance(request, dict) and str(request.get('chrom') or '').startswith('meta:'):
+        # A meta-locus: fiberhmm-consensus's pooled oriented-BED run over the view (services/meta_locus_consensus).
+        from services.meta_locus_consensus import submit as submit_meta
+        submit = submit_meta
     try:
         summary = await asyncio.to_thread(submit, state, request)
     except (ValueError, KeyError, TypeError) as error:

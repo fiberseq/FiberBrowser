@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { compactReadStatus, formatReadStatus, readFilterCounts } from './readCounts';
+import { compactReadStatus, formatReadStatus, readFilterCounts, userReadFilterSet } from './readCounts';
+import { DEFAULT_MIN_FOOTPRINTS } from '../../../stores/uiSlice';
 
 describe('readFilterCounts', () => {
   const sampling = { level: 6, fraction: 1 / 64, total: 105_368, kept: 1625,
@@ -27,6 +28,20 @@ describe('readFilterCounts', () => {
     expect(readFilterCounts(1000, 200, null, false)).toEqual({ total: 1000, hidden: 800, fraction: 0.8, sampled: false });
   });
 
+  it('a full load counts what the filters hide from the alignments in scope before them, as a sampled load does', () => {
+    // A full load reports its in-scope total after the read filters (24 of 24); the server's signal counts carry
+    // the 4,264 alignments in scope before them.
+    const full = readFilterCounts(24, 24, null, false, false, 4264);
+    expect(full).toEqual({ total: 4264, hidden: 4240, fraction: 4240 / 4264, sampled: false });
+    const sampled = readFilterCounts(4452, 7, { ...sampling, kept: 2212, loaded: 7 }, false);
+    expect(full.fraction > 0.5).toBe(sampled.fraction > 0.5);
+    // A cohort request still counts nothing as hidden; no signal counts falls back to the in-scope total.
+    expect(readFilterCounts(24, 24, null, false, true, 4264).hidden).toBe(0);
+    expect(readFilterCounts(24, 24, null, false, false, null).hidden).toBe(0);
+    // Never below the in-scope total (signal counts of another scope).
+    expect(readFilterCounts(100, 50, null, false, false, 10).total).toBe(100);
+  });
+
   it('uses the working count for older sampling payloads without a loaded count', () => {
     expect(readFilterCounts(105_368, 1031, { ...sampling, loaded: undefined }, false).hidden).toBe(594);
   });
@@ -34,6 +49,23 @@ describe('readFilterCounts', () => {
   it('does not infer filtering from an empty cohort or a smaller rendered/clustered subset', () => {
     expect(readFilterCounts(105_368, 0, { ...sampling, kept: 0, loaded: 0 }, false).fraction).toBe(0);
     expect(readFilterCounts(105_368, 100, { ...sampling, loaded: 1625 }, false).hidden).toBe(0);
+  });
+
+  it('never counts the reads outside a requested cohort as hidden (a clustered panel: 288 of 4,640 in view)', () => {
+    // A cluster cohort is asked for by name (filter_ids): the server counts the whole view in scope.
+    expect(readFilterCounts(4640, 288, null, false)).toMatchObject({ hidden: 4352, sampled: false });
+    expect(readFilterCounts(4640, 288, null, false, true)).toEqual({ total: 4640, hidden: 0, fraction: 0, sampled: false });
+    expect(readFilterCounts(105_368, 200, { ...sampling, loaded: 200 }, false, true).fraction).toBe(0);
+  });
+});
+
+describe('userReadFilterSet', () => {
+  it('counts filters the user set, not the untouched Min footprints default', () => {
+    expect(userReadFilterSet(DEFAULT_MIN_FOOTPRINTS, true, 0)).toBe(false);
+    expect(userReadFilterSet(DEFAULT_MIN_FOOTPRINTS, false, 0)).toBe(true);
+    expect(userReadFilterSet(DEFAULT_MIN_FOOTPRINTS + 3, true, 0)).toBe(true);
+    expect(userReadFilterSet(0, false, 0)).toBe(false);
+    expect(userReadFilterSet(0, true, 20)).toBe(true);
   });
 });
 
@@ -149,5 +181,18 @@ describe('compactReadStatus', () => {
   it('keeps the count when Min footprints or QC-fail hid reads (the suffix stays in the full text)', () => {
     expect(compactReadStatus('8 of 60 rows drawn · 3 uncalled · 49 with < 5 footprints hidden')).toBe('8/60');
     expect(compactReadStatus('42 reads · 2 QC-fail reads hidden')).toBe('42');
+  });
+});
+
+describe('formatReadStatus during a first paint', () => {
+  it('marks the totals as estimates, and the compact form keeps the mark', () => {
+    const status = formatReadStatus({ loading: false, partial: true, displayed: 653, serverReturned: 1000,
+      working: 4838, inScope: 4838, overlapping: 4838, spanning: 281 });
+    expect(status.text).toBe(`653 of ~${(4838).toLocaleString()} rows drawn`);
+    expect(status.title).toContain('estimates');
+    expect(compactReadStatus(status.text)).toBe(`653/~${(4838).toLocaleString()}`);
+    const settled = formatReadStatus({ loading: false, displayed: 653, serverReturned: 1000, working: 4639,
+      inScope: 4639, overlapping: 4639, spanning: 262 });
+    expect(settled.text).toBe(`653 of ${(4639).toLocaleString()} rows drawn`);
   });
 });

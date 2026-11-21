@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { copyFileSync, mkdtempSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures/nativeDialogs';
 import { DEMO_FIXTURE, pickRandomPort, startServer, stopServer } from './fixtures/server';
 
 /** Repeatedly open, navigate and close a dataset in a live source server. */

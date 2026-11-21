@@ -35,6 +35,7 @@ async def get_insertion_clusters(
     dataset_id: Optional[str] = Query(None),
     min_len: int = Query(DEFAULT_MIN_LEN, ge=1),
     tolerance: int = Query(DEFAULT_TOLERANCE, ge=0, le=1000),
+    conflict_options: Optional[str] = Query(None),
     request: Request = None,
     state=Depends(get_state),
 ):
@@ -42,13 +43,13 @@ async def get_insertion_clusters(
     Off the read path (services/background_work.py): identical requests share one answer, a
     client that goes away stops it, and the reads' SV events are cached in tiles."""
     from services.background_work import Cancelled, cancelled_response, dataset_identity, run_background
-    key = ("insertion_clusters", id(state), chrom, start, end, dataset_id, min_len, tolerance,
+    key = ("insertion_clusters", id(state), chrom, start, end, dataset_id, min_len, tolerance, conflict_options,
            dataset_identity(state, [dataset_id] if dataset_id else list(getattr(state, "dataset_order", []) or [])),
            repr(getattr(state, "chrom_map", None)))
     try:
         payload = await run_background(
             request, key, insertion_clusters_payload, state, chrom=chrom, start=start, end=end,
-            dataset_id=dataset_id, min_len=min_len, tolerance=tolerance,
+            dataset_id=dataset_id, min_len=min_len, tolerance=tolerance, conflict_options=conflict_options,
         )
     except Cancelled:
         return cancelled_response()
@@ -61,6 +62,7 @@ async def get_insertion_lens(
     pos: int = Query(..., ge=0),
     dataset_id: Optional[str] = Query(None),
     tolerance: int = Query(DEFAULT_TOLERANCE, ge=0, le=1000),
+    conflict_options: Optional[str] = Query(None),
     len_min: int = Query(DEFAULT_MIN_LEN, ge=1),
     len_max: Optional[int] = Query(None, ge=1),
     ref: Optional[int] = Query(None, ge=0),
@@ -76,20 +78,31 @@ async def get_insertion_lens(
     layer_names: Optional[str] = Query(None),
     include_methylation: bool = Query(True),
     hide_terminal_gaps: bool = Query(True),
+    request: Request = None,
     state=Depends(get_state),
 ):
     """One insertion's carriers (CIGAR and clipped) and spanning reference reads in
     insertion-local coordinates. ``ref``/``length``: the SV cluster (as "Split by
     this SV" takes it); without them the cluster is found at ``pos``."""
-    payload = await asyncio.to_thread(
-        insertion_lens_payload, state, chrom=chrom, pos=pos, dataset_id=dataset_id,
-        tolerance=tolerance, len_min=len_min, len_max=len_max, ref=ref, length=length,
-        include_duplicates=include_duplicates, include_qcfail=include_qcfail, flank=flank,
-        max_carriers=max_carriers, max_reference=max_reference, consensus=consensus,
-        include_sequences=include_sequences, ml_threshold=ml_threshold,
-        layer_names=parse_optional_csv_list(layer_names), include_methylation=include_methylation,
-        hide_terminal_gaps=hide_terminal_gaps,
-    )
+    from services.background_work import Cancelled, cancelled_response, dataset_identity, run_background
+    from services.sv_alleles import reference_identity
+    key = ('insertion_lens', id(state), chrom, pos, dataset_id, tolerance, len_min, len_max,
+           ref, length, include_duplicates, include_qcfail, flank, max_carriers, max_reference, consensus,
+           include_sequences, ml_threshold, layer_names, include_methylation, hide_terminal_gaps,
+           conflict_options, reference_identity(state), repr(getattr(state, 'chrom_map', None)),
+           dataset_identity(state, [dataset_id] if dataset_id else list(getattr(state, 'dataset_order', []) or [])))
+    try:
+        payload = await run_background(
+            request, key, insertion_lens_payload, state, chrom=chrom, pos=pos, dataset_id=dataset_id,
+            tolerance=tolerance, len_min=len_min, len_max=len_max, ref=ref, length=length,
+            include_duplicates=include_duplicates, include_qcfail=include_qcfail, flank=flank,
+            max_carriers=max_carriers, max_reference=max_reference, consensus=consensus,
+            include_sequences=include_sequences, ml_threshold=ml_threshold,
+            layer_names=parse_optional_csv_list(layer_names), include_methylation=include_methylation,
+            hide_terminal_gaps=hide_terminal_gaps, conflict_options=conflict_options,
+        )
+    except Cancelled:
+        return cancelled_response()
     return ORJSONResponse(payload)
 
 
@@ -107,7 +120,7 @@ class AltAlleleRequest(BaseModel):
 
 
 @router.post("/api/alt_allele/open")
-async def open_alt_allele_endpoint(req: AltAlleleRequest, state=Depends(get_state)):
+async def open_alt_allele_endpoint(req: AltAlleleRequest, request: Request = None, state=Depends(get_state)):
     """An insertion's carriers re-aligned onto its alternate allele (reference flank + insert
     consensus + reference flank), opened as a dataset with that contig as its own reference.
     Built once per definition (cached on disk); ``built`` says whether this call built it."""
@@ -126,8 +139,18 @@ async def open_alt_allele_endpoint(req: AltAlleleRequest, state=Depends(get_stat
             return open_alt_allele(state, req.dataset_id, req.model_dump())
         except (AltAlleleError, KeyError, ValueError) as exc:
             return {"success": False, "error": str(exc)}
+        except ResourceResult as exc:
+            return {"success": False, "error": exc.reason, "resource": exc.payload()}
 
-    return ORJSONResponse(await asyncio.to_thread(run))
+    from services.reconstruction_budget import ResourceResult
+    from services.background_work import Cancelled, cancelled_response, dataset_identity, run_background
+    from services.sv_alleles import reference_identity
+    try:
+        key = ('alt_allele', id(state), repr(req.model_dump()), reference_identity(state),
+               dataset_identity(state, [req.dataset_id] if req.dataset_id else list(getattr(state, 'dataset_order', []) or [])))
+        return ORJSONResponse(await run_background(request, key, run))
+    except Cancelled:
+        return cancelled_response()
 
 
 # ---------------------------------------------------------------------------
@@ -212,8 +235,8 @@ async def start_identify(req: IdentifyRequest, state=Depends(get_state)):
 @router.get("/api/insertions/identify/jobs/{job_id}")
 async def get_identify_job(job_id: str):
     _local_only()
-    from services.insertion_identify import get_job
-    job = get_job(job_id)
+    from services.insertion_identify import IDENTIFY_JOB_KINDS, get_job
+    job = get_job(job_id, kinds=IDENTIFY_JOB_KINDS)
     if job is None:
         return ORJSONResponse({"success": False, "error": "No such job (the server may have restarted)", "status": "missing"})
     return ORJSONResponse({"success": True, **job})
@@ -222,8 +245,8 @@ async def get_identify_job(job_id: str):
 @router.delete("/api/insertions/identify/jobs/{job_id}")
 async def cancel_identify_job(job_id: str):
     _local_only()
-    from services.insertion_identify import cancel_job
-    return ORJSONResponse({"success": cancel_job(job_id)})
+    from services.insertion_identify import IDENTIFY_JOB_KINDS, cancel_job
+    return ORJSONResponse({"success": cancel_job(job_id, kinds=IDENTIFY_JOB_KINDS)})
 
 
 @router.post("/api/insertions/identify/dfam")

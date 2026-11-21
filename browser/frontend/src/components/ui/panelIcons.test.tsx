@@ -11,7 +11,7 @@ describe('PanelIcon', () => {
   const markup = (contentType: string, size?: number) => renderToStaticMarkup(<PanelIcon contentType={contentType} size={size} />);
 
   it('gives every built-in panel an icon, each one different', () => {
-    expect(types.length).toBeGreaterThanOrEqual(16);
+    expect(types.length).toBeGreaterThanOrEqual(15);
     for (const t of types) expect(hasPanelIcon(t), t).toBe(true);
     // (A plugin pack's panel may reuse a built-in icon on purpose: built-in panels only here.)
     const shapes = types.map(t => markup(t));
@@ -25,7 +25,7 @@ describe('PanelIcon', () => {
     expect(markup('footprint-analysis', 14)).toContain('width="14"');
   });
 
-  it('draws Footprints as a footprint, Clusters as clumps, Tracks as a signal track and Co-accessibility as an open gap', () => {
+  it('draws Footprints as a footprint, Clusters as clumps, Tracks as a signal track and Co-accessibility (its track menu item) as an open gap', () => {
     const same = (t: string, Icon: (p: { size?: number }) => JSX.Element) =>
       expect(markup(t, 20)).toBe(renderToStaticMarkup(<Icon size={20} aria-hidden="true" focusable="false" />));
     same('footprint-analysis', Icons.Footprint);

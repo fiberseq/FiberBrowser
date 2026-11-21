@@ -20,3 +20,4 @@ export type { CheckboxRowProps } from './CheckboxRow';
 export { Share } from './Share';
 export { MotifPinBar, motifThresholdText, relaxedThreshold, useMotifThreshold } from './MotifPinBar';
 export type { MotifPinBarProps } from './MotifPinBar';
+export { TierBar } from './TierBar';

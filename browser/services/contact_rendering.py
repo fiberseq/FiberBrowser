@@ -134,7 +134,8 @@ def render_contact_matrix_image(
     if scaling == "log":
         nonzero = plot_matrix[plot_matrix > 0]
         pseudocount = float(np.min(nonzero)) if len(nonzero) > 0 else 1.0
-        plot_matrix = np.log(plot_matrix + pseudocount)
+        # Negative values (a signed correlation) have no log: drawn at the low end, not dropped as NaN.
+        plot_matrix = np.log(np.maximum(plot_matrix, 0) + pseudocount)
     elif scaling == "sqrt":
         plot_matrix = np.sqrt(np.maximum(plot_matrix, 0))
 
@@ -191,7 +192,7 @@ def render_matrix_strip_image(
     if scaling == "log":
         nonzero = strip[strip > 0]
         pseudocount = float(np.min(nonzero)) if len(nonzero) > 0 else 1.0
-        scaled = np.log(strip + pseudocount)
+        scaled = np.log(np.maximum(strip, 0) + pseudocount)
     elif scaling == "sqrt":
         scaled = np.sqrt(np.maximum(strip, 0))
     else:

@@ -12,7 +12,15 @@ import { registerInsertionLens } from './insertion/register';
 import { registerVariants } from './variants/register';
 import { registerAltAllele } from './altAllele/register';
 import { registerAltAllelePreview } from './altAllele/preview';
+import { registerLiveLift } from './liveLift/register';
+import { registerGraphPanel } from './graphPanel/register';
+import { registerFeatureHub } from './hub/register';
+import { registerNucleosomePanel } from './nucleosomes/register';
+import { registerPlots } from './plots/register';
+import { registerMetaLocus } from './metaLocus/register';
 import { registerFiberhmmLayers } from './fiberhmmLayers/register';
+import { registerSequenceSearch } from './sequenceSearch/register';
+import { registerLayerColours } from './layerColours/state';
 
 let done = false;
 
@@ -28,5 +36,13 @@ export function registerInsertionFeatures(): void {
   registerInsertionLens();
   registerVariants();
   registerAltAllele();
+  registerLiveLift();
+  registerGraphPanel();
+  registerFeatureHub();
+  registerNucleosomePanel();
+  registerPlots();
+  registerMetaLocus();
   registerFiberhmmLayers();
+  registerSequenceSearch();
+  registerLayerColours();
 }

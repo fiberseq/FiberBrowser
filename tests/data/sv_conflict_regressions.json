@@ -1,0 +1,1660 @@
+[
+  {
+    "name": "internal-I-reverse-False-opposite-False",
+    "records": [
+      {
+        "cigar": "1000M800S",
+        "start": 0,
+        "reverse": false,
+        "supp": false,
+        "sa": "chrOther,5001,+,1000H100M600I100M,60,0;"
+      }
+    ],
+    "reads": [
+      {
+        "id": "synthetic",
+        "reference_start": 0,
+        "reference_end": 1000,
+        "sv": [
+          {
+            "t": "S",
+            "side": "R",
+            "ref": 1000,
+            "len": 800,
+            "q": 1000,
+            "anchor": {
+              "chrom": "chrT",
+              "pos": 0,
+              "cigar_ref_len": 1000,
+              "strand": "+",
+              "q_start": 0,
+              "q_end": 1000,
+              "query_length": 1800
+            }
+          },
+          {
+            "t": "SA",
+            "chrom": "chrOther",
+            "pos": 5000,
+            "strand": "+",
+            "mapq": 60,
+            "nm": 0,
+            "cigar_ref_len": 200,
+            "q_start": 1000,
+            "q_end": 1800,
+            "query_length": 1800,
+            "query_blocks": [[1000, 1100], [1700, 1800]],
+            "supp": false,
+            "same_strand": true
+          }
+        ],
+        "duplicate": false,
+        "file_chrom": "chrT",
+        "aligned_blocks": [
+          [
+            0,
+            1000
+          ]
+        ],
+        "sv_segments": [
+          {
+            "chrom": "chrT",
+            "pos": 0,
+            "cigar_ref_len": 1000,
+            "strand": "+",
+            "mapq": 60,
+            "q_start": 0,
+            "q_end": 1000,
+            "query_length": 1800,
+            "query_blocks": [[0, 1000]]
+          },
+          {
+            "t": "SA",
+            "chrom": "chrOther",
+            "pos": 5000,
+            "strand": "+",
+            "mapq": 60,
+            "nm": 0,
+            "cigar_ref_len": 200,
+            "q_start": 1000,
+            "q_end": 1800,
+            "query_length": 1800,
+            "query_blocks": [[1000, 1100], [1700, 1800]],
+            "supp": false,
+            "same_strand": true
+          }
+        ],
+        "supplementary": false,
+        "sequence_span": [
+          0,
+          1800
+        ]
+      }
+    ],
+    "expected": "putative",
+    "levels": [
+      "putative"
+    ],
+    "target": {
+      "t": "I",
+      "ref": 1000,
+      "len": 800,
+      "end": 1000
+    }
+  },
+  {
+    "name": "internal-I-reverse-False-opposite-True",
+    "records": [
+      {
+        "cigar": "1000M800S",
+        "start": 0,
+        "reverse": false,
+        "supp": false,
+        "sa": "chrOther,5001,-,100M600I100M1000H,60,0;"
+      }
+    ],
+    "reads": [
+      {
+        "id": "synthetic",
+        "reference_start": 0,
+        "reference_end": 1000,
+        "sv": [
+          {
+            "t": "S",
+            "side": "R",
+            "ref": 1000,
+            "len": 800,
+            "q": 1000,
+            "anchor": {
+              "chrom": "chrT",
+              "pos": 0,
+              "cigar_ref_len": 1000,
+              "strand": "+",
+              "q_start": 0,
+              "q_end": 1000,
+              "query_length": 1800
+            }
+          },
+          {
+            "t": "SA",
+            "chrom": "chrOther",
+            "pos": 5000,
+            "strand": "-",
+            "mapq": 60,
+            "nm": 0,
+            "cigar_ref_len": 200,
+            "q_start": 0,
+            "q_end": 800,
+            "query_length": 1800,
+            "query_blocks": [[0, 100], [700, 800]],
+            "supp": false,
+            "same_strand": false
+          }
+        ],
+        "duplicate": false,
+        "file_chrom": "chrT",
+        "aligned_blocks": [
+          [
+            0,
+            1000
+          ]
+        ],
+        "sv_segments": [
+          {
+            "chrom": "chrT",
+            "pos": 0,
+            "cigar_ref_len": 1000,
+            "strand": "+",
+            "mapq": 60,
+            "q_start": 0,
+            "q_end": 1000,
+            "query_length": 1800,
+            "query_blocks": [[0, 1000]]
+          },
+          {
+            "t": "SA",
+            "chrom": "chrOther",
+            "pos": 5000,
+            "strand": "-",
+            "mapq": 60,
+            "nm": 0,
+            "cigar_ref_len": 200,
+            "q_start": 0,
+            "q_end": 800,
+            "query_length": 1800,
+            "query_blocks": [[0, 100], [700, 800]],
+            "supp": false,
+            "same_strand": false
+          }
+        ],
+        "supplementary": false,
+        "sequence_span": [
+          0,
+          1800
+        ]
+      }
+    ],
+    "expected": "putative",
+    "levels": [
+      "putative"
+    ],
+    "target": {
+      "t": "I",
+      "ref": 1000,
+      "len": 800,
+      "end": 1000
+    }
+  },
+  {
+    "name": "internal-I-reverse-True-opposite-False",
+    "records": [
+      {
+        "cigar": "1000M800S",
+        "start": 0,
+        "reverse": true,
+        "supp": false,
+        "sa": "chrOther,5001,-,1000H100M600I100M,60,0;"
+      }
+    ],
+    "reads": [
+      {
+        "id": "synthetic",
+        "reference_start": 0,
+        "reference_end": 1000,
+        "sv": [
+          {
+            "t": "S",
+            "side": "R",
+            "ref": 1000,
+            "len": 800,
+            "q": 1000,
+            "anchor": {
+              "chrom": "chrT",
+              "pos": 0,
+              "cigar_ref_len": 1000,
+              "strand": "-",
+              "q_start": 0,
+              "q_end": 1000,
+              "query_length": 1800
+            }
+          },
+          {
+            "t": "SA",
+            "chrom": "chrOther",
+            "pos": 5000,
+            "strand": "-",
+            "mapq": 60,
+            "nm": 0,
+            "cigar_ref_len": 200,
+            "q_start": 1000,
+            "q_end": 1800,
+            "query_length": 1800,
+            "query_blocks": [[1000, 1100], [1700, 1800]],
+            "supp": false,
+            "same_strand": true
+          }
+        ],
+        "duplicate": false,
+        "file_chrom": "chrT",
+        "aligned_blocks": [
+          [
+            0,
+            1000
+          ]
+        ],
+        "sv_segments": [
+          {
+            "chrom": "chrT",
+            "pos": 0,
+            "cigar_ref_len": 1000,
+            "strand": "-",
+            "mapq": 60,
+            "q_start": 0,
+            "q_end": 1000,
+            "query_length": 1800,
+            "query_blocks": [[0, 1000]]
+          },
+          {
+            "t": "SA",
+            "chrom": "chrOther",
+            "pos": 5000,
+            "strand": "-",
+            "mapq": 60,
+            "nm": 0,
+            "cigar_ref_len": 200,
+            "q_start": 1000,
+            "q_end": 1800,
+            "query_length": 1800,
+            "query_blocks": [[1000, 1100], [1700, 1800]],
+            "supp": false,
+            "same_strand": true
+          }
+        ],
+        "supplementary": false,
+        "sequence_span": [
+          0,
+          1800
+        ]
+      }
+    ],
+    "expected": "putative",
+    "levels": [
+      "putative"
+    ],
+    "target": {
+      "t": "I",
+      "ref": 1000,
+      "len": 800,
+      "end": 1000
+    }
+  },
+  {
+    "name": "internal-I-reverse-True-opposite-True",
+    "records": [
+      {
+        "cigar": "1000M800S",
+        "start": 0,
+        "reverse": true,
+        "supp": false,
+        "sa": "chrOther,5001,+,100M600I100M1000H,60,0;"
+      }
+    ],
+    "reads": [
+      {
+        "id": "synthetic",
+        "reference_start": 0,
+        "reference_end": 1000,
+        "sv": [
+          {
+            "t": "S",
+            "side": "R",
+            "ref": 1000,
+            "len": 800,
+            "q": 1000,
+            "anchor": {
+              "chrom": "chrT",
+              "pos": 0,
+              "cigar_ref_len": 1000,
+              "strand": "-",
+              "q_start": 0,
+              "q_end": 1000,
+              "query_length": 1800
+            }
+          },
+          {
+            "t": "SA",
+            "chrom": "chrOther",
+            "pos": 5000,
+            "strand": "+",
+            "mapq": 60,
+            "nm": 0,
+            "cigar_ref_len": 200,
+            "q_start": 0,
+            "q_end": 800,
+            "query_length": 1800,
+            "query_blocks": [[0, 100], [700, 800]],
+            "supp": false,
+            "same_strand": false
+          }
+        ],
+        "duplicate": false,
+        "file_chrom": "chrT",
+        "aligned_blocks": [
+          [
+            0,
+            1000
+          ]
+        ],
+        "sv_segments": [
+          {
+            "chrom": "chrT",
+            "pos": 0,
+            "cigar_ref_len": 1000,
+            "strand": "-",
+            "mapq": 60,
+            "q_start": 0,
+            "q_end": 1000,
+            "query_length": 1800,
+            "query_blocks": [[0, 1000]]
+          },
+          {
+            "t": "SA",
+            "chrom": "chrOther",
+            "pos": 5000,
+            "strand": "+",
+            "mapq": 60,
+            "nm": 0,
+            "cigar_ref_len": 200,
+            "q_start": 0,
+            "q_end": 800,
+            "query_length": 1800,
+            "query_blocks": [[0, 100], [700, 800]],
+            "supp": false,
+            "same_strand": false
+          }
+        ],
+        "supplementary": false,
+        "sequence_span": [
+          0,
+          1800
+        ]
+      }
+    ],
+    "expected": "putative",
+    "levels": [
+      "putative"
+    ],
+    "target": {
+      "t": "I",
+      "ref": 1000,
+      "len": 800,
+      "end": 1000
+    }
+  },
+  {
+    "name": "aligned-blocks-pass-excluding-I-and-D-N",
+    "records": [
+      {
+        "cigar": "1000M800S",
+        "start": 0,
+        "reverse": false,
+        "supp": false,
+        "sa": "chrOther,5001,+,1000S200=100I10D200X100I10N200M,60,0;"
+      }
+    ],
+    "reads": [
+      {
+        "id": "synthetic",
+        "reference_start": 0,
+        "reference_end": 1000,
+        "sv": [
+          {
+            "t": "S",
+            "side": "R",
+            "ref": 1000,
+            "len": 800,
+            "q": 1000,
+            "anchor": {
+              "chrom": "chrT",
+              "pos": 0,
+              "cigar_ref_len": 1000,
+              "strand": "+",
+              "q_start": 0,
+              "q_end": 1000,
+              "query_length": 1800
+            }
+          },
+          {
+            "t": "SA",
+            "chrom": "chrOther",
+            "pos": 5000,
+            "strand": "+",
+            "mapq": 60,
+            "nm": 0,
+            "cigar_ref_len": 620,
+            "q_start": 1000,
+            "q_end": 1800,
+            "query_length": 1800,
+            "query_blocks": [[1000, 1200], [1300, 1500], [1600, 1800]],
+            "supp": false,
+            "same_strand": true
+          }
+        ],
+        "duplicate": false,
+        "file_chrom": "chrT",
+        "aligned_blocks": [
+          [
+            0,
+            1000
+          ]
+        ],
+        "sv_segments": [
+          {
+            "chrom": "chrT",
+            "pos": 0,
+            "cigar_ref_len": 1000,
+            "strand": "+",
+            "mapq": 60,
+            "q_start": 0,
+            "q_end": 1000,
+            "query_length": 1800,
+            "query_blocks": [[0, 1000]]
+          },
+          {
+            "t": "SA",
+            "chrom": "chrOther",
+            "pos": 5000,
+            "strand": "+",
+            "mapq": 60,
+            "nm": 0,
+            "cigar_ref_len": 620,
+            "q_start": 1000,
+            "q_end": 1800,
+            "query_length": 1800,
+            "query_blocks": [[1000, 1200], [1300, 1500], [1600, 1800]],
+            "supp": false,
+            "same_strand": true
+          }
+        ],
+        "supplementary": false,
+        "sequence_span": [
+          0,
+          1800
+        ]
+      }
+    ],
+    "expected": "conflicting",
+    "levels": [
+      "conflicting"
+    ],
+    "target": {
+      "t": "I",
+      "ref": 1000,
+      "len": 800,
+      "end": 1000
+    },
+    "overlap": 600
+  },
+  {
+    "name": "fetched-internal-I",
+    "records": [
+      {
+        "cigar": "1000M800S",
+        "start": 0,
+        "reverse": false,
+        "supp": false,
+        "sa": ""
+      },
+      {
+        "cigar": "1000S100M600I100M",
+        "start": 200000,
+        "reverse": false,
+        "supp": true,
+        "sa": ""
+      }
+    ],
+    "reads": [
+      {
+        "id": "synthetic",
+        "reference_start": 0,
+        "reference_end": 1000,
+        "sv": [
+          {
+            "t": "S",
+            "side": "R",
+            "ref": 1000,
+            "len": 800,
+            "q": 1000,
+            "anchor": {
+              "chrom": "chrT",
+              "pos": 0,
+              "cigar_ref_len": 1000,
+              "strand": "+",
+              "q_start": 0,
+              "q_end": 1000,
+              "query_length": 1800
+            }
+          }
+        ],
+        "duplicate": false,
+        "file_chrom": "chrT",
+        "aligned_blocks": [
+          [
+            0,
+            1000
+          ]
+        ],
+        "sv_segments": [
+          {
+            "chrom": "chrT",
+            "pos": 0,
+            "cigar_ref_len": 1000,
+            "strand": "+",
+            "mapq": 60,
+            "q_start": 0,
+            "q_end": 1000,
+            "query_length": 1800,
+            "query_blocks": [[0, 1000]]
+          }
+        ],
+        "supplementary": false,
+        "sequence_span": [
+          0,
+          1800
+        ]
+      },
+      {
+        "id": "synthetic",
+        "reference_start": 200000,
+        "reference_end": 200200,
+        "sv": [
+          {
+            "t": "S",
+            "side": "L",
+            "ref": 200000,
+            "len": 1000,
+            "q": 0,
+            "anchor": {
+              "chrom": "chrT",
+              "pos": 200000,
+              "cigar_ref_len": 200,
+              "strand": "+",
+              "q_start": 1000,
+              "q_end": 1800,
+              "query_length": 1800
+            }
+          },
+          {
+            "t": "I",
+            "ref": 200100,
+            "len": 600,
+            "q": 1100
+          }
+        ],
+        "duplicate": false,
+        "file_chrom": "chrT",
+        "aligned_blocks": [
+          [
+            200000,
+            200200
+          ]
+        ],
+        "sv_segments": [
+          {
+            "chrom": "chrT",
+            "pos": 200000,
+            "cigar_ref_len": 200,
+            "strand": "+",
+            "mapq": 60,
+            "q_start": 1000,
+            "q_end": 1800,
+            "query_length": 1800,
+            "query_blocks": [[1000, 1100], [1700, 1800]]
+          }
+        ],
+        "supplementary": true,
+        "sequence_span": [
+          0,
+          1800
+        ]
+      }
+    ],
+    "expected": "putative",
+    "levels": [
+      "putative",
+      null
+    ],
+    "target": {
+      "t": "I",
+      "ref": 1000,
+      "len": 800,
+      "end": 1000
+    }
+  },
+  {
+    "name": "shared-right-endpoint",
+    "records": [
+      {
+        "cigar": "1000M800S",
+        "start": 0,
+        "reverse": false,
+        "supp": false,
+        "sa": "chrOther,5001,+,500S650M650S,60,0;"
+      },
+      {
+        "cigar": "500M1300S",
+        "start": 500,
+        "reverse": false,
+        "supp": true,
+        "sa": "chrOther,5001,+,500S650M650S,60,0;"
+      }
+    ],
+    "reads": [
+      {
+        "id": "synthetic",
+        "reference_start": 0,
+        "reference_end": 1000,
+        "sv": [
+          {
+            "t": "S",
+            "side": "R",
+            "ref": 1000,
+            "len": 800,
+            "q": 1000,
+            "anchor": {
+              "chrom": "chrT",
+              "pos": 0,
+              "cigar_ref_len": 1000,
+              "strand": "+",
+              "q_start": 0,
+              "q_end": 1000,
+              "query_length": 1800
+            }
+          },
+          {
+            "t": "SA",
+            "chrom": "chrOther",
+            "pos": 5000,
+            "strand": "+",
+            "mapq": 60,
+            "nm": 0,
+            "cigar_ref_len": 650,
+            "q_start": 500,
+            "q_end": 1150,
+            "query_length": 1800,
+            "query_blocks": [[500, 1150]],
+            "supp": false,
+            "same_strand": true
+          }
+        ],
+        "duplicate": false,
+        "file_chrom": "chrT",
+        "aligned_blocks": [
+          [
+            0,
+            1000
+          ]
+        ],
+        "sv_segments": [
+          {
+            "chrom": "chrT",
+            "pos": 0,
+            "cigar_ref_len": 1000,
+            "strand": "+",
+            "mapq": 60,
+            "q_start": 0,
+            "q_end": 1000,
+            "query_length": 1800,
+            "query_blocks": [[0, 1000]]
+          },
+          {
+            "t": "SA",
+            "chrom": "chrOther",
+            "pos": 5000,
+            "strand": "+",
+            "mapq": 60,
+            "nm": 0,
+            "cigar_ref_len": 650,
+            "q_start": 500,
+            "q_end": 1150,
+            "query_length": 1800,
+            "query_blocks": [[500, 1150]],
+            "supp": false,
+            "same_strand": true
+          }
+        ],
+        "supplementary": false,
+        "sequence_span": [
+          0,
+          1800
+        ]
+      },
+      {
+        "id": "synthetic",
+        "reference_start": 500,
+        "reference_end": 1000,
+        "sv": [
+          {
+            "t": "S",
+            "side": "R",
+            "ref": 1000,
+            "len": 1300,
+            "q": 500,
+            "anchor": {
+              "chrom": "chrT",
+              "pos": 500,
+              "cigar_ref_len": 500,
+              "strand": "+",
+              "q_start": 0,
+              "q_end": 500,
+              "query_length": 1800
+            }
+          },
+          {
+            "t": "SA",
+            "chrom": "chrOther",
+            "pos": 5000,
+            "strand": "+",
+            "mapq": 60,
+            "nm": 0,
+            "cigar_ref_len": 650,
+            "q_start": 500,
+            "q_end": 1150,
+            "query_length": 1800,
+            "query_blocks": [[500, 1150]],
+            "supp": true,
+            "same_strand": true
+          }
+        ],
+        "duplicate": false,
+        "file_chrom": "chrT",
+        "aligned_blocks": [
+          [
+            500,
+            1000
+          ]
+        ],
+        "sv_segments": [
+          {
+            "chrom": "chrT",
+            "pos": 500,
+            "cigar_ref_len": 500,
+            "strand": "+",
+            "mapq": 60,
+            "q_start": 0,
+            "q_end": 500,
+            "query_length": 1800,
+            "query_blocks": [[0, 500]]
+          },
+          {
+            "t": "SA",
+            "chrom": "chrOther",
+            "pos": 5000,
+            "strand": "+",
+            "mapq": 60,
+            "nm": 0,
+            "cigar_ref_len": 650,
+            "q_start": 500,
+            "q_end": 1150,
+            "query_length": 1800,
+            "query_blocks": [[500, 1150]],
+            "supp": false,
+            "same_strand": true
+          }
+        ],
+        "supplementary": true,
+        "sequence_span": [
+          0,
+          1800
+        ]
+      }
+    ],
+    "expected": "putative",
+    "levels": [
+      "putative",
+      "conflicting"
+    ],
+    "target": {
+      "t": "I",
+      "ref": 1000,
+      "len": 800,
+      "end": 1000
+    }
+  },
+  {
+    "name": "same-clip-length-distinct-origin",
+    "records": [
+      {
+        "cigar": "1000M800S",
+        "start": 0,
+        "reverse": false,
+        "supp": false,
+        "sa": "chrOther,5001,+,800M1000S,60,0;"
+      },
+      {
+        "cigar": "500H500M800S",
+        "start": 500,
+        "reverse": true,
+        "supp": true,
+        "sa": "chrOther,5001,+,800M1000S,60,0;"
+      }
+    ],
+    "reads": [
+      {
+        "id": "synthetic",
+        "reference_start": 0,
+        "reference_end": 1000,
+        "sv": [
+          {
+            "t": "S",
+            "side": "R",
+            "ref": 1000,
+            "len": 800,
+            "q": 1000,
+            "anchor": {
+              "chrom": "chrT",
+              "pos": 0,
+              "cigar_ref_len": 1000,
+              "strand": "+",
+              "q_start": 0,
+              "q_end": 1000,
+              "query_length": 1800
+            }
+          },
+          {
+            "t": "SA",
+            "chrom": "chrOther",
+            "pos": 5000,
+            "strand": "+",
+            "mapq": 60,
+            "nm": 0,
+            "cigar_ref_len": 800,
+            "q_start": 0,
+            "q_end": 800,
+            "query_length": 1800,
+            "query_blocks": [[0, 800]],
+            "supp": false,
+            "same_strand": true
+          }
+        ],
+        "duplicate": false,
+        "file_chrom": "chrT",
+        "aligned_blocks": [
+          [
+            0,
+            1000
+          ]
+        ],
+        "sv_segments": [
+          {
+            "chrom": "chrT",
+            "pos": 0,
+            "cigar_ref_len": 1000,
+            "strand": "+",
+            "mapq": 60,
+            "q_start": 0,
+            "q_end": 1000,
+            "query_length": 1800,
+            "query_blocks": [[0, 1000]]
+          },
+          {
+            "t": "SA",
+            "chrom": "chrOther",
+            "pos": 5000,
+            "strand": "+",
+            "mapq": 60,
+            "nm": 0,
+            "cigar_ref_len": 800,
+            "q_start": 0,
+            "q_end": 800,
+            "query_length": 1800,
+            "query_blocks": [[0, 800]],
+            "supp": false,
+            "same_strand": true
+          }
+        ],
+        "supplementary": false,
+        "sequence_span": [
+          0,
+          1800
+        ]
+      },
+      {
+        "id": "synthetic",
+        "reference_start": 500,
+        "reference_end": 1000,
+        "sv": [
+          {
+            "t": "S",
+            "side": "L",
+            "ref": 500,
+            "len": 500,
+            "q": 0,
+            "h": 1,
+            "anchor": {
+              "chrom": "chrT",
+              "pos": 500,
+              "cigar_ref_len": 500,
+              "strand": "-",
+              "q_start": 500,
+              "q_end": 1000,
+              "query_length": 1800
+            }
+          },
+          {
+            "t": "S",
+            "side": "R",
+            "ref": 1000,
+            "len": 800,
+            "q": 500,
+            "anchor": {
+              "chrom": "chrT",
+              "pos": 500,
+              "cigar_ref_len": 500,
+              "strand": "-",
+              "q_start": 500,
+              "q_end": 1000,
+              "query_length": 1800
+            }
+          },
+          {
+            "t": "SA",
+            "chrom": "chrOther",
+            "pos": 5000,
+            "strand": "+",
+            "mapq": 60,
+            "nm": 0,
+            "cigar_ref_len": 800,
+            "q_start": 0,
+            "q_end": 800,
+            "query_length": 1800,
+            "query_blocks": [[0, 800]],
+            "supp": true,
+            "same_strand": false
+          }
+        ],
+        "duplicate": false,
+        "file_chrom": "chrT",
+        "aligned_blocks": [
+          [
+            500,
+            1000
+          ]
+        ],
+        "sv_segments": [
+          {
+            "chrom": "chrT",
+            "pos": 500,
+            "cigar_ref_len": 500,
+            "strand": "-",
+            "mapq": 60,
+            "q_start": 500,
+            "q_end": 1000,
+            "query_length": 1800,
+            "query_blocks": [[500, 1000]]
+          },
+          {
+            "t": "SA",
+            "chrom": "chrOther",
+            "pos": 5000,
+            "strand": "+",
+            "mapq": 60,
+            "nm": 0,
+            "cigar_ref_len": 800,
+            "q_start": 0,
+            "q_end": 800,
+            "query_length": 1800,
+            "query_blocks": [[0, 800]],
+            "supp": false,
+            "same_strand": false
+          }
+        ],
+        "supplementary": true,
+        "sequence_span": [
+          500,
+          1800
+        ]
+      }
+    ],
+    "expected": "putative",
+    "levels": [
+      "putative",
+      "conflicting"
+    ],
+    "target": {
+      "t": "I",
+      "ref": 1000,
+      "len": 800,
+      "end": 1000
+    }
+  },
+  {
+    "name": "hard-clipped-internal-I",
+    "records": [
+      {
+        "cigar": "1000M800H",
+        "start": 0,
+        "reverse": true,
+        "supp": false,
+        "sa": "chrOther,5001,+,100M600I100M1000H,60,0;"
+      }
+    ],
+    "reads": [
+      {
+        "id": "synthetic",
+        "reference_start": 0,
+        "reference_end": 1000,
+        "sv": [
+          {
+            "t": "S",
+            "side": "R",
+            "ref": 1000,
+            "len": 800,
+            "q": 1000,
+            "h": 1,
+            "anchor": {
+              "chrom": "chrT",
+              "pos": 0,
+              "cigar_ref_len": 1000,
+              "strand": "-",
+              "q_start": 0,
+              "q_end": 1000,
+              "query_length": 1800
+            }
+          },
+          {
+            "t": "SA",
+            "chrom": "chrOther",
+            "pos": 5000,
+            "strand": "+",
+            "mapq": 60,
+            "nm": 0,
+            "cigar_ref_len": 200,
+            "q_start": 0,
+            "q_end": 800,
+            "query_length": 1800,
+            "query_blocks": [[0, 100], [700, 800]],
+            "supp": false,
+            "same_strand": false
+          }
+        ],
+        "duplicate": false,
+        "file_chrom": "chrT",
+        "aligned_blocks": [
+          [
+            0,
+            1000
+          ]
+        ],
+        "sv_segments": [
+          {
+            "chrom": "chrT",
+            "pos": 0,
+            "cigar_ref_len": 1000,
+            "strand": "-",
+            "mapq": 60,
+            "q_start": 0,
+            "q_end": 1000,
+            "query_length": 1800,
+            "query_blocks": [[0, 1000]]
+          },
+          {
+            "t": "SA",
+            "chrom": "chrOther",
+            "pos": 5000,
+            "strand": "+",
+            "mapq": 60,
+            "nm": 0,
+            "cigar_ref_len": 200,
+            "q_start": 0,
+            "q_end": 800,
+            "query_length": 1800,
+            "query_blocks": [[0, 100], [700, 800]],
+            "supp": false,
+            "same_strand": false
+          }
+        ],
+        "supplementary": false,
+        "sequence_span": [
+          0,
+          1000
+        ]
+      }
+    ],
+    "expected": "putative",
+    "levels": [
+      "putative"
+    ],
+    "target": {
+      "t": "I",
+      "ref": 1000,
+      "len": 800,
+      "end": 1000
+    }
+  },
+  {
+    "name": "shared-left-endpoint",
+    "records": [
+      {
+        "cigar": "800S1000M",
+        "start": 1000,
+        "reverse": false,
+        "supp": false,
+        "sa": "chrOther,5001,+,650S650M500S,60,0;"
+      },
+      {
+        "cigar": "1300S500M",
+        "start": 1000,
+        "reverse": false,
+        "supp": true,
+        "sa": "chrOther,5001,+,650S650M500S,60,0;"
+      }
+    ],
+    "reads": [
+      {
+        "id": "synthetic",
+        "reference_start": 1000,
+        "reference_end": 2000,
+        "sv": [
+          {
+            "t": "S",
+            "side": "L",
+            "ref": 1000,
+            "len": 800,
+            "q": 0,
+            "anchor": {
+              "chrom": "chrT",
+              "pos": 1000,
+              "cigar_ref_len": 1000,
+              "strand": "+",
+              "q_start": 800,
+              "q_end": 1800,
+              "query_length": 1800
+            }
+          },
+          {
+            "t": "SA",
+            "chrom": "chrOther",
+            "pos": 5000,
+            "strand": "+",
+            "mapq": 60,
+            "nm": 0,
+            "cigar_ref_len": 650,
+            "q_start": 650,
+            "q_end": 1300,
+            "query_length": 1800,
+            "query_blocks": [[650, 1300]],
+            "supp": false,
+            "same_strand": true
+          }
+        ],
+        "duplicate": false,
+        "file_chrom": "chrT",
+        "aligned_blocks": [
+          [
+            1000,
+            2000
+          ]
+        ],
+        "sv_segments": [
+          {
+            "chrom": "chrT",
+            "pos": 1000,
+            "cigar_ref_len": 1000,
+            "strand": "+",
+            "mapq": 60,
+            "q_start": 800,
+            "q_end": 1800,
+            "query_length": 1800,
+            "query_blocks": [[800, 1800]]
+          },
+          {
+            "t": "SA",
+            "chrom": "chrOther",
+            "pos": 5000,
+            "strand": "+",
+            "mapq": 60,
+            "nm": 0,
+            "cigar_ref_len": 650,
+            "q_start": 650,
+            "q_end": 1300,
+            "query_length": 1800,
+            "query_blocks": [[650, 1300]],
+            "supp": false,
+            "same_strand": true
+          }
+        ],
+        "supplementary": false,
+        "sequence_span": [
+          0,
+          1800
+        ]
+      },
+      {
+        "id": "synthetic",
+        "reference_start": 1000,
+        "reference_end": 1500,
+        "sv": [
+          {
+            "t": "S",
+            "side": "L",
+            "ref": 1000,
+            "len": 1300,
+            "q": 0,
+            "anchor": {
+              "chrom": "chrT",
+              "pos": 1000,
+              "cigar_ref_len": 500,
+              "strand": "+",
+              "q_start": 1300,
+              "q_end": 1800,
+              "query_length": 1800
+            }
+          },
+          {
+            "t": "SA",
+            "chrom": "chrOther",
+            "pos": 5000,
+            "strand": "+",
+            "mapq": 60,
+            "nm": 0,
+            "cigar_ref_len": 650,
+            "q_start": 650,
+            "q_end": 1300,
+            "query_length": 1800,
+            "query_blocks": [[650, 1300]],
+            "supp": true,
+            "same_strand": true
+          }
+        ],
+        "duplicate": false,
+        "file_chrom": "chrT",
+        "aligned_blocks": [
+          [
+            1000,
+            1500
+          ]
+        ],
+        "sv_segments": [
+          {
+            "chrom": "chrT",
+            "pos": 1000,
+            "cigar_ref_len": 500,
+            "strand": "+",
+            "mapq": 60,
+            "q_start": 1300,
+            "q_end": 1800,
+            "query_length": 1800,
+            "query_blocks": [[1300, 1800]]
+          },
+          {
+            "t": "SA",
+            "chrom": "chrOther",
+            "pos": 5000,
+            "strand": "+",
+            "mapq": 60,
+            "nm": 0,
+            "cigar_ref_len": 650,
+            "q_start": 650,
+            "q_end": 1300,
+            "query_length": 1800,
+            "query_blocks": [[650, 1300]],
+            "supp": false,
+            "same_strand": true
+          }
+        ],
+        "supplementary": true,
+        "sequence_span": [
+          0,
+          1800
+        ]
+      }
+    ],
+    "expected": "putative",
+    "levels": [
+      "putative",
+      "conflicting"
+    ],
+    "target": {
+      "t": "I",
+      "ref": 1000,
+      "len": 800,
+      "end": 1000
+    }
+  },
+  {
+    "name": "replacement-end",
+    "records": [
+      {
+        "cigar": "1000M800S",
+        "start": 0,
+        "reverse": false,
+        "supp": false,
+        "sa": "chrT,101106,+,1000S800M,60,0;"
+      }
+    ],
+    "reads": [
+      {
+        "id": "synthetic",
+        "reference_start": 0,
+        "reference_end": 1000,
+        "sv": [
+          {
+            "t": "S",
+            "side": "R",
+            "ref": 1000,
+            "len": 800,
+            "q": 1000,
+            "anchor": {
+              "chrom": "chrT",
+              "pos": 0,
+              "cigar_ref_len": 1000,
+              "strand": "+",
+              "q_start": 0,
+              "q_end": 1000,
+              "query_length": 1800
+            }
+          },
+          {
+            "t": "SA",
+            "chrom": "chrT",
+            "pos": 101105,
+            "strand": "+",
+            "mapq": 60,
+            "nm": 0,
+            "cigar_ref_len": 800,
+            "q_start": 1000,
+            "q_end": 1800,
+            "query_length": 1800,
+            "query_blocks": [[1000, 1800]],
+            "supp": false,
+            "same_strand": true
+          }
+        ],
+        "duplicate": false,
+        "file_chrom": "chrT",
+        "aligned_blocks": [
+          [
+            0,
+            1000
+          ]
+        ],
+        "sv_segments": [
+          {
+            "chrom": "chrT",
+            "pos": 0,
+            "cigar_ref_len": 1000,
+            "strand": "+",
+            "mapq": 60,
+            "q_start": 0,
+            "q_end": 1000,
+            "query_length": 1800,
+            "query_blocks": [[0, 1000]]
+          },
+          {
+            "t": "SA",
+            "chrom": "chrT",
+            "pos": 101105,
+            "strand": "+",
+            "mapq": 60,
+            "nm": 0,
+            "cigar_ref_len": 800,
+            "q_start": 1000,
+            "q_end": 1800,
+            "query_length": 1800,
+            "query_blocks": [[1000, 1800]],
+            "supp": false,
+            "same_strand": true
+          }
+        ],
+        "supplementary": false,
+        "sequence_span": [
+          0,
+          1800
+        ]
+      }
+    ],
+    "expected": "putative",
+    "levels": [
+      "putative"
+    ],
+    "target": {
+      "t": "D",
+      "ref": 1000,
+      "len": 100,
+      "end": 1110,
+      "ref_len": 110
+    }
+  },
+  {
+    "name": "replacement-ref-len-fallback",
+    "records": [
+      {
+        "cigar": "1000M800S",
+        "start": 0,
+        "reverse": false,
+        "supp": false,
+        "sa": "chrT,101106,+,1000S800M,60,0;"
+      }
+    ],
+    "reads": [
+      {
+        "id": "synthetic",
+        "reference_start": 0,
+        "reference_end": 1000,
+        "sv": [
+          {
+            "t": "S",
+            "side": "R",
+            "ref": 1000,
+            "len": 800,
+            "q": 1000,
+            "anchor": {
+              "chrom": "chrT",
+              "pos": 0,
+              "cigar_ref_len": 1000,
+              "strand": "+",
+              "q_start": 0,
+              "q_end": 1000,
+              "query_length": 1800
+            }
+          },
+          {
+            "t": "SA",
+            "chrom": "chrT",
+            "pos": 101105,
+            "strand": "+",
+            "mapq": 60,
+            "nm": 0,
+            "cigar_ref_len": 800,
+            "q_start": 1000,
+            "q_end": 1800,
+            "query_length": 1800,
+            "query_blocks": [[1000, 1800]],
+            "supp": false,
+            "same_strand": true
+          }
+        ],
+        "duplicate": false,
+        "file_chrom": "chrT",
+        "aligned_blocks": [
+          [
+            0,
+            1000
+          ]
+        ],
+        "sv_segments": [
+          {
+            "chrom": "chrT",
+            "pos": 0,
+            "cigar_ref_len": 1000,
+            "strand": "+",
+            "mapq": 60,
+            "q_start": 0,
+            "q_end": 1000,
+            "query_length": 1800,
+            "query_blocks": [[0, 1000]]
+          },
+          {
+            "t": "SA",
+            "chrom": "chrT",
+            "pos": 101105,
+            "strand": "+",
+            "mapq": 60,
+            "nm": 0,
+            "cigar_ref_len": 800,
+            "q_start": 1000,
+            "q_end": 1800,
+            "query_length": 1800,
+            "query_blocks": [[1000, 1800]],
+            "supp": false,
+            "same_strand": true
+          }
+        ],
+        "supplementary": false,
+        "sequence_span": [
+          0,
+          1800
+        ]
+      }
+    ],
+    "expected": "putative",
+    "levels": [
+      "putative"
+    ],
+    "target": {
+      "t": "I",
+      "ref": 1000,
+      "len": 800,
+      "ref_len": 110
+    }
+  },
+  {
+    "name": "replacement-uncertainty-end",
+    "records": [
+      {
+        "cigar": "1000M800S",
+        "start": 0,
+        "reverse": false,
+        "supp": false,
+        "sa": "chrT,101116,+,1000S800M,60,0;"
+      }
+    ],
+    "reads": [
+      {
+        "id": "synthetic",
+        "reference_start": 0,
+        "reference_end": 1000,
+        "sv": [
+          {
+            "t": "S",
+            "side": "R",
+            "ref": 1000,
+            "len": 800,
+            "q": 1000,
+            "anchor": {
+              "chrom": "chrT",
+              "pos": 0,
+              "cigar_ref_len": 1000,
+              "strand": "+",
+              "q_start": 0,
+              "q_end": 1000,
+              "query_length": 1800
+            }
+          },
+          {
+            "t": "SA",
+            "chrom": "chrT",
+            "pos": 101115,
+            "strand": "+",
+            "mapq": 60,
+            "nm": 0,
+            "cigar_ref_len": 800,
+            "q_start": 1000,
+            "q_end": 1800,
+            "query_length": 1800,
+            "query_blocks": [[1000, 1800]],
+            "supp": false,
+            "same_strand": true
+          }
+        ],
+        "duplicate": false,
+        "file_chrom": "chrT",
+        "aligned_blocks": [
+          [
+            0,
+            1000
+          ]
+        ],
+        "sv_segments": [
+          {
+            "chrom": "chrT",
+            "pos": 0,
+            "cigar_ref_len": 1000,
+            "strand": "+",
+            "mapq": 60,
+            "q_start": 0,
+            "q_end": 1000,
+            "query_length": 1800,
+            "query_blocks": [[0, 1000]]
+          },
+          {
+            "t": "SA",
+            "chrom": "chrT",
+            "pos": 101115,
+            "strand": "+",
+            "mapq": 60,
+            "nm": 0,
+            "cigar_ref_len": 800,
+            "q_start": 1000,
+            "q_end": 1800,
+            "query_length": 1800,
+            "query_blocks": [[1000, 1800]],
+            "supp": false,
+            "same_strand": true
+          }
+        ],
+        "supplementary": false,
+        "sequence_span": [
+          0,
+          1800
+        ]
+      }
+    ],
+    "expected": "putative",
+    "levels": [
+      "putative"
+    ],
+    "target": {
+      "t": "D",
+      "ref": 1000,
+      "len": 100,
+      "end": 1110,
+      "ref_len": 110,
+      "uncertainty": [
+        990,
+        1010
+      ]
+    }
+  }
+]

@@ -1,6 +1,16 @@
+import { payloadForExpansion } from '../../../features/liveLift/equivalentInsertions';
 import { useBrowserStore } from '../../../stores/browserStore';
+import type { LiftAxis } from '../../../features/liveLift/axis';
+import { drawInsertionPayload } from './liveLiftInsertionCanvas';
+import { drawLiveLiftMarks, drawLiveLiftHaplotypeStripe, liveLiftBodyRects, liveLiftBodySpans, liveLiftBadgeGeometry, liveLiftHitAt } from './liveLiftCanvas';
+import { readBodyExtent } from './readExtent';
+import type { CoverageResponse } from '../../../api/coverage';
 import { getCanvasRenderScale, setupHighDpiCanvas } from '../../../utils/canvasUtils';
-import { buildRuleMatchContext, footprintMatchesRule, ruleTargetsLayer } from '../../../utils/ruleMatching';
+import { buildRuleMatchContext, footprintMatchesRule, ruleHasNucConditions, ruleTargetsLayer } from '../../../utils/ruleMatching';
+import { NUC_UNDRAWN_LAYERS, effectiveLayerQualities, nucPatchOverlay, nucPatchRows, nucRegRows, nucSegRows, nucSizeIndex, nucSizeMarkFor, type NucSizeMark } from '../../../utils/nucLayers';
+import { drawNucSegLane } from './nucSegCanvas';
+import { drawNucRegLane } from './nucRegCanvas';
+import { drawNucPatchLane } from './nucPatchCanvas';
 import { buildRuleColorResolver } from '../../../utils/ruleColors';
 import type { CompactRead, SvSummary } from './types';
 import { bodyClipRects, readSvDraw } from './svDrawing';
@@ -15,6 +25,7 @@ import {
   getClusterColor,
 } from './constants';
 import { getLayerColor } from '../../../utils/layerColors';
+import { effectiveModColors } from '../../../utils/layerColourFollow';
 import { sameChrom } from '../../../utils/chromAliases';
 import { isSelectedFootprint } from '../../../utils/footprintSelection';
 import { consensusRecordColor, consensusOutline,consensusPrimaryFamily } from '../../../utils/consensusVisual';
@@ -44,6 +55,12 @@ interface JupyterMarkerItem {
 }
 
 interface DrawReadsParams {
+  axis?: LiftAxis;
+  /** A live-lift panel: map correspondence per bin over the view (hatching on the coverage histogram). */
+  liftCorrespondence?: number[] | null;
+  coverageLiveLift?: CoverageResponse['live_lift'] | null;
+  /** A split panel identifies its haplotype in the header; pooled panels identify each row with a stripe. */
+  liftHap?: string | null;
   genome?: string | null;
   canvas: HTMLCanvasElement;
   displayReads: CompactRead[];
@@ -96,8 +113,14 @@ interface DrawReadsParams {
   linkedBoundsStart?: number;
   linkedSessionId?: string;
   linkedHighlightIds?: Set<string>;
+  /** Rows of the molecule hovered in a live-lift panel or its linked source panel (features/liveLift/linking/hover). */
+  liftHoverRows?: Set<CompactRead>;
+  /** Per-read insertion badges of lifted rows (features/differences/displayOptions). */
+  liveLiftBadgeMode?: import('./liveLiftCanvas').LiveLiftBadgeMode;
   /** Reads gone to by name or highlighted from the read menu (fb-r4-clicks): a solid outline. */
   readHighlightIds?: Set<string> | null;
+  readHighlightMode?: 'rows' | 'names';
+  uncertainSvIds?: Set<string>;
   // Selection
   selectedReadIds: Set<string> | undefined;
   selectedFootprints: SelectedFootprint[];
@@ -142,6 +165,8 @@ interface DrawReadsParams {
   coverageFooterHeight?: number;
   /** FiberHMM SV layer with "Link split reads" on: join a read's pieces across rows (features/fiberhmmLayers). */
   splitReadLinks?: boolean;
+  /** The nucleosome panel's focused geometries (`${kind}:${root}`): other patches in the patch lane dim. */
+  nucGeoFocus?: ReadonlySet<string>;
 }
 
 export function drawReadTrack(params: DrawReadsParams): void {
@@ -155,17 +180,24 @@ export function drawReadTrack(params: DrawReadsParams): void {
     showCoverageHistogram,
     isReversed, activeColormap, genes, allPeaks, orthogonalTracks,
     modificationOverlays, overlayMarks, jupyterReadHighlights, jupyterFootprintColorMap,
-    allJupyterMarkers, linkedBoundsStart, linkedSessionId, linkedHighlightIds, readHighlightIds,
+    allJupyterMarkers, linkedBoundsStart, linkedSessionId, linkedHighlightIds, liftHoverRows, liveLiftBadgeMode, readHighlightIds, uncertainSvIds,
     selectedReadIds, selectedFootprints: allSelectedFootprints, footprintCrossHighlight, footprintGroups,
     selectedFamilyGroupId, footprintAnalysisLayer,
     clusterStateConsensus, hasFilter, myFilteredReadIds,
-    maxRegionForReads, coverageData, coverageMax,
+    maxRegionForReads, coverageData, coverageMax, coverageLiveLift,
     annotationOverlays, annotationColors, enabledAnnotationTypes,
     annotationOpacityMin, annotationOpacityMax, annotationThresholds,
     layerColors,selectedConsensusFamily,selectedConsensusFamilies,relatedConsensusFamilies,consensusViewJobId,nativeLattice,latticeShowHits,latticeStyle,
     svEnabled = false, svMinLen = 50, svBandHeight = 0, svSummary = null, coverageFooterHeight = 0,
     splitReadLinks = false,
+    liftCorrespondence = null,
+    liftHap,
   } = params;
+  if (canvas.dataset) {
+    canvas.dataset.liveLiftClusteredRows = String(displayReads.filter(r => r.live_lift && clusterAssignmentForRead(myClusterAssignments, r) !== undefined).length);
+    canvas.dataset.liftHoverRows = String(liftHoverRows?.size ?? 0);
+    canvas.dataset.liveLiftClusterIds = JSON.stringify([...new Set(displayReads.filter(r => r.live_lift).map(r => clusterAssignmentForRead(myClusterAssignments, r)).filter(c => c !== undefined))]);
+  }
   const selectedFootprints = allSelectedFootprints.filter(fp => fp.genome === undefined || fp.genome === (genome ?? null));
 
   const ctx = setupHighDpiCanvas(canvas, width, height);
@@ -181,7 +213,7 @@ export function drawReadTrack(params: DrawReadsParams): void {
   ctx.fillRect(0, 0, width, height);
 
   // Draw dataset label header
-  const headerHeight = datasetLabel ? 16 : 0;
+  const headerHeight = (datasetLabel ? 16 : 0) + (params.axis?.blocks.length ? 24 : 0);
 
   if (datasetLabel) {
     ctx.fillStyle = datasetColor || '#666';
@@ -202,7 +234,7 @@ export function drawReadTrack(params: DrawReadsParams): void {
     const bandScale = (width - sidebarWidth) / regionWidth;
     drawSvBand(ctx, svSummary, {
       top: headerHeight, height: svBandHeight, width, sidebarWidth, viewStart: start,
-      toX: rel => (isReversed ? sidebarWidth + (regionWidth - rel) * bandScale : sidebarWidth + rel * bandScale),
+      toX: rel => sidebarWidth + (params.axis ? params.axis.toX(start + rel) : (isReversed ? regionWidth - rel : rel) * bandScale),
       isReversed, backgroundColor: noReadBackgroundColor,
     });
   }
@@ -215,7 +247,7 @@ export function drawReadTrack(params: DrawReadsParams): void {
 
     // The panel's ground (the colormap's, light or dark), and text that reads on it.
     const ink = inkOn(noReadBackgroundColor);
-    if (coverageData && coverageMax && coverageMax > 0) {
+    if (coverageData && ((coverageMax ?? 0) > 0 || coverageLiveLift?.hatching)) {
       // The coverage fills the track: a label row, then the plot down to the
       // bottom (less the zoomed-out banner's line), over the same span the axis
       // and reads use (right of the cluster sidebar).
@@ -233,14 +265,31 @@ export function drawReadTrack(params: DrawReadsParams): void {
       ctx.fillStyle = ink.dark ? 'rgba(147, 178, 230, 0.65)' : 'rgba(100, 140, 200, 0.55)';
       for (let b = 0; b < covBins; b++) {
         if (coverageData[b] === 0) continue;
-        const barH = (coverageData[b] / coverageMax) * plotHeight;
+        const barH = (coverageData[b] / Math.max(1, coverageMax ?? 0)) * plotHeight;
         // Bin b covers the b-th slice of the region; a reversed view draws it from the right.
         const x = sidebarWidth + (isReversed ? plotWidth - (b + 1) * barW : b * barW);
-        ctx.fillRect(x, plotTop + plotHeight - barH, Math.max(1, barW), barH);
+        const spans = params.axis?.spans(start + b * regionWidth / covBins, start + (b + 1) * regionWidth / covBins)
+          .map(s => ({ x: sidebarWidth + s.x, w: s.w })) ?? [{ x, w: barW }];
+        for (const s of spans) ctx.fillRect(s.x, plotTop + plotHeight - barH, Math.max(1, s.w), barH);
       }
       // Baseline
       ctx.fillStyle = ink.rule;
       ctx.fillRect(sidebarWidth, plotTop + plotHeight, plotWidth, 1);
+
+      // Zoomed-out coverage carries its own correspondence: this branch
+      // returns before the ordinary histogram and must hatch even at depth 0.
+      const corr = coverageLiveLift?.hatching
+        ? (liftHap ? coverageLiveLift.haplotypes[liftHap]?.correspondence : coverageLiveLift.pooled.correspondence)
+        : null;
+      if (corr?.length) {
+        if (params.axis?.blocks.length) corr.forEach((fraction, i) => {
+          for (const s of params.axis!.spans(start + i * regionWidth / corr.length, start + (i + 1) * regionWidth / corr.length))
+            drawCorrespondenceHatching(ctx, [fraction], { x: sidebarWidth + s.x, y: plotTop, w: s.w, h: plotHeight, isReversed, dark: ink.dark });
+        });
+        else drawCorrespondenceHatching(ctx, corr, {
+          x: sidebarWidth, y: plotTop, w: plotWidth, h: plotHeight, isReversed, dark: ink.dark,
+        });
+      }
 
       ctx.font = '10px sans-serif';
       ctx.textBaseline = 'middle';
@@ -287,7 +336,7 @@ export function drawReadTrack(params: DrawReadsParams): void {
   );
   const { rowHeight, rowGap, needsScroll, clampedScrollOffset, totalContentHeight, maxScrollOffset } = layout;
   const trackWidth = width - sidebarWidth;
-  const scale = trackWidth / regionWidth;
+  const scale = params.axis?.pxPerBp ?? trackWidth / regionWidth;
 
   // Calculate visible range for virtual scrolling
   const firstVisibleRow = needsScroll ? Math.floor(clampedScrollOffset / (rowHeight + rowGap)) : 0;
@@ -296,9 +345,8 @@ export function drawReadTrack(params: DrawReadsParams): void {
     : n - 1;
 
   // Position helper: converts relative bp position to screen X
-  const toX = (relPos: number) => isReversed
-    ? sidebarWidth + (regionWidth - relPos) * scale
-    : sidebarWidth + relPos * scale;
+  const toX = (relPos: number) => params.axis ? sidebarWidth + params.axis.toX(start + relPos)
+    : isReversed ? sidebarWidth + (regionWidth - relPos) * scale : sidebarWidth + relPos * scale;
 
   // For linked mode: intervals are relative to linkedBoundsStart
   const linkedOffset = (linkedBoundsStart !== undefined)
@@ -313,7 +361,7 @@ export function drawReadTrack(params: DrawReadsParams): void {
     for (let i = 0; i < n; i++) {
       const read = displayReads[i];
       const y = headerHeight + histogramHeight + i * (rowHeight + rowGap) - (needsScroll ? clampedScrollOffset : 0);
-      const cluster = clusterAssignmentForRead(myClusterAssignments, read.id);
+      const cluster = clusterAssignmentForRead(myClusterAssignments, read);
       if (cluster !== undefined) {
         const actualY = headerHeight + histogramHeight + i * (rowHeight + rowGap);
         if (!clusterBounds.has(cluster)) {
@@ -349,6 +397,20 @@ export function drawReadTrack(params: DrawReadsParams): void {
 
   // Build shared rule-matching context
   const ruleCtx = buildRuleMatchContext(genes, allPeaks, orthogonalTracks, start, end, activeColormap.rules, chrom);
+  // Size-class rules read each nuc/tf call's nucsz mark; the Size classes layer switches them on.
+  const nucClassRulesOn = !!enabledModTypes.nucsz
+    && activeColormap.rules.some(rule => rule.enabled && ruleHasNucConditions(rule));
+  // Array segments: a lane at the bottom of each row, on the read's ground.
+  const nucSegLaneOn = !!enabledModTypes.nucseg;
+  const nucSegDark = inkOn(readBackgroundColor).dark;
+  let nucSegRowsDrawn = 0;
+  // Regularity: an interpolated colour lane over the top of each row (the whole row with `nucreg_full`).
+  const nucRegLaneOn = !!enabledModTypes.nucreg;
+  const nucRegFull = !!enabledModTypes.nucreg_full;
+  let nucRegTilesDrawn = 0;
+  // Regularity patches: a bar per patch on the lower edge of the regularity strip, in its geometry's colour.
+  const nucPatchLaneOn = !!(enabledModTypes as Record<string, boolean>).nucpatch;
+  let nucPatchesDrawn = 0;
 
   // Footprint cart entries paint reads via a rule-like match: size + layer +
   // (optional) reference overlap + (optional) conditions. We can't reuse the
@@ -475,13 +537,14 @@ export function drawReadTrack(params: DrawReadsParams): void {
   );
   const getColorHit = (
     intStart: number, intEnd: number, size: number, layerName?: string,
+    nucMark?: NucSizeMark | null,
   ): { color: string; opacity: number; matched: boolean } => {
     if (size <= 0) return { color: '#cccccc', opacity: 1, matched: false };
 
     const cartHit = cartMatch(start + intStart, start + intEnd, size, layerName);
     if (cartHit) return { color: cartHit, opacity: 1, matched: true };
     for (const rule of activeColormap.rules) {
-      if (footprintMatchesRule(intStart, intEnd, size, rule, ruleCtx, layerName)) {
+      if (footprintMatchesRule(intStart, intEnd, size, rule, ruleCtx, layerName, undefined, undefined, nucMark)) {
         return { color: resolveRuleColor(rule, size), opacity: ruleOpacity(rule.opacity), matched: true };
       }
     }
@@ -504,6 +567,8 @@ export function drawReadTrack(params: DrawReadsParams): void {
   // shrinking to 0 (crisp) at confidence 255.
   const edgeGapBp = (edgeQ: number): number =>
     edgeAmb.maxGapBp * (1 - Math.max(0, Math.min(255, edgeQ)) / 255);
+  // Per-base mark colours with the user's layer colours (Labels → Layer colours) applied.
+  const modColors = effectiveModColors(MOD_COLORS);
   const layerOpacity = (layerName: string, fallback: number): number => {
     const displayLayerName = layerName === 'msp' ? 'fire' : layerName;
     const raw = activeColormap.layerOpacities?.[displayLayerName]
@@ -527,14 +592,54 @@ export function drawReadTrack(params: DrawReadsParams): void {
   if (showCoverageHistogram && coverageHistogramHeight > 0) {
     drawCoverageHistogram(ctx, displayReads, {
       sidebarWidth, trackWidth, regionWidth, histogramHeight: coverageHistogramHeight, headerHeight: headerHeight + svBandHeight,
-      linkedOffset, isReversed, width,
+      linkedOffset, isReversed, width, liftCorrespondence, axis: params.axis, start,
     });
   }
 
   // Draw reads (in clipped/translated context for panning)
+  const liveLiftDark = inkOn(noReadBackgroundColor).dark;
+  let insertionCalls = 0;
+  const insertionCallsById: Record<string, number> = {};
+  // Recording the actual visible badge geometry lets the browser smoke test
+  // click the canvas as a user does, even when row sorting or density changes.
+  let badgeTarget: { x: number; y: number; ins_id: string; bp: number } | null = null;
+  let liveLiftBadgesDrawn = 0, liveLiftBadgeLabels = 0;
+  if (params.axis?.blocks.length) {
+    for (const b of params.axis.blocks) {
+      ctx.fillStyle = liveLiftDark ? '#1e293b' : '#e2e8f0';
+      ctx.fillRect(sidebarWidth + b.x0, headerHeight, b.x1 - b.x0, height - headerHeight);
+    }
+  }
   for (let i = firstVisibleRow; i <= lastVisibleRow; i++) {
     const read = displayReads[i];
+    const readHighlighted = params.readHighlightMode === 'rows'
+      // Scoped rows: a display row id, or 'name:<id>' for a row the caller could only name (a folded record).
+      ? readHighlightIds?.has(read.analysis_id ?? read.id) || readHighlightIds?.has(`name:${read.id}`)
+      : readHighlightIds?.has(read.analysis_id ?? read.id) || readHighlightIds?.has(read.id) || readHighlightIds?.has(read.id.replace(/_\d+$/, ''));
+    const svUncertain = uncertainSvIds?.has(read.id) || uncertainSvIds?.has(read.id.replace(/_\d+$/, ''));
     const y = headerHeight + histogramHeight + i * (rowHeight + rowGap) - (needsScroll ? clampedScrollOffset : 0);
+
+    if (!badgeTarget && read.live_lift) {
+      const ll = read.live_lift;
+      const options = { y, rowHeight: Math.max(1, rowHeight - rowGap), linkedOffset, regionWidth, toX, badgeMode: liveLiftBadgeMode };
+      const badgeY = y + options.rowHeight / 2;
+      // Collapsed rows retain IDs; insertion annotations load only after expansion.
+      const badge = liveLiftBadgeGeometry(ll, options)
+        .find(b => b.badge[2] >= 2000 && b.badge[2] < 3000 && y >= headerHeight && y + rowHeight <= height
+          && b.x >= sidebarWidth && b.x < width && liveLiftHitAt(ll, b.x, badgeY, options)?.badge === b.badge
+          && !params.axis?.fromX(b.x - sidebarWidth).ins_id
+          && ll.badge_ids?.[ll.badges!.indexOf(b.badge)]);
+      const id = badge ? ll.badge_ids?.[ll.badges!.indexOf(badge.badge)] : undefined;
+      if (badge && id) badgeTarget = { x: badge.x, y: badgeY, ins_id: id, bp: badge.badge[2] };
+    }
+
+    // Every ordinary read layer is clipped out of insertion columns. Native
+    // and non-carrier rows keep a true empty gap, including selection outlines.
+    if (params.axis?.blocks.length) {
+      ctx.save(); ctx.beginPath();
+      for (const span of params.axis.spans(start, end)) ctx.rect(sidebarWidth + span.x, y - 2, span.w, rowHeight + 4);
+      ctx.clip();
+    }
 
     const readExtent = getCompactReadExtent(read);
     // SVs (absolute coordinates: view-relative is ref - start, whatever the linked offset).
@@ -544,19 +649,32 @@ export function drawReadTrack(params: DrawReadsParams): void {
     // gap hidden by hideTerminalGaps. A deletion breaks it: nothing is drawn
     // in the deleted span.
     let bodyClip: { x: number; w: number } | Array<{ x: number; w: number }> | null = null;
-    if (readExtent) {
+    if (read.live_lift) {
+      // A live-lift row: its body is its segments minus its holes (independent of the SV display).
+      const rects = liveLiftBodyRects(read.live_lift, linkedOffset, regionWidth, toX);
+      ctx.fillStyle = readBackgroundColor;
+      for (const rect of rects) ctx.fillRect(rect.x, y, rect.w, Math.max(1, rowHeight - rowGap));
+      bodyClip = rects.length ? rects : { x: 0, w: 0 };
+    } else if (readExtent) {
       const adjustedStart = readExtent.start + linkedOffset;
       const adjustedEnd = readExtent.end + linkedOffset;
       const clippedStart = Math.max(0, adjustedStart);
       const clippedEnd = Math.min(regionWidth, adjustedEnd);
-      if (readSv && readSv.deletions.length > 0 && clippedEnd > clippedStart) {
-        const rects = bodyClipRects({ start: adjustedStart, end: adjustedEnd }, readSv.deletions, regionWidth, toX);
+      const deletions = [...(readSv?.deletions ?? [])];
+      for (const block of params.axis?.blocks ?? []) {
+        const payload = read.alternate_blocks?.[block.ins.ins_id];
+        if (payload?.observed_ref_start !== undefined && payload.observed_ref_end !== undefined && payload.observed_ref_end > payload.observed_ref_start) {
+          deletions.push({start:payload.observed_ref_start-start,end:payload.observed_ref_end-start,len:payload.observed_ref_end-payload.observed_ref_start});
+        }
+      }
+      if (deletions.length > 0 && clippedEnd > clippedStart) {
+        const rects = bodyClipRects({ start: adjustedStart, end: adjustedEnd }, deletions, regionWidth, toX);
         ctx.fillStyle = read.qcfail ? '#d97706' : readBackgroundColor;
         for (const rect of rects) ctx.fillRect(rect.x, y, rect.w, Math.max(1, rowHeight - rowGap));
         bodyClip = rects;
       } else if (clippedEnd > clippedStart) {
         const x = isReversed ? toX(clippedEnd) : toX(clippedStart);
-        const w = Math.max(1, (clippedEnd - clippedStart) * scale);
+        const w = Math.max(1, Math.abs(toX(clippedEnd) - toX(clippedStart)));
         ctx.fillStyle = read.qcfail ? '#d97706' : readBackgroundColor;
         ctx.fillRect(x, y, w, Math.max(1, rowHeight - rowGap));
         bodyClip = { x, w };
@@ -626,6 +744,8 @@ export function drawReadTrack(params: DrawReadsParams): void {
     }
 
     const m6aToggled = enabledModTypes.m6a || enabledModTypes.mod;
+    // The read's nucsz marks, looked up by each call's own (payload-frame) span.
+    const nucIndex = nucClassRulesOn ? nucSizeIndex(read.layers?.nucsz) : null;
 
     const drawPrimaryItems = () => {
       for (const item of primaryItems) {
@@ -660,11 +780,13 @@ export function drawReadTrack(params: DrawReadsParams): void {
         if (visibleEnd < 0 || visibleStart > regionWidth) continue;
 
         const x = isReversed ? toX(drawEnd) : toX(drawStart);
-        const w = Math.max(1, (drawEnd - drawStart) * scale);
+        const w = Math.max(1, Math.abs(toX(drawEnd) - toX(drawStart)));
 
         // Pass the actual primary layer name so target-scoped rules can gate
         // correctly; split TF intervals are handled in the overlay loop.
-        const colorHit = getColorHit(adjustedStart, adjustedEnd, size, primaryLayer);
+        const colorHit = getColorHit(
+          adjustedStart, adjustedEnd, size, primaryLayer, nucIndex ? nucSizeMarkFor(nucIndex, intStart, intEnd, size) : null,
+        );
         let color = colorHit.color;
         let visualOpacity = colorHit.opacity;
         let matchedExplicitColor = colorHit.matched;
@@ -826,12 +948,12 @@ export function drawReadTrack(params: DrawReadsParams): void {
       // (populated on the server when m6a is primary) so the legacy 'mod'
       // toggle still lights up the purple marks on older dataset shapes.
       if (!evidenceOnly && m6aToggled) {
-        drawMarks(m6aPositions(read), MOD_COLORS.m6a, layerOpacity('m6a', 1));
+        drawMarks(m6aPositions(read), modColors.m6a, layerOpacity('m6a', 1));
       }
 
       // 5mC — C+m MM/ML blocks. Separate toggle from m6a now.
       if (!evidenceOnly && enabledModTypes.m5c) {
-        drawMarks(read.methyl_m5c, MOD_COLORS.m5c, layerOpacity('m5c', 1));
+        drawMarks(read.methyl_m5c, modColors.m5c, layerOpacity('m5c', 1));
       }
 
       // Possible DAF target sites are deliberately short edge rugs so the
@@ -861,8 +983,8 @@ export function drawReadTrack(params: DrawReadsParams): void {
           drawMarks([...rPositions, ...yPositions], MOD_COLORS.deam_observed, layerOpacity('deam', 1));
         } else {
           const deamOpacity = layerOpacity('deam', 1);
-          drawMarks(rPositions, MOD_COLORS.deam_r, deamOpacity);
-          drawMarks(yPositions, MOD_COLORS.deam_y, deamOpacity);
+          drawMarks(rPositions, modColors.deam_r, deamOpacity);
+          drawMarks(yPositions, modColors.deam_y, deamOpacity);
         }
       }
     };
@@ -882,6 +1004,9 @@ export function drawReadTrack(params: DrawReadsParams): void {
       const tfCfg = activeColormap.tfOverlay;
       for (const [layerName, layer] of layerEntries) {
         if (layerName === 'nuc') continue;  // drawn as primary intervals
+        // nucsz recolours calls through rules, nucseg is the lane below, and
+        // nucmol/nfrmol are per-molecule scalars: none is an overlay.
+        if (NUC_UNDRAWN_LAYERS.has(layerName)) continue;
         const isFireLayer = layerName === 'msp' || layerName === 'fire';
         // Domain-scale layers (DddA mCG spans, per-strand coverage of DAF
         // consensus reads) go behind the segmentation calls.
@@ -1151,16 +1276,12 @@ export function drawReadTrack(params: DrawReadsParams): void {
             let intervalQualities: Record<string, number> | undefined;
             const getIntervalQualities = () => {
               if (intervalQualities !== undefined) return intervalQualities;
-              intervalQualities = {};
-              if (layer.quality_names && layer.qualities) {
-                for (let qn = 0; qn < layer.quality_names.length; qn++) {
-                  const name = layer.quality_names[qn];
-                  const val = layer.qualities[qn]?.[li];
-                  if (val !== undefined) intervalQualities[name] = val;
-                }
-              }
+              // a nucpatch item's geometry/root: the lane's (label overlay when it applies), as rules everywhere read it
+              intervalQualities = effectiveLayerQualities(layerName, layer,
+                li, layerName === 'nucpatch' ? nucPatchOverlay(layer, datasetId) : undefined);
               return intervalQualities;
             };
+            const itemNucMark = nucIndex && isTf ? nucSizeMarkFor(nucIndex, ls, le, lsize) : null;
             for (const rule of activeColormap.rules) {
               // Non-TF layers: only consider rules that explicitly target this layer.
               if (!isTf && ((rule.targetLayers ?? []).length === 0 || !ruleTargetsLayer(rule, layerName))) continue;
@@ -1174,6 +1295,7 @@ export function drawReadTrack(params: DrawReadsParams): void {
                 layerName,
                 ruleQualities,
                 layer.annotation_names?.[li],
+                itemNucMark,
               )) {
                 fill = resolveRuleColor(rule, intervalSize);
                 visualOpacity = ruleOpacity(rule.opacity);
@@ -1399,7 +1521,7 @@ export function drawReadTrack(params: DrawReadsParams): void {
           const xEnd = Math.max(pxA, pxB);
           const w = Math.max(1, xEnd - x);
           const intervalSize = fEnd - fStart;
-          let fill: string = MOD_COLORS.fire;
+          let fill: string = modColors.fire;
           let visualOpacity = 1;
           let matchedExplicitColor = false;
           if (fireHasTargetedRule) {
@@ -1441,6 +1563,26 @@ export function drawReadTrack(params: DrawReadsParams): void {
       // observed events above consensus overlays. Otherwise the footprint fill
       // hides precisely the evidence the rescue view is meant to explain.
       if (enabledModTypes.deam_opportunity) drawBaseModificationMarks(true);
+      const regRows = nucRegLaneOn ? nucRegRows(read.layers?.nucreg as Parameters<typeof nucRegRows>[0]) : null;
+      if (regRows) {
+        nucRegTilesDrawn += drawNucRegLane(ctxNonNull, regRows, {
+          y, bodyH: rowHeight - rowGap, linkedOffset, regionWidth, toX, full: nucRegFull,
+        });
+      }
+      const patchRows = nucPatchLaneOn ? nucPatchRows(read.layers?.nucpatch as Parameters<typeof nucPatchRows>[0], datasetId) : null;
+      if (patchRows) {
+        nucPatchesDrawn += drawNucPatchLane(ctxNonNull, patchRows, {
+          y, bodyH: rowHeight - rowGap, linkedOffset, regionWidth, toX, withRegLane: !!regRows && !nucRegFull,
+          focused: params.nucGeoFocus,
+        });
+      }
+      const segRows = nucSegLaneOn ? nucSegRows(read.layers?.nucseg) : null;
+      if (segRows) {
+        nucSegRowsDrawn += drawNucSegLane(ctxNonNull, segRows, {
+          y, bodyH: rowHeight - rowGap, linkedOffset, regionWidth, toX,
+          ground: readBackgroundColor, dark: nucSegDark,
+        });
+      }
     });
     // This independent observation view is transported by the native encoder,
     // not inferred from interval gaps, reference-only targets, or family Q.
@@ -1475,23 +1617,40 @@ export function drawReadTrack(params: DrawReadsParams): void {
         backgroundColor: readBackgroundColor, gapColor: noReadBackgroundColor,
       });
     }
+    if (read.live_lift) {
+      drawLiveLiftMarks(ctx, read.live_lift, {
+        y, rowHeight: Math.max(1, rowHeight - rowGap), linkedOffset, regionWidth, toX, isReversed,
+        backgroundColor: readBackgroundColor, badgeMode: liveLiftBadgeMode,
+      });
+      if (liveLiftBadgeMode !== 'off') {
+        const drawn = liveLiftBadgeGeometry(read.live_lift, { y, rowHeight: Math.max(1, rowHeight - rowGap), linkedOffset, regionWidth, toX, badgeMode: liveLiftBadgeMode })
+          .filter(b => b.badge[2] >= 50);
+        liveLiftBadgesDrawn += drawn.length;
+        liveLiftBadgeLabels += drawn.filter(b => b.label).length;
+      }
+      drawLiveLiftHaplotypeStripe(ctx, read.live_lift, {
+        y, rowHeight: Math.max(1, rowHeight - rowGap), linkedOffset, regionWidth, toX,
+      }, liftHap, liveLiftDark);
+    }
 
     // Draw CIGAR events (small indels: SV display draws those of at least its min size)
     if (isBAM && read.cigar && read.cigar.length > 0) {
       const cigarHeight = Math.max(2, rowHeight - rowGap);
 
       for (const event of read.cigar) {
-        if (svEnabled && event.type !== 'M' && event.len >= svMinLen) continue;
+        if (svEnabled && (event.type === 'I' || event.type === 'D') && event.len >= svMinLen) continue;
         const adjustedPos = event.pos + linkedOffset;
         if (adjustedPos < 0 || adjustedPos > regionWidth) continue;
         const x = toX(adjustedPos);
 
-        if (event.type === 'M' && enabledCigarTypes.mismatches) {
-          const base = (event.seq || 'N').toUpperCase() as keyof typeof CIGAR_COLORS;
-          ctx.fillStyle = CIGAR_COLORS[base] || CIGAR_COLORS.N;
+        if ((event.type === 'M' || event.type === 'X') && enabledCigarTypes.mismatches) {
+          const base = (event.base || event.seq || 'N').toUpperCase() as keyof typeof CIGAR_COLORS;
+          ctx.fillStyle = event.allele === 'grch38' ? '#d97706' : CIGAR_COLORS[base] || CIGAR_COLORS.N;
+          ctx.globalAlpha = event.source === 'assembly' && event.allele !== 'grch38' ? .38 : 1;
           const mismatchWidth = Math.max(2, scale);
           // The base spans [pos, pos + 1): its left edge in either direction.
           ctx.fillRect(Math.min(x, toX(adjustedPos + 1)), y, mismatchWidth, cigarHeight);
+          ctx.globalAlpha = 1;
         } else if (event.type === 'I' && enabledCigarTypes.insertions) {
           ctx.fillStyle = CIGAR_COLORS.insertion;
           const insertWidth = Math.max(2, 3);
@@ -1569,15 +1728,15 @@ export function drawReadTrack(params: DrawReadsParams): void {
       }
     }
 
-    const hasDrawableExtent = read.intervals.length > 0;
+    const hasDrawableExtent = readExtent !== null;
 
     // Draw linked-molecule visual emphasis. This is intentionally independent
     // from selectedReadIds so it does not alter downstream selected-read stats.
     if (hasDrawableExtent && linkedHighlightIds?.has(read.id)) {
-      const readStartRel = Math.min(...read.intervals.map(iv => iv[0])) + linkedOffset;
-      const readEndRel = Math.max(...read.intervals.map(iv => iv[1])) + linkedOffset;
+      const readStartRel = readExtent!.start + linkedOffset;
+      const readEndRel = readExtent!.end + linkedOffset;
       const readX = isReversed ? toX(readEndRel) : toX(readStartRel);
-      const readW = Math.max(1, (readEndRel - readStartRel) * scale);
+      const readW = Math.max(1, Math.abs(toX(readEndRel) - toX(readStartRel)));
 
       ctx.fillStyle = 'rgba(245, 158, 11, 0.12)';
       ctx.fillRect(readX, y, readW, rowHeight - rowGap);
@@ -1592,29 +1751,56 @@ export function drawReadTrack(params: DrawReadsParams): void {
       ctx.fillRect(sidebarWidth, y, 3, rowHeight - rowGap);
     }
 
+    // The molecule hovered in a live-lift panel or its linked source panel: an outline in both panels.
+    if (hasDrawableExtent && liftHoverRows?.has(read)) {
+      const a = readExtent!.start + linkedOffset, b = readExtent!.end + linkedOffset;
+      const readX = isReversed ? toX(b) : toX(a);
+      const readW = Math.max(1, Math.abs(toX(b) - toX(a)));
+      ctx.save();
+      ctx.strokeStyle = '#0891b2';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(readX - 1, y - 1, readW + 2, rowHeight - rowGap + 2);
+      ctx.fillStyle = '#0891b2';
+      ctx.fillRect(sidebarWidth, y, 3, Math.max(1, rowHeight - rowGap));
+      ctx.restore();
+    }
+
     // A read gone to by name, or highlighted from the read menu: a solid outline
     // and a bar in the gutter (not a data colour; the pulse is an overlay).
-    if (hasDrawableExtent && readHighlightIds && readHighlightIds.size > 0
-      && (readHighlightIds.has(read.id) || readHighlightIds.has(read.id.replace(/_\d+$/, '')))) {
-      const readStartRel = Math.min(...read.intervals.map(iv => iv[0])) + linkedOffset;
-      const readEndRel = Math.max(...read.intervals.map(iv => iv[1])) + linkedOffset;
+    if (hasDrawableExtent && readHighlighted) {
+      const readStartRel = readExtent!.start + linkedOffset;
+      const readEndRel = readExtent!.end + linkedOffset;
       const readX = isReversed ? toX(readEndRel) : toX(readStartRel);
-      const readW = Math.max(1, (readEndRel - readStartRel) * scale);
-      ctx.strokeStyle = '#ca8a04';
+      const readW = Math.max(1, Math.abs(toX(readEndRel) - toX(readStartRel)));
+      const uncertain = svUncertain;
+      ctx.strokeStyle = uncertain ? 'rgba(202, 138, 4, 0.5)' : '#ca8a04';
       ctx.lineWidth = 2;
-      ctx.setLineDash([]);
+      ctx.setLineDash(uncertain ? [3, 3] : []);
       ctx.strokeRect(readX - 1.5, y - 1.5, readW + 3, rowHeight - rowGap + 3);
-      ctx.fillStyle = '#ca8a04';
+      ctx.fillStyle = uncertain ? 'rgba(202, 138, 4, 0.5)' : '#ca8a04';
       ctx.fillRect(sidebarWidth, y, 4, Math.max(1, rowHeight - rowGap));
+      ctx.setLineDash([]);
+    }
+
+    if (hasDrawableExtent && svUncertain) {
+      ctx.save();
+      ctx.strokeStyle = 'rgba(124, 58, 237, 0.45)';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([2, 2]);
+      ctx.beginPath();
+      ctx.moveTo(sidebarWidth + 5, y);
+      ctx.lineTo(sidebarWidth + 5, y + Math.max(1, rowHeight - rowGap));
+      ctx.stroke();
+      ctx.restore();
     }
 
     // Draw Jupyter highlight background
     const highlightColor = jupyterReadHighlights.get(read.id);
     if (hasDrawableExtent && highlightColor) {
-      const readStartRel = Math.min(...read.intervals.map(iv => iv[0])) + linkedOffset;
-      const readEndRel = Math.max(...read.intervals.map(iv => iv[1])) + linkedOffset;
+      const readStartRel = readExtent!.start + linkedOffset;
+      const readEndRel = readExtent!.end + linkedOffset;
       const readX = isReversed ? toX(readEndRel) : toX(readStartRel);
-      const readW = Math.max(1, (readEndRel - readStartRel) * scale);
+      const readW = Math.max(1, Math.abs(toX(readEndRel) - toX(readStartRel)));
 
       ctx.fillStyle = highlightColor + '40';
       ctx.fillRect(readX, y, readW, rowHeight - rowGap);
@@ -1629,10 +1815,10 @@ export function drawReadTrack(params: DrawReadsParams): void {
 
     // Draw selection highlight for shift+click selected read
     if (hasDrawableExtent && selectedReadIds?.has(read.id)) {
-      const readStartRel = Math.min(...read.intervals.map(iv => iv[0])) + linkedOffset;
-      const readEndRel = Math.max(...read.intervals.map(iv => iv[1])) + linkedOffset;
+      const readStartRel = readExtent!.start + linkedOffset;
+      const readEndRel = readExtent!.end + linkedOffset;
       const readX = isReversed ? toX(readEndRel) : toX(readStartRel);
-      const readW = Math.max(1, (readEndRel - readStartRel) * scale);
+      const readW = Math.max(1, Math.abs(toX(readEndRel) - toX(readStartRel)));
 
       ctx.strokeStyle = '#06b6d4';
       ctx.lineWidth = 2;
@@ -1641,8 +1827,54 @@ export function drawReadTrack(params: DrawReadsParams): void {
       ctx.fillStyle = '#06b6d4';
       ctx.fillRect(sidebarWidth, y, 4, rowHeight - rowGap);
     }
+    if (params.axis?.blocks.length) {
+      ctx.restore();
+      for (const block of params.axis.blocks) {
+        const payload = read.alternate_blocks?.[block.ins.ins_id] ?? payloadForExpansion(read.live_lift, block.ins);
+        if (!payload) continue;
+        for (const [observed, expected, offset] of [
+          [payload.observed_ref_start, block.ins.ref_start ?? block.ins.pos, 0],
+          [payload.observed_ref_end, block.ins.t_end ?? block.ins.pos, block.ins.length],
+        ]) {
+          if (observed === undefined || observed === expected) continue;
+          const own=params.axis.toX(observed),anchor=params.axis.toX(0,{ins_id:block.ins.ins_id,offset:offset!});
+          ctx.save();ctx.strokeStyle='#94a3b8';ctx.setLineDash([2,2]);ctx.beginPath();ctx.moveTo(sidebarWidth+own,y+(rowHeight-rowGap)/2);ctx.lineTo(sidebarWidth+anchor,y+(rowHeight-rowGap)/2);ctx.stroke();ctx.restore();
+        }
+        // The shorter allele leaves a marked tail; never stretch its calls.
+        if (payload.length < block.ins.length) {
+          const a = params.axis.toX(0, { ins_id: block.ins.ins_id, offset: payload.length });
+          const b = params.axis.toX(0, { ins_id: block.ins.ins_id, offset: block.ins.length });
+          ctx.save(); ctx.strokeStyle = "#94a3b8"; ctx.setLineDash([2, 2]);
+          ctx.strokeRect(sidebarWidth + Math.min(a, b), y, Math.abs(b - a), Math.max(1, rowHeight - rowGap)); ctx.restore();
+        }
+        const calls = drawInsertionPayload(ctx, payload, block.ins.ins_id, params.axis, {
+          y, h: Math.max(1, rowHeight - rowGap), sidebar: sidebarWidth, background: readBackgroundColor,
+          enabled: enabledModTypes, layerColors,
+          color: (_a, _b, size, layer) => getColorHit(block.ins.pos - start, block.ins.pos - start, size, layer).color,
+        });
+        if (readHighlighted || selectedReadIds?.has(read.id) || linkedHighlightIds?.has(read.id)) {
+          const a=params.axis.toX(0,{ins_id:block.ins.ins_id,offset:payload.covered[0]});
+          const b=params.axis.toX(0,{ins_id:block.ins.ins_id,offset:payload.covered[1]});
+          ctx.save();ctx.strokeStyle=selectedReadIds?.has(read.id)?'#06b6d4':'#ca8a04';ctx.lineWidth=2;
+          ctx.strokeRect(sidebarWidth+Math.min(a,b),y-1,Math.abs(b-a),Math.max(1,rowHeight-rowGap)+2);ctx.restore();
+        }
+        insertionCalls += calls;
+        insertionCallsById[block.ins.ins_id] = (insertionCallsById[block.ins.ins_id] ?? 0) + calls;
+      }
+    }
   }
 
+  if (canvas.dataset) {
+    canvas.dataset.liveLiftInsertionCalls = String(insertionCalls);
+    canvas.dataset.liveLiftInsertionCallsById = JSON.stringify(insertionCallsById);
+    canvas.dataset.liveLiftBadgeTarget = badgeTarget ? JSON.stringify(badgeTarget) : '';
+    canvas.dataset.liveLiftBadges = String(liveLiftBadgesDrawn);
+    canvas.dataset.liveLiftBadgeLabels = String(liveLiftBadgeLabels);
+    canvas.dataset.readRowHeight = String(rowHeight);
+    canvas.dataset.nucSegRows = String(nucSegRowsDrawn);
+    canvas.dataset.nucRegTiles = String(nucRegTilesDrawn);
+    canvas.dataset.nucPatches = String(nucPatchesDrawn);
+  }
   if (splitReadLinks && svEnabled) {
     drawSplitLinks(ctx, displayReads as FiberhmmRead[], {
       first: firstVisibleRow, last: lastVisibleRow,
@@ -1652,7 +1884,9 @@ export function drawReadTrack(params: DrawReadsParams): void {
   }
 
   const smoothing = activeColormap.displaySmoothing;
-  if (smoothing?.enabled && (smoothing.sigmaX > 0 || smoothing.sigmaY > 0)) {
+  // Smoothing across an inserted boundary would leak target signal into the
+  // native panel's empty columns. Keep the molecular detail sharp while open.
+  if (!params.axis?.blocks.length && smoothing?.enabled && (smoothing.sigmaX > 0 || smoothing.sigmaY > 0)) {
     applyGaussianSmoothing(
       ctx,
       sidebarWidth,
@@ -1919,6 +2153,10 @@ export function withReadBodyClip(
 }
 
 export function getCompactReadExtent(read: CompactRead): { start: number; end: number } | null {
+  if (read.live_lift) {
+    const extent = readBodyExtent(read);
+    return extent ? { start: extent.lo, end: extent.hi } : null;
+  }
   let minStart = Infinity;
   let maxEnd = -Infinity;
 
@@ -1959,20 +2197,36 @@ export function getCompactReadExtent(read: CompactRead): { start: number; end: n
  * their boundary bin, and one molecule must count once there.
  */
 export function coverageHistogramBins(
-  reads: Pick<CompactRead, 'intervals'>[],
+  reads: Pick<CompactRead, 'intervals' | 'live_lift'>[],
   histBins: number,
   regionWidth: number,
   linkedOffset = 0,
 ): Float32Array {
   const binSize = regionWidth / histBins;
   const coverageDiff = new Float32Array(histBins + 1);
+  const groups: Array<Array<[number, number]>> = [];
+  const molecules = new Map<string, Array<[number, number]>>();
   for (const read of reads) {
-    const ranges: Array<[number, number]> = [];
-    for (const [ivStart, ivEnd] of read.intervals) {
+    if (read.live_lift?.alt) continue;
+    const molecule = read.live_lift?.molecule;
+    let ranges = molecule ? molecules.get(molecule) : undefined;
+    if (!ranges) {
+      ranges = [];
+      groups.push(ranges);
+      if (molecule) molecules.set(molecule, ranges);
+    }
+    // A live-lift row covers its body (segments minus holes), never its hull across a hole.
+    const spans: Array<[number, number] | [number, number, number]> = read.live_lift
+      ? liveLiftBodySpans(read.live_lift) : read.intervals;
+    for (const [ivStart, ivEnd] of spans) {
       const b0 = Math.max(0, Math.floor((ivStart + linkedOffset) / binSize));
       const b1 = Math.min(histBins, Math.ceil((ivEnd + linkedOffset) / binSize));
       if (b1 > b0) ranges.push([b0, b1]);
     }
+  }
+  // Supplementary/orientation rows of one lifted molecule can overlap; union their bins before adding evidence.
+  // Native rows still form individual groups, preserving their existing interval semantics.
+  for (const ranges of groups) {
     ranges.sort((a, b) => a[0] - b[0]);
     let curStart = -1;
     let curEnd = -1;
@@ -2009,8 +2263,13 @@ export function drawCoverageHistogram(
     linkedOffset: number;
     isReversed: boolean;
     width: number;
+    axis?: LiftAxis;
+    start?: number;
     /** The ground (the colormap's no-read colour); labels pick their colour to read on it. */
     backgroundColor?: string;
+    /** A live-lift panel: per-bin correspondence (0-1) over the view; bins without it are hatched (full where
+     *  none, light where partial), so "no reads" and "no correspondence" never look alike. */
+    liftCorrespondence?: number[] | null;
   }
 ) {
   const { sidebarWidth, trackWidth, regionWidth, histogramHeight, headerHeight, linkedOffset, isReversed, width } = opts;
@@ -2034,7 +2293,22 @@ export function drawCoverageHistogram(
     const bx = isReversed
       ? sidebarWidth + (histBins - 1 - b) * barW
       : sidebarWidth + b * barW;
-    ctx.fillRect(bx, histTop + histH - barH, Math.max(1, barW), barH);
+    const spans = opts.axis ? opts.axis.spans((opts.start ?? 0) + b * regionWidth / histBins,
+      (opts.start ?? 0) + (b + 1) * regionWidth / histBins).map(s => ({ x: sidebarWidth + s.x, w: s.w })) : [{ x: bx, w: barW }];
+    for (const s of spans) ctx.fillRect(s.x, histTop + histH - barH, Math.max(1, s.w), barH);
+  }
+
+  if (opts.liftCorrespondence && opts.liftCorrespondence.length) {
+    if (opts.axis?.blocks.length) {
+      opts.liftCorrespondence.forEach((fraction, i, bins) => {
+        for (const s of opts.axis!.spans((opts.start ?? 0) + i * regionWidth / bins.length,
+          (opts.start ?? 0) + (i + 1) * regionWidth / bins.length)) drawCorrespondenceHatching(ctx, [fraction], {
+          x: sidebarWidth + s.x, y: histTop, w: s.w, h: histH, isReversed, dark: ink.dark,
+        });
+      });
+    } else drawCorrespondenceHatching(ctx, opts.liftCorrespondence, {
+        x: sidebarWidth, y: histTop, w: trackWidth, h: histH, isReversed, dark: ink.dark,
+      });
   }
 
   ctx.fillStyle = ink.muted;
@@ -2047,6 +2321,37 @@ export function drawCoverageHistogram(
   ctx.moveTo(sidebarWidth, headerHeight + histogramHeight - 1);
   ctx.lineTo(width, headerHeight + histogramHeight - 1);
   ctx.stroke();
+}
+
+/** Hatching over coverage bins with no (full) or partial (light) map correspondence (§3.8, owner 4). */
+export function drawCorrespondenceHatching(
+  ctx: CanvasRenderingContext2D,
+  correspondence: number[],
+  box: { x: number; y: number; w: number; h: number; isReversed: boolean; dark: boolean },
+): void {
+  const n = correspondence.length;
+  const binW = box.w / n;
+  ctx.save();
+  for (let b = 0; b < n; b++) {
+    const c = correspondence[b];
+    if (c >= 0.999) continue;
+    const x0 = box.isReversed ? box.x + (n - 1 - b) * binW : box.x + b * binW;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x0, box.y, Math.max(1, binW), box.h);
+    ctx.clip();
+    ctx.strokeStyle = box.dark ? 'rgba(226, 232, 240, 0.55)' : 'rgba(71, 85, 105, 0.55)';
+    ctx.globalAlpha = c <= 0 ? 1 : 0.4;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let d = -box.h; d < binW + box.h; d += 4) {
+      ctx.moveTo(x0 + d, box.y + box.h);
+      ctx.lineTo(x0 + d + box.h, box.y);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+  ctx.restore();
 }
 
 function applyGaussianSmoothing(

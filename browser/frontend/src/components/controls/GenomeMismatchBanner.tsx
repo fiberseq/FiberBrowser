@@ -3,9 +3,11 @@ import { useShallow } from 'zustand/react/shallow';
 import { pickAnyFile, pickFile } from '../../api/files';
 import { loadGtf } from '../../api/reference';
 import type { DatasetGenomeCheck, GenomeSuggestion } from '../../api/genomeCheck';
+import type { RecentGenomeMatch } from '../../api/recentGenomes';
+import { recentGenomeLabel, useRecentGenomesStore } from '../../stores/recentGenomesStore';
 import { useReferenceFastaLoader } from '../../hooks/useReferenceFastaLoader';
 import { useBrowserStore } from '../../stores/browserStore';
-import { problemKey, useGenomeCheckStore, visibleProblems } from '../../stores/genomeCheckStore';
+import { customGenomeKey, problemKey, unknownToEveryAssembly, useGenomeCheckStore, visibleProblems } from '../../stores/genomeCheckStore';
 import { usePanelGenomeStore } from '../../stores/panelGenomeStore';
 import { isSandboxPage } from '../../utils/sandbox';
 import { useLaunchUiStore } from '../../utils/launchSession';
@@ -95,6 +97,8 @@ interface ActionsProps {
   onlyThis?: string;
   /** Where it shows (tests and the tour tell the banner from a track's notice). */
   testIdPrefix?: string;
+  /** A pinned or recent genome that fits the data better (the banner's "Switch to … (matches your data)"). */
+  recentMatch?: RecentGenomeMatch | null;
 }
 
 /**
@@ -103,7 +107,8 @@ interface ActionsProps {
  * annotation or plasmid map (the app's own loaders), or dismiss. A public
  * server or a tour tab only reports.
  */
-export function GenomeMismatchActions({ suggestion, onDismiss, datasetId, datasetIds, primaryOnly = false, onlyThis, testIdPrefix = 'genome-mismatch' }: ActionsProps) {
+export function GenomeMismatchActions({ suggestion, onDismiss, datasetId, datasetIds, primaryOnly = false, onlyThis, testIdPrefix = 'genome-mismatch', recentMatch = null }: ActionsProps) {
+  const recent = useRecentGenomesStore(useShallow(s => ({ entries: [...s.pinned, ...s.recent].filter(e => e.exists).slice(0, 6), open: s.open, opening: s.opening })));
   const publicMode = useBrowserStore(s => s.publicMode);
   const datasets = useBrowserStore(s => s.datasets);
   const [oneMenu, setOneMenu] = useState(false);
@@ -215,7 +220,14 @@ export function GenomeMismatchActions({ suggestion, onDismiss, datasetId, datase
     return res.failed > 0 ? `${res.failed} could not be loaded: ${res.error}` : null;
   });
 
-  const anyBusy = busy !== null || loadingGenome !== null || fasta.fastaLoading;
+  const openRecent = (key: string) => {
+    setOwnMenu(false);
+    return run(`recent:${key}`, async () => {
+      const res = await recent.open(key);
+      return res.success ? null : (res.error || 'Could not load that genome');
+    });
+  };
+  const anyBusy = busy !== null || loadingGenome !== null || fasta.fastaLoading || recent.opening !== null;
   const canLoadFiles = !publicMode && !(primaryOnly && suggestion?.can_load);
   const genomeBusy = loadingGenome !== null && loadingGenome === suggestion?.genome_id;
   const offerOwnPanel = canOwn && !!suggestion?.can_load;
@@ -251,6 +263,15 @@ export function GenomeMismatchActions({ suggestion, onDismiss, datasetId, datase
   const download = suggestion?.cached ? '' : ' (downloaded once to ~/.fiberhmm/genomes)';
   return (
     <div className="flex flex-wrap items-center gap-1.5" data-testid={`${testIdPrefix}-actions`}>
+      {recentMatch && !publicMode && !primaryOnly && (
+        <button type="button" onClick={() => { void openRecent(recentMatch.key); }} disabled={anyBusy}
+          className={PRIMARY} data-testid={`${testIdPrefix}-recent-match`}
+          title={`${recentMatch.pinned ? 'Pinned' : 'Recent'} genome ${recentMatch.label}${recentMatch.fasta_name ? ` (${recentMatch.fasta_name}${recentMatch.gtf_name ? ` + ${recentMatch.gtf_name}` : ''})` : ''}: `
+            + `${recentMatch.fit} (the loaded reference: ${recentMatch.current_matched.toLocaleString()} of ${recentMatch.total.toLocaleString()}). Replaces the genome loaded now.`}>
+          {busy === `recent:${recentMatch.key}` ? `Loading ${recentMatch.label}…` : `Switch to ${recentMatch.label} (matches your data)`}
+          <span className="font-normal opacity-80">· {recentMatch.fit}</span>
+        </button>
+      )}
       {offerOwnPanel && suggestion && (
         <button
           type="button"
@@ -356,6 +377,12 @@ export function GenomeMismatchActions({ suggestion, onDismiss, datasetId, datase
                 <>
                   {canOwn && <div className="fb-menu-sep" />}
                   <div className="px-3 pb-0.5 pt-1 text-[11px] font-semibold text-gray-500 dark:text-gray-400">Every panel (replaces the genome)</div>
+                  {recent.entries.map(e => (
+                    <button key={e.key} type="button" role="menuitem" className="fb-menu-item" onClick={() => { void openRecent(e.key); }}
+                      disabled={anyBusy} data-testid={`${testIdPrefix}-recent-item`} title={e.fasta ?? e.name ?? e.key}>
+                      <Globe size={14} />{`${e.pinned ? 'Pinned' : 'Recent'}: ${recentGenomeLabel(e)}${e.kind === 'fasta' && e.fasta_name ? ` (${e.fasta_name})` : ''}`}
+                    </button>
+                  ))}
                   {fileMenuItems}
                 </>
               )}
@@ -399,8 +426,9 @@ function sharedSuggestion(problems: DatasetGenomeCheck[], overall: GenomeSuggest
  */
 export function GenomeMismatchBanner() {
   useGenomeCheckWatcher();
-  const { check, dismissed, dismiss } = useGenomeCheckStore(useShallow(s => ({ check: s.check, dismissed: s.dismissed, dismiss: s.dismiss })));
-  const problems = useMemo(() => visibleProblems(check, dismissed), [check, dismissed]);
+  const { check, dismissed, dismiss, customGenomes, useAsCustomGenome } = useGenomeCheckStore(useShallow(s => ({
+    check: s.check, dismissed: s.dismissed, dismiss: s.dismiss, customGenomes: s.customGenomes, useAsCustomGenome: s.useAsCustomGenome })));
+  const problems = useMemo(() => visibleProblems(check, dismissed, customGenomes), [check, dismissed, customGenomes]);
   // A session being reopened is half-restored (its genome may not be back
   // yet): no mismatch, and no buttons that would fight the restore.
   const restoring = useLaunchUiStore(s => s.restoring);
@@ -441,8 +469,16 @@ export function GenomeMismatchBanner() {
           {note && <span className="opacity-80"> {note}</span>}
         </span>
       </div>
-      <div className="ml-auto flex min-w-0 justify-end">
-      <GenomeMismatchActions suggestion={suggestion}
+      <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-1.5">
+      {problems.every(unknownToEveryAssembly) && (
+        // No known assembly has these contigs (a custom or synthetic genome): keep it, remembered, never flagged again.
+        <button type="button" className={SECONDARY} data-testid="genome-use-custom"
+          title="These contigs are in no known assembly. Show the reads without a reference sequence (no genes, motifs or sequence track); remembered in this browser."
+          onClick={() => useAsCustomGenome(problems.map(customGenomeKey))}>
+          Use as a custom genome (no reference)
+        </button>
+      )}
+      <GenomeMismatchActions suggestion={suggestion} recentMatch={check.recent_match ?? null}
         datasetId={(problems.find(p => p.suggestion?.genome_id && p.suggestion.genome_id === suggestion?.genome_id) ?? problems[0])?.dataset_id}
         datasetIds={ownReferenceTargets(problems, suggestion)}
         onDismiss={() => dismiss(problems.map(problemKey))} />

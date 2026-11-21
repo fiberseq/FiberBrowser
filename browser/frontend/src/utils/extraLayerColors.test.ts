@@ -240,3 +240,42 @@ describe('notebook carts (third re-check)', () => {
     expect(src('tf2').color).toBe('#123456');
   });
 });
+
+describe('3.0.7 sessions on the dev line (autoColor is read and honoured)', () => {
+  it('a saved session round-trips autoColor; picked colours stay, default ones take the loaded set\'s', async () => {
+    const { createTestStore } = await import('../stores/__tests__/helpers');
+    const { DEFAULT_METAPROFILE_ID } = await import('../types/dataset');
+    const { serializeState, deserializeSavedState } = await import('../stores/historySlice');
+    const d = { id: 'a', label: 'a', path: '/tmp/a.bam', color: '#111111', data_type: 'bam',
+      available_layers: { nuc: true, tf2: true, tf3: true, tf4: true } } as any;
+    const store = createTestStore();
+    store.setState({ datasets: [d] });
+    store.getState().seedDefaultMetaprofile();
+    const seeded = store.getState().compositeTracks.find(c => c.id === DEFAULT_METAPROFILE_ID)!;
+    const byKey = (k: string) => seeded.sources.find(s => (s.ref as any).ruleId === k)!;
+    expect(byKey('tf2').autoColor).toBe(true);
+    expect(byKey('nuc').autoColor).toBeUndefined();
+    // As 3.0.7 saves it: tf2 default (a stale palette slot), tf3 picked (a palette colour), tf4 picked (typed).
+    const stale = EXTRA_LAYER_PALETTE[5];
+    const saved = { ...seeded, sources: seeded.sources.map(s => {
+      const k = (s.ref as any).ruleId;
+      if (k === 'tf2') return { ...s, color: stale, autoColor: true };
+      if (k === 'tf3') return { ...s, color: getLayerColor('tf2'), autoColor: false };
+      if (k === 'tf4') return { ...s, color: '#123456', autoColor: false };
+      return s;
+    }) };
+    store.getState().setCompositeTracks([saved]);
+    const snapshot = JSON.parse(JSON.stringify(serializeState(store.getState())));
+    const restored = deserializeSavedState(snapshot);
+    const fresh = createTestStore();
+    fresh.setState({ datasets: [d] });
+    fresh.setState({ compositeTracks: restored.compositeTracks } as any);
+    const track = fresh.getState().compositeTracks.find(c => c.id === DEFAULT_METAPROFILE_ID)!;
+    const src = (k: string) => track.sources.find(s => (s.ref as any).ruleId === k)!;
+    expect(src('tf2').color).toBe(getLayerColor('tf2'));
+    expect(src('tf2').autoColor).toBe(true);
+    expect(src('tf3').color).toBe(getLayerColor('tf2'));
+    expect(src('tf3').autoColor).toBe(false);
+    expect(src('tf4').color).toBe('#123456');
+  });
+});

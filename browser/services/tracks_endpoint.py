@@ -342,6 +342,17 @@ def add_track_for_request(
     category: Optional[str] = None,
 ) -> dict:
     """Add an orthogonal bigWig, bigBed, BED, or UCSC API-backed track."""
+    if isinstance(path, str) and path.startswith("seqsearch://"):
+        # A sequence search's hits (services/sequence_search.py): re-made from the search while this server
+        # still holds it (a reload, an undo, a lost backend index), never read as a file.
+        from services.sequence_search import add_hits_track
+        added = add_hits_track(state, path[len("seqsearch://"):], label=label)
+        if not added.get("success"):
+            if added.get("code") == "stale_reference":
+                return added
+            return {"success": False, "message": "These sequence-search hits are no longer on the server "
+                                                 "(it restarted): search again to show them."}
+        return {**added, "render_mode": "annotation"}
     path = _held_url(path)
     original_path = path
     if path and not is_url(path) and not path.startswith("ucsc://"):

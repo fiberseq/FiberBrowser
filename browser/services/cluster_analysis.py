@@ -140,13 +140,8 @@ def _two_proportion_qvalues(p1: np.ndarray, p2: np.ndarray, n1: int, n2: int,
     # No spread at all but different values: as different as it gets.
     pvals[(~ok) & (diff > 1e-9)] = 0.0
     # Benjamini–Hochberg.
-    m = pvals.size
-    order = np.argsort(pvals, kind="stable")
-    ranked = pvals[order] * m / np.arange(1, m + 1)
-    ranked = np.minimum.accumulate(ranked[::-1])[::-1]
-    q = np.empty_like(pvals)
-    q[order] = np.minimum(ranked, 1.0)
-    return q
+    from services.fdr import bh_qvalues
+    return np.asarray(bh_qvalues(pvals.tolist(), missing="one"), dtype=np.float64).reshape(pvals.shape)
 
 
 def _bernoulli_entropy(p: np.ndarray) -> np.ndarray:

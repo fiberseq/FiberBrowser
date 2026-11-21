@@ -40,7 +40,10 @@ export const workedPanelHandlers = {
   onFocusCapture: (e: { target: EventTarget | null }) => { const id = panelOf(e.target); if (id) noteWorkedPanel(id); },
 };
 
-export function PanelRowScroller({ height, rightInset = 0, bottomInset = 0, layoutKey, panelName, children }: {
+export function PanelRowScroller({ scroll = true, height, rightInset = 0, bottomInset = 0, layoutKey, panelName, children }: {
+  /** False: the row fits, so it doesn't scroll (no band, no cues, no overflow). The element tree stays the same either
+   * way, so the panels inside never remount when a row starts or stops scrolling (a panel opened or closed). */
+  scroll?: boolean;
   height: number;
   /** Visible width covered at the right (the pinned drawer over the row): the right cue sits left of it. */
   rightInset?: number;
@@ -55,12 +58,17 @@ export function PanelRowScroller({ height, rightInset = 0, bottomInset = 0, layo
   const ref = useRef<HTMLDivElement>(null);
   const [hidden, setHidden] = useState<Hidden>(NONE);
   const [pulse, setPulse] = useState<'left' | 'right' | null>(null);
+  // Pulses so far per side (data-pulses): the pulse itself lasts PULSE_MS; the count says it happened.
+  const [pulses, setPulses] = useState<{ left: number; right: number }>({ left: 0, right: 0 });
   const frame = useRef<number | null>(null);
+  const scrollRef = useRef(scroll);
+  scrollRef.current = scroll;
 
   const measure = useCallback(() => {
     frame.current = null;
     const el = ref.current;
     if (!el) return;
+    if (!scrollRef.current) { setHidden(prev => (same(prev, NONE) ? prev : NONE)); return; }
     const off = offscreenPanels(panelSpansIn(el), rowViewportOf(el));
     const next = { left: off.left.map(s => s.id), right: off.right.map(s => s.id) };
     setHidden(prev => (same(prev, next) ? prev : next));
@@ -69,7 +77,7 @@ export function PanelRowScroller({ height, rightInset = 0, bottomInset = 0, layo
     if (frame.current == null) frame.current = requestAnimationFrame(measure);
   }, [measure]);
 
-  useLayoutEffect(() => { measure(); }, [measure, layoutKey, rightInset]);
+  useLayoutEffect(() => { measure(); }, [measure, layoutKey, rightInset, scroll]);
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
@@ -91,6 +99,7 @@ export function PanelRowScroller({ height, rightInset = 0, bottomInset = 0, layo
       const side = (e as CustomEvent<unknown>).detail;
       if (side !== 'left' && side !== 'right') return;
       setPulse(side);
+      setPulses(n => ({ ...n, [side]: n[side] + 1 }));
       window.clearTimeout(timer);
       timer = window.setTimeout(() => setPulse(null), PULSE_MS);
     };
@@ -119,7 +128,7 @@ export function PanelRowScroller({ height, rightInset = 0, bottomInset = 0, layo
             : 'bg-gradient-to-l from-black/[0.14] to-transparent dark:from-black/50'}`}
           style={{ top: PANEL_ROW_CUE_BAND_HEIGHT, bottom: bottomInset, ...(side === 'left' ? { left: 0 } : { right: rightInset }) }} />
         <button type="button" data-testid={`panel-row-more-${side}`} data-count={ids.length}
-          data-pulse={pulse === side ? 'true' : undefined}
+          data-pulse={pulse === side ? 'true' : undefined} data-pulses={pulses[side]}
           onClick={() => reveal(side)}
           aria-label={`${count} off-screen to the ${where}: ${names.join('; ')}. Show the nearest`}
           title={`Off-screen to the ${where}:\n${names.map(n => `• ${n}`).join('\n')}\nClick to show the nearest.`}
@@ -133,22 +142,25 @@ export function PanelRowScroller({ height, rightInset = 0, bottomInset = 0, layo
     );
   };
 
+  // Not scrolling: the same elements, laid out as a plain row (the band, the cues and the drawer room are left out
+  // in place, so the children keep their position in the tree).
   return (
     <>
       {/* The chips' band: nothing of the panels is under it. */}
-      <div aria-hidden="true" data-testid="panel-row-cue-band" style={{ height: PANEL_ROW_CUE_BAND_HEIGHT }} />
-      <div ref={ref} data-testid="panel-row-scroll" data-right-inset={rightInset || undefined}
-        className="fb-panel-row-scroll overflow-x-auto overflow-y-hidden" style={{ height: Math.max(0, height - PANEL_ROW_CUE_BAND_HEIGHT) }}
-        onScroll={schedule}>
+      {scroll && <div aria-hidden="true" data-testid="panel-row-cue-band" style={{ height: PANEL_ROW_CUE_BAND_HEIGHT }} />}
+      <div ref={ref} data-testid={scroll ? 'panel-row-scroll' : undefined} data-right-inset={(scroll && rightInset) || undefined}
+        className={scroll ? 'fb-panel-row-scroll overflow-x-auto overflow-y-hidden' : undefined}
+        style={scroll ? { height: Math.max(0, height - PANEL_ROW_CUE_BAND_HEIGHT) } : undefined}
+        onScroll={scroll ? schedule : undefined}>
         {/* One structure whether or not a drawer is pinned (the panels never remount when it comes or goes). A pinned
             drawer covers the row's right end: as much room again after the last panel, to scroll it out from under. */}
-        <div className="flex w-max">
+        <div className={scroll ? 'flex w-max' : undefined}>
           <div>{children}</div>
-          {rightInset > 0 && <div aria-hidden="true" className="shrink-0" style={{ width: rightInset }} data-testid="panel-row-drawer-room" />}
+          {scroll && rightInset > 0 && <div aria-hidden="true" className="shrink-0" style={{ width: rightInset }} data-testid="panel-row-drawer-room" />}
         </div>
       </div>
-      {cue('left')}
-      {cue('right')}
+      {scroll && cue('left')}
+      {scroll && cue('right')}
     </>
   );
 }

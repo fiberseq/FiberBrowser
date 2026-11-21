@@ -1,3 +1,4 @@
+import { confirmLargeDownload, formatDownloadSize, type LargeDownloadInfo } from '../utils/downloadSize';
 import type { ChromInfo, Dataset, GenesResponse, GeneSearchResponse, PlasmidLink, PlasmidProblem } from '../types';
 
 export type { PlasmidLink, PlasmidProblem } from '../types';
@@ -197,15 +198,60 @@ export async function getGenomes(options?: RequestInit): Promise<{ genomes: Geno
   return fetchJson(`${API_BASE}/genomes`, options);
 }
 
-export async function loadGenome(genomeId: string): Promise<{
+export interface LoadGenomeResult {
   success: boolean;
   genome_id: string;
   name: string;
   fasta_loaded?: boolean;
   gtf_loaded?: boolean;
   gene_count?: number;
+  /** The genome's sequence was there already (maybe the user's --fasta); only its annotation may have loaded. */
+  already_loaded?: boolean;
+  fasta_path?: string | null;
   fasta_error?: string;
   gtf_error?: string;
-}> {
-  return fetchJson(`${API_BASE}/load_genome?genome_id=${encodeURIComponent(genomeId)}`, { method: 'POST' });
+  /** A download over the warning size was not confirmed: the FASTA (nothing changed), or the annotation
+   *  (``fasta_loaded``: the sequence is loaded; the confirmed retry downloads the annotation). */
+  needs_confirmation?: boolean;
+  download?: LargeDownloadInfo;
+  /** Large downloads that went ahead (confirmed, or of unknown size past the warning size). */
+  download_warnings?: Array<LargeDownloadInfo & { kind: string }>;
+}
+
+/** The registry genome's default annotation in place of the loaded one ("Reset to dm6 genes"); the FASTA stays.
+ *  A download over the warning size asks first, as a genome load does. */
+export async function resetAnnotation(
+  genomeId: string,
+  options?: { confirm?: (name: string, info: LargeDownloadInfo) => boolean },
+): Promise<LoadGenomeResult> {
+  const url = `${API_BASE}/genome/reset_annotation?genome_id=${encodeURIComponent(genomeId)}`;
+  const res: LoadGenomeResult = await fetchJson(url, { method: 'POST' });
+  if (!res?.needs_confirmation || !res.download) return res;
+  const ask = options?.confirm ?? confirmLargeDownload;
+  if (ask(res.name || genomeId, res.download)) return fetchJson(`${url}&confirm_large=true`, { method: 'POST' });
+  return { ...res, success: false, gtf_error: `Not downloaded: ${formatDownloadSize(res.download.bytes)} is over the download warning size` };
+}
+
+/** The assembly a local FASTA is (from its index), or null; exists false for a missing file or a URL. */
+export async function getFastaAssembly(path: string): Promise<{ exists: boolean; assembly: string | null }> {
+  return fetchJson(`${API_BASE}/genome/fasta_assembly?path=${encodeURIComponent(path)}`);
+}
+
+/** Load a registry genome (download/cache flow). A download over the warning size (Settings → App) asks first,
+ *  with its size (``confirm``, default window.confirm); declined, nothing changes and fasta_error says why. */
+export async function loadGenome(
+  genomeId: string,
+  options?: { confirm?: (name: string, info: LargeDownloadInfo) => boolean },
+): Promise<LoadGenomeResult> {
+  const url = `${API_BASE}/load_genome?genome_id=${encodeURIComponent(genomeId)}`;
+  const res: LoadGenomeResult = await fetchJson(url, { method: 'POST' });
+  if (!res?.needs_confirmation || !res.download) return res;
+  const ask = options?.confirm ?? confirmLargeDownload;
+  if (ask(res.name || genomeId, res.download)) {
+    return fetchJson(`${url}&confirm_large=true`, { method: 'POST' });
+  }
+  const declined = `Not downloaded: ${formatDownloadSize(res.download.bytes)} is over the download warning size`;
+  // The sequence loaded and only the annotation waited: the genome is loaded without its annotation.
+  if (res.fasta_loaded) return { ...res, needs_confirmation: false, gtf_loaded: false, gtf_error: declined };
+  return { ...res, success: false, fasta_error: declined };
 }

@@ -210,6 +210,12 @@ def _empty_context():
     return ctx
 
 
+def _annotation_pending(ctx) -> bool:
+    """A registry context whose annotation waits for a download confirmation (services/genome_loading)."""
+    from services.genome_loading import pending_annotation
+    return pending_annotation(ctx) is not None
+
+
 def _context_info(key: str, ctx) -> dict:
     gtf = getattr(ctx, 'gtf_data', None)
     transcripts = gtf.get('transcripts') if isinstance(gtf, dict) else None
@@ -227,6 +233,8 @@ def _context_info(key: str, ctx) -> dict:
         'has_gtf': transcripts is not None and len(transcripts) > 0,
         'gene_count': int(len(transcripts)) if transcripts is not None else 0,
         'n_chroms': len(chroms),
+        # The annotation download waiting for confirmation (url, bytes, threshold), when it is.
+        'annotation_pending': (spec.get('annotation_pending') or None) if _annotation_pending(ctx) else None,
         'chroms': [{'name': c.name, 'size': int(c.size), 'circular': bool(getattr(c, 'circular', False))}
                    for c in chroms[:2000]],
     }
@@ -267,6 +275,10 @@ def _load_registry(genome_id: str):
                               'label': genome_id, 'source': {'genome_id': genome_id},
                               'default_gtf_path': getattr(ctx, 'gtf_path', None),
                               'name': info.get('name') or short_name(genome_id)}
+    if result.get('needs_confirmation'):
+        # Its annotation is over the download warning size and was not confirmed: the context has the sequence
+        # only, says so (``annotation_pending``) and is loaded again by the next attachment (never reused).
+        ctx._panel_genome_spec['annotation_pending'] = dict(result.get('download') or {})
     return ctx
 
 
@@ -394,7 +406,8 @@ def _prepare_context(state, dataset_ids, *, genome_id, fasta_path, gtf_path, con
         if genome_id not in GENOME_REGISTRY or genome_id == getattr(state, 'current_genome', None):
             return None
         with _LOCK:
-            if genome_id in contexts(state) and not force:
+            existing = contexts(state).get(genome_id)
+            if existing is not None and not force and not _annotation_pending(existing):
                 return None
         return _load_registry(genome_id)
     if fasta_path:
@@ -427,7 +440,8 @@ def _attach_locked(state, dataset_ids, *, genome_id, fasta_path, gtf_path, conti
             prune(state)
             return None, True
         key = genome_id
-        if key not in ctxs:
+        if key not in ctxs or (prepared is not None and _annotation_pending(ctxs[key])):
+            # (A context whose annotation waited for confirmation is replaced by the one loaded again.)
             if prepared is None:
                 raise _NeedsContext(key)
             ctxs[key] = prepared

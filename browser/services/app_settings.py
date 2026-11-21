@@ -6,6 +6,9 @@ defaults scripts and source runs read, which the app never writes):
 ``fiberhmm``
     ``{"source": "bundled" | "custom" | "updated", "custom_path": "/path/to/FiberHMM", "overlay_version": ""}``: which FiberHMM a packaged app runs
     (services/fiberhmm_runtime.py). Read once per process: a change takes effect at the next start.
+``downloads``
+    ``{"warn_bytes": null}``: downloads (genome FASTA, GTF) larger than this ask first, or warn once they pass it
+    when their size is unknown; never a cap (services/http_download.py; null: 4 GB, 0: off).
 ``updates``
     ``{"check_at_startup": true, "manifest_url": "", "repo": ""}``: the update check (services/app_update.py).
     ``check_at_startup`` left unset follows the kind of run: on in a packaged app (the Mac app, the Windows app's
@@ -32,6 +35,8 @@ DEFAULTS: dict[str, Any] = {
     "fiberhmm": {"source": "bundled", "custom_path": "", "overlay_version": "", "previous_overlay_version": ""},
     # check_at_startup None: the kind of run decides (default_check_at_startup).
     "updates": {"check_at_startup": None, "manifest_url": "", "repo": ""},
+    # warn_bytes None: services/http_download.DEFAULT_WARN_BYTES (4 GB); 0 turns the warning off.
+    "downloads": {"warn_bytes": None},
 }
 FIBERHMM_SOURCES = ("bundled", "custom", "updated")
 
@@ -159,6 +164,16 @@ def _clean(section: str, values: dict) -> dict:
             import re
             if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", out["repo"]):
                 raise ValueError("The repository must be owner/name")
+        return out
+    if section == "downloads":
+        out = {}
+        if "warn_bytes" in values:
+            value = values["warn_bytes"]
+            if value is not None:
+                if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+                    raise ValueError("warn_bytes must be a size in bytes (0: no warning), or null for the default")
+                value = int(value)
+            out["warn_bytes"] = value
         return out
     raise ValueError(f"Unknown app settings section: {section}")
 

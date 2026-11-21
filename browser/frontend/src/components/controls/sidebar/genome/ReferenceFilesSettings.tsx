@@ -3,6 +3,7 @@ import { useReferenceFastaLoader, type ReferenceFileStatus } from '../../../../h
 import { SidebarSubSection } from '../../SidebarSubSection';
 import { FastaReferenceRow } from './FastaReferenceRow';
 import { GtfReferenceRow } from './GtfReferenceRow';
+import { AnnotationResetAction } from './AnnotationResetAction';
 import { PlasmidReferenceRows } from './PlasmidReferenceRows';
 import { X } from '../../../ui/Icons';
 
@@ -50,6 +51,7 @@ export function ReferenceFilesSettings({
           onLoad={handleLoadGtf}
           onRemove={handleRemoveGtf}
         />
+        <AnnotationResetAction />
 
         <FastaReferenceRow
           hasFasta={hasFasta}

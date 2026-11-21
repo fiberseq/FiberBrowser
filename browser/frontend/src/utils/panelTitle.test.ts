@@ -17,6 +17,8 @@ describe('panel titles: the group first, the dataset last (audit Top 1)', () => 
 
   it('a combined-SV genotype panel: its genotype, without the read count', () => {
     expect(splitGroupName(subset('roo+ · INS5k+ (741)', 'roo + INS 5k')).group).toBe('roo+ · INS5k+');
+    // Evidence tier counts are part of the group's name, not a read count to drop.
+    expect(splitGroupName(subset('Confirmed (9) + putative (0)')).group).toBe('Confirmed (9) + putative (0)');
     expect(panelTitle({ readSubset: subset('roo+ · INS5k+ (741)', 'roo + INS 5k') }, 'numb').primary).toBe('roo+ · INS5k+');
   });
 

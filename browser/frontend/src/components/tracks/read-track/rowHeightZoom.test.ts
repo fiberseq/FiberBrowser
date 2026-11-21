@@ -1,19 +1,30 @@
 import { describe, expect, it } from 'vitest';
-import { computeReadTrackLayout, nextReadRowHeight } from './layout';
+import { nextReadRowHeight } from './layout';
+import { wheelDelta, wheelLogFactor } from '../../../utils/wheel';
 
-describe('Cmd/Ctrl-wheel row height', () => {
-  it('eases a fixed height down instead of snapping to auto on the first step', () => {
-    // 100 reads in 500 px: automatic sizing fits 5 px rows.
-    const autoFit = computeReadTrackLayout(100, 500, 0, 0, false, 'auto', 0).autoRowHeight;
-    expect(autoFit).toBe(5);
-    // The fixed layout reports its own height, which is what the old code compared against.
-    expect(computeReadTrackLayout(100, 500, 0, 0, false, 20, 0).autoRowHeight).toBe(20);
-    expect(nextReadRowHeight(20, autoFit, 1)).toBeCloseTo(17);
-    expect(nextReadRowHeight(5.5, autoFit, 1)).toBe('auto');
+describe('Shift-wheel row height', () => {
+  it('changes continuously from auto-fit and continues down to the minimum', () => {
+    expect(nextReadRowHeight('auto', 5, -1)).toBeCloseTo(5 * Math.exp(0.002));
+    expect(nextReadRowHeight(5, 5, 1)).toBeLessThan(5);
+    expect(nextReadRowHeight(0.5, 5, 100)).toBe(0.5);
+    expect(nextReadRowHeight(99, 5, -100)).toBe(99);
   });
 
-  it('zooms in from auto starting at the fitted height', () => {
-    expect(nextReadRowHeight('auto', 5, -1)).toBeCloseTo(5.9);
-    expect(nextReadRowHeight(90, 5, -1)).toBe(99);
+  it('accumulates tiny deltas without coarse steps or rounding', () => {
+    let height = 5;
+    for (let i = 0; i < 100; i++) height = nextReadRowHeight(height, 5, -0.1);
+    expect(height).toBeCloseTo(nextReadRowHeight(5, 5, -10), 10);
+    expect(height).toBeGreaterThan(5);
+    expect(height).toBeLessThan(5.2);
+  });
+
+  it('normalizes line/page units and shifted horizontal wheels; clamps mouse spikes', () => {
+    const event = { deltaX: 0, deltaY: 1, deltaMode: 0, shiftKey: false };
+    expect(wheelDelta({ ...event, deltaMode: 1 })).toBe(16);
+    expect(wheelDelta({ ...event, deltaMode: 2 }, 600)).toBe(600);
+    expect(wheelDelta({ ...event, deltaY: 0, deltaX: -2, shiftKey: true })).toBe(-2);
+    expect(wheelDelta({ ...event, deltaY: 3, deltaX: -2, shiftKey: true })).toBe(3);
+    expect(wheelLogFactor(10000)).toBe(0.18);
+    expect(wheelLogFactor(-10000)).toBe(-0.18);
   });
 });

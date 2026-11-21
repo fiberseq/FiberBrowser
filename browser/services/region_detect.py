@@ -52,6 +52,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from services.bam_handles import get_bam_handle
+from services.bam_tags import record_passes_call_rule, record_passes_read_policy
 from utils.chrom import get_chrom_variants
 
 # Dataset-wide automatic scan: only when the index says the dataset is this small...
@@ -330,6 +331,10 @@ def _scan(contigs, deadline: float, chrom: Optional[str] = None, start: Optional
         if hi <= lo:
             continue
         rows = out.setdefault(c.contig, [])
+        from services.graph_lift import lift_hidden_predicate
+        from services.signal_evidence import record_keeps_signal, signal_header
+        hidden = lift_hidden_predicate(getattr(bam, "header", None))
+        provenance = signal_header(getattr(bam, "header", None))
         try:
             for read in bam.fetch(c.contig, lo, hi):
                 records += 1
@@ -338,6 +343,14 @@ def _scan(contigs, deadline: float, chrom: Optional[str] = None, start: Optional
                 if records >= (record_cap or SCAN_RECORD_CAP) or ((records & 1023) == 0 and time.monotonic() > deadline):
                     return stop()
                 if read.is_unmapped or read.is_secondary or read.is_supplementary:
+                    continue
+                if hidden is not None and hidden(read):
+                    continue
+                # The read track's duplicate / QC-fail toggles, signal filters and Min footprints' uncalled-read
+                # rule (request):
+                # regions of reads the read panel shows.
+                if (not record_passes_read_policy(read) or not record_keeps_signal(read, provenance)
+                        or not record_passes_call_rule(read)):
                     continue
                 rs = int(read.reference_start)
                 re_ = int(read.reference_end or rs + 1)
@@ -519,6 +532,21 @@ def _index_regions(contigs, max_regions: int):
     return sv, out[:max_regions]
 
 
+def _request_hide_uncalled() -> bool:
+    from services.signal_evidence import request_hide_uncalled
+    return request_hide_uncalled()
+
+
+def _request_read_policy() -> tuple:
+    from services.signal_evidence import read_policy_key
+    return read_policy_key()
+
+
+def _request_signal_filters() -> tuple:
+    from services.signal_evidence import signal_filter_key
+    return signal_filter_key()
+
+
 def detect_regions(state, dataset_id: str, *, chrom: Optional[str] = None, start: Optional[int] = None,
                    end: Optional[int] = None, min_reads: Optional[int] = None,
                    max_regions: int = MAX_REGIONS, force: bool = False) -> dict:
@@ -572,7 +600,8 @@ def detect_regions(state, dataset_id: str, *, chrom: Optional[str] = None, start
     total = int(sum(mapped.values()))
     key = (tuple(sorted(dataset.paths)), base["fingerprint"], genome, tuple(sorted((c.contig, c.size) for c in contigs)),
            chrom, start if view else None, end if view else None, min_reads, max_regions, force,
-           id(getattr(state, "gtf_data", None)))
+           id(getattr(state, "gtf_data", None)), _request_hide_uncalled(), _request_read_policy(),
+           _request_signal_filters())
     cached = _CACHE.get(key)
     if cached is not None:
         return {**cached, **base, "cached": True, "elapsed_ms": round((time.monotonic() - t0) * 1000, 1)}
@@ -597,18 +626,31 @@ def detect_regions(state, dataset_id: str, *, chrom: Optional[str] = None, start
                 genes = GeneIndex(getattr(state, "gtf_data", None))
                 floor = int(min_reads) if min_reads else max(3, int(total * 0.002))
                 regions = []
+                unchecked = 0
                 for contig, rs, re_, reads, depth in sorted(found, key=lambda r: (r[0], r[1])):
                     if reads < floor:
+                        continue
+                    # The index counts every record. A region is published only once it holds at least ``floor``
+                    # reads the read panel shows (read policy, signal filters, uncalled rule): read until that
+                    # many are found, then stop.
+                    _rows, eligible, cut = _scan(contigs, deadline, contig, rs, re_, read_cap=floor)
+                    if eligible < floor:
+                        if cut:
+                            unchecked += 1          # stopped (time or record cap) before it could tell: left out, said so
                         continue
                     shown = _resolve_state_chrom(state, contig)
                     regions.append({"chrom": shown, "start": rs, "end": re_, "reads": reads, "depth": round(depth, 1),
                                     **genes.label(shown, rs, re_)})
+                note = (f"Found from the BAM index ({total:,} reads, not read one by one); read counts are estimates, "
+                        f"each region checked to hold at least {floor:,} reads the read panel shows.")
+                if unchecked:
+                    note += f" {unchecked} region(s) could not be checked (time or record limit) and are left out."
                 result = {**base, "success": True, "kind": "targeted", "method": "index", "status": "scanned",
                           "amplicon_like": False, "regions": regions, "scanned_reads": 0, "reads": total,
-                          "partial": False, "min_reads": floor, "small_clusters": 0, "gene_labels": genes.loaded,
-                          "scope": "dataset",
-                          "note": f"Found from the BAM index ({total:,} reads, not read one by one); read counts are estimates."}
-                _CACHE[key] = result
+                          "partial": bool(unchecked), "min_reads": floor, "small_clusters": 0,
+                          "gene_labels": genes.loaded, "scope": "dataset", "note": note}
+                if not unchecked:
+                    _CACHE[key] = result
                 return {**result, "elapsed_ms": round((time.monotonic() - t0) * 1000, 1)}
             # No local .bai (a CSI index, a remote file): the reads themselves, as far as the bounds allow.
             if total > AUTO_MAX_READS:

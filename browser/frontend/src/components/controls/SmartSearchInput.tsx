@@ -1,3 +1,5 @@
+import { useMetaLocusStore } from '../../features/metaLocus/metaLocusStore';
+import { isMetaChrom, metaViewWords } from '../../features/metaLocus/metaChrom';
 import { useState, useEffect, useId, useLayoutEffect, useRef, type CSSProperties, type FormEvent, type ReactNode, type Ref, type RefObject } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useBrowserStore } from '../../stores/browserStore';
@@ -12,6 +14,7 @@ import {
 import '../../utils/search/builtinProviders';
 import { useProviderSearch } from '../../hooks/useProviderSearch';
 import { flattenPastedList } from '../../utils/readNames';
+import { pastedSequence } from '../../features/sequenceSearch/model';
 import { beginNavigationIntent, contextReference, supersedeNavigationIntents, type NavigationTarget } from '../../utils/search/navigationIntent';
 import { SearchSuggestionList, useSuggestionList } from './SearchSuggestions';
 
@@ -79,7 +82,7 @@ function StatusBubble({ anchor, detached, children }: { anchor: RefObject<HTMLDi
 }
 
 /** The short tag of a suggestion in the status line. */
-const KIND_TAG: Record<string, string> = { locus: 'Locus', gene: 'Gene', region: 'Region', category: 'Regions', read: 'Read' };
+const KIND_TAG: Record<string, string> = { locus: 'Locus', gene: 'Gene', region: 'Region', category: 'Regions', read: 'Read', sequence: 'Sequence' };
 
 export function SmartSearchInput({ viewport, onNavigate, compact = false, inputRef, ariaLabel, disabled = false, disabledReason, genome, chroms: ownChroms, panelId }: SmartSearchInputProps = {}) {
   const store = useBrowserStore(useShallow(s => ({
@@ -89,6 +92,7 @@ export function SmartSearchInput({ viewport, onNavigate, compact = false, inputR
     referencePairs: (s as { referencePairs?: Array<{ fasta: string }> | null }).referencePairs,
   })));
   const { relativeTSS, relativeGene } = store;
+  const metaStatus = useMetaLocusStore(s => s.status);
   const chroms = ownChroms ?? store.chroms;
   const { chrom, start, end } = viewport ?? store;
   const navigate = onNavigate ?? store.setViewport;
@@ -147,14 +151,17 @@ export function SmartSearchInput({ viewport, onNavigate, compact = false, inputR
   // Update input when viewport changes externally
   useEffect(() => {
     setTyping(false);
-    if (showRelativeCoords && relativeGene && relativeTSS !== null) {
+    if (!isPanelBox && isMetaChrom(chrom) && metaStatus) {
+      // The meta-locus: its name ("promoters_tss · TSS ± 10 kb"), or the range on its axis when zoomed in.
+      setInputValue(metaViewWords(metaStatus, start, end));
+    } else if (showRelativeCoords && relativeGene && relativeTSS !== null) {
       const d1 = start - relativeTSS;
       const d2 = end - relativeTSS;
       setInputValue(`${relativeGene.name} TSS ${d1 >= 0 ? '+' : ''}${d1} to ${d2 >= 0 ? '+' : ''}${d2}`);
     } else {
       setInputValue(formatCoordinates(chrom, start, end));
     }
-  }, [chrom, start, end, showRelativeCoords, relativeTSS, relativeGene]);
+  }, [chrom, start, end, showRelativeCoords, relativeTSS, relativeGene, metaStatus, isPanelBox]);
 
   useEffect(() => () => {
     searchSeqRef.current += 1;
@@ -258,6 +265,8 @@ export function SmartSearchInput({ viewport, onNavigate, compact = false, inputR
         return;
       }
       supersedeNavigationIntents(target);
+      // A jump: Back (Alt+←) returns to where this box's view was.
+      useBrowserStore.getState().recordJump(panelId, { to: { chrom: findChromInfo(chroms, parsed.chrom)?.name ?? parsed.chrom, start: parsed.start, end: parsed.end } });
       setViewport(parsed.chrom, parsed.start, parsed.end);
       rootRef.current?.querySelector('input')?.blur();
       return;
@@ -324,9 +333,10 @@ export function SmartSearchInput({ viewport, onNavigate, compact = false, inputR
               setInputValue(e.target.value);
             }}
             onPaste={e => {
-              // A list of read names on several lines: a one-line box would glue them together.
+              // A DNA sequence on several lines (or a FASTA record) becomes the sequence alone, so the box offers to
+              // find it; a list of read names on several lines is comma separated (a one-line box would glue them).
               const text = e.clipboardData?.getData('text') ?? '';
-              const flat = flattenPastedList(text);
+              const flat = pastedSequence(text) ?? flattenPastedList(text);
               if (flat === text) return;
               e.preventDefault();
               const el = e.currentTarget;

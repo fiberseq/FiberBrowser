@@ -1,3 +1,4 @@
+import { KeepWorkspaceFull } from '../../features/metaLocus/KeepWorkspaceFull';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { openFootprintSizes } from '../../utils/footprintSizeEntry';
 import { sampledFitCount } from '../../utils/clusterPreparation';
@@ -76,14 +77,14 @@ export function deriveModeOptions(
     let id = entry.key as PeakMode;
     if (entry.key === 'footprint') id = 'nuc';
     if (entry.key === 'm6a') seen.add('mod');
-    if (seen.has(id)) continue;
+    if (seen.has(id) || NUC_GROUP_LAYERS.has(entry.key)) continue;
     options.push({ id, label: entry.label });
     seen.add(id);
   }
 
   const skipAsCustom = new Set([
     'accessibility', 'nuc', 'tf', 'msp', 'fire', 'mod', 'modification',
-    'footprint', 'm6a', 'm5c', 'deam',
+    'footprint', 'm6a', 'm5c', 'deam', ...NUC_GROUP_LAYERS,
   ]);
   for (const d of datasets) {
     if (!d.available_layers) continue;
@@ -99,6 +100,38 @@ export function deriveModeOptions(
   }
 
   return options;
+}
+
+/** Nucleosome scan groups: never modes by name (nucsz / nucseg come in through the nuc.* modes; nucmol / nfrmol
+ * are per-molecule scalars). */
+const NUC_GROUP_LAYERS: ReadonlySet<string> = new Set(['nucsz', 'nucseg', 'nucreg', 'nucpatch', 'nucmol', 'nfrmol']);
+
+/** Cluster modes of the nucleosome scan layers (per region, like layer names; the backend's nuc.* modes). */
+export const NUC_CLUSTER_MODES: ReadonlyArray<{ id: PeakMode; label: string; layer: 'nucsz' | 'nucseg' | 'nucreg' }> = [
+  { id: 'nuc.size.short', label: 'Nuc size: short', layer: 'nucsz' },
+  { id: 'nuc.size.mono', label: 'Nuc size: mono', layer: 'nucsz' },
+  { id: 'nuc.size.long', label: 'Nuc size: long', layer: 'nucsz' },
+  { id: 'nuc.size.multi2', label: 'Nuc size: multi (2)', layer: 'nucsz' },
+  { id: 'nuc.size.multi3', label: 'Nuc size: multi (3+)', layer: 'nucsz' },
+  { id: 'nuc.size.cant_tell', label: "Nuc size: can't tell", layer: 'nucsz' },
+  { id: 'nuc.size.edge_truncated', label: 'Nuc size: edge-truncated', layer: 'nucsz' },
+  { id: 'nuc.size.tf', label: 'Nuc size: TF', layer: 'nucsz' },
+  { id: 'nuc.seg.regular', label: 'Nuc array: regular', layer: 'nucseg' },
+  { id: 'nuc.seg.disordered', label: 'Nuc array: disordered', layer: 'nucseg' },
+  { id: 'nuc.seg.undetermined', label: 'Nuc array: undetermined', layer: 'nucseg' },
+  { id: 'nuc.seg.low_information', label: 'Nuc array: low information', layer: 'nucseg' },
+  { id: 'nuc.event.undersized', label: 'Nuc event: undersized run', layer: 'nucseg' },
+  { id: 'nuc.event.missing', label: 'Nuc event: missing nucleosome', layer: 'nucseg' },
+  { id: 'nuc.reg', label: 'Nuc regularity', layer: 'nucreg' },
+  { id: 'nuc.reg.pattern', label: 'Nuc regularity: pattern only', layer: 'nucreg' },
+];
+
+/** The nuc.* cluster modes the datasets' nucsz / nucseg layers support (Cluster only: Sort's % options stay layer modes). */
+export function nucClusterModeOptions(
+  datasets: Array<{ available_layers?: Partial<Record<string, boolean>> }>,
+): { id: PeakMode; label: string }[] {
+  const has = (name: string) => datasets.some(d => d.available_layers?.[name]);
+  return NUC_CLUSTER_MODES.filter(mode => has(mode.layer)).map(({ id, label }) => ({ id, label }));
 }
 
 const CLUSTER_METHODS: Array<{
@@ -147,6 +180,8 @@ interface ClusterPanelProps {
   onClearFilter: () => void;
   onScanPeaks?: () => void;
   scanning?: boolean;
+  /** An automatic scan was stopped (its time budget): shown beside Scan until a scan runs or the view moves. */
+  scanNote?: string | null;
   clustering?: boolean;
   sorting?: boolean;
 }
@@ -158,6 +193,7 @@ export function ClusterPanel({
   onClearFilter,
   onScanPeaks,
   scanning,
+  scanNote,
   clustering,
   sorting,
 }: ClusterPanelProps) {
@@ -293,13 +329,15 @@ export function ClusterPanel({
     () => clusterFeatureRules.filter(rule => rule.enabled && rule.terms.length > 0),
     [clusterFeatureRules],
   );
+  const nucModeOptions = useMemo(() => nucClusterModeOptions(datasets), [datasets]);
   const clusterModeOptions = useMemo(() => [
     ...peakModeOptions,
+    ...nucModeOptions,
     ...enabledClusterFeatureRules.map(rule => ({
       id: `${CLUSTER_RULE_MODE_PREFIX}${rule.id}` as PeakMode,
       label: resolveClusterFeatureRuleName(rule),
     })),
-  ], [peakModeOptions, enabledClusterFeatureRules]);
+  ], [peakModeOptions, nucModeOptions, enabledClusterFeatureRules]);
   const activeClusterRuleId = typeof clusterPeakMode === 'string' && clusterPeakMode.startsWith(CLUSTER_RULE_MODE_PREFIX)
     ? clusterPeakMode.slice(CLUSTER_RULE_MODE_PREFIX.length)
     : null;
@@ -610,6 +648,8 @@ export function ClusterPanel({
           clusterFeatureRules,
           view.genome,
           mergeSettings.mergeBy,
+          // Metric columns rank against the fit's cohort, as the fit did.
+          { metricCohort: useBrowserStore.getState().clusterMetricCohort },
         );
         if (!chartRoundStillCurrent(round, view, useBrowserStore.getState())) { stale = true; continue; }
         if (res.dissolved.length === 0) continue;
@@ -627,7 +667,8 @@ export function ClusterPanel({
           if (currentOrder) {
             setClusterOrder(sk, currentOrder.filter(clusterId => !dissolvedIds.has(clusterId)));
           }
-          setClusterFocus(sk, null);
+          // Part of the merge's one undo step (finish records it).
+          setClusterFocus(sk, null, { record: false });
           useBrowserStore.getState().pruneClusterSelection(sk, dissolvedIds);
         }
       }
@@ -732,6 +773,10 @@ export function ClusterPanel({
                     "Scanning…" moved Quality to the next toolbar row and back on every pan (round 3). */}
                 Scan
               </ActionButton>
+            )}
+            {/* An automatic scan stopped by its time budget: said beside Scan (the group's summary is folded away). */}
+            {onScanPeaks && scanNote && !scanning && (
+              <span role="status" data-testid="peak-scan-stopped" className="whitespace-nowrap px-1 text-[11px] text-amber-700 dark:text-amber-400">{scanNote}</span>
             )}
           </>
         )}
@@ -865,6 +910,8 @@ export function ClusterPanel({
           )}
           {/* Which panels the run clusters, said before it runs (and the picker to choose them). */}
           <ClusterAppliesTo />
+          {/* The meta-locus only: top up each cluster from the pool (features/metaLocus). */}
+          <KeepWorkspaceFull hasClusters={hasClusterAssignments} />
           {/* Footprint size enrichment, always on show (no clustering needed): one click to the paper-style view. */}
           <button
             type="button"

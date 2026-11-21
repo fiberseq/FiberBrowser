@@ -164,30 +164,51 @@ def test_pipeline_args_are_one_item_per_value(tmp_path):
 
 def test_option_flags_follow_the_pipelines_help():
     from services.pipeline_inputs import InputError, normalize_options, option_args
-    choice_help = "  --dedup {auto,on,off}\n  --dedup-mode {flag,collapse}\n  --snp-screen {auto,on,off}\n" \
+    mapq_help = "  --min-mapq MIN_MAPQ\n"
+    choice_help = mapq_help + "  --dedup {auto,on,off}\n  --dedup-mode {flag,collapse}\n  --snp-screen {auto,on,off}\n" \
                   "  --snp-mask SNP_MASK\n  --chimera-filter, --no-chimera-filter\n  --primary, --no-primary\n  --prob-threshold N\n"
-    bool_help = "  --dedup, --no-dedup\n  --dedup-collapse\n  --daf-call-snps\n  --no-daf-call-snps\n"
+    bool_help = mapq_help + "  --dedup, --no-dedup\n  --dedup-collapse\n  --daf-call-snps\n  --no-daf-call-snps\n"
+    mapq0 = ["--min-mapq", "0"]  # a new run always passes its MAPQ (owner, 20 Nov 2026)
     # primary_only false (a run record from before --alignments) is every alignment.
     options = normalize_options({"dedup": "off", "snp_screen": "on", "primary_only": False, "chimera_filter": False})
     assert options["alignments"] == "all"
-    assert option_args(options, "dddb", choice_help) == ["--dedup", "off", "--snp-screen", "on", "--no-chimera-filter",
-                                                         "--no-primary"]
+    assert option_args(options, "dddb", choice_help) == [*mapq0, "--dedup", "off", "--snp-screen", "on",
+                                                         "--no-chimera-filter", "--no-primary"]
     with pytest.raises(InputError, match="no option"):
         option_args(options, "dddb", bool_help)  # no --no-primary or chimera switch there
     options = normalize_options({"dedup": "on", "dedup_mode": "collapse", "snp_screen": "off"})
-    assert option_args(options, "dddb", bool_help) == ["--dedup", "--dedup-collapse", "--no-daf-call-snps"]
+    assert option_args(options, "dddb", bool_help) == [*mapq0, "--dedup", "--dedup-collapse", "--no-daf-call-snps"]
     # FiberHMM 3.0 spells the alignment set --alignments (--primary/--no-primary are its aliases);
     # its default (primary-supplementary) adds nothing.
     help3 = choice_help + "  --alignments {primary,primary-supplementary,all}\n"
-    assert option_args(normalize_options({"alignments": "all"}), "dddb", help3) == ["--alignments", "all"]
-    assert option_args(normalize_options({"alignments": "primary"}), "dddb", help3) == ["--alignments", "primary"]
-    assert option_args(normalize_options({}), "dddb", help3) == []
+    assert option_args(normalize_options({"alignments": "all"}), "dddb", help3) == [*mapq0, "--alignments", "all"]
+    assert option_args(normalize_options({"alignments": "primary"}), "dddb", help3) == [*mapq0, "--alignments", "primary"]
+    assert option_args(normalize_options({}), "dddb", help3) == mapq0
     with pytest.raises(InputError, match="Alignments"):
         normalize_options({"alignments": "secondary"})
-    # Defaults add nothing; DddA-only options are ignored for DddB.
-    assert option_args(normalize_options({"use_m5c": "off"}), "dddb", choice_help) == []
+    # Defaults add only the MAPQ; DddA-only options are ignored for DddB.
+    assert option_args(normalize_options({"use_m5c": "off"}), "dddb", choice_help) == mapq0
     with pytest.raises(InputError):
         normalize_options({"prob_threshold": 300})
+
+
+def test_new_runs_pass_their_mapq_explicitly():
+    """Owner, 20 Nov 2026: a new run passes --min-mapq (0 unless changed), whatever FiberHMM's own default."""
+    from services.pipeline_inputs import InputError, changed_options, normalize_options, option_args
+    help_text = "  --min-mapq MIN_MAPQ\n  --alignments {primary,primary-supplementary,all}\n"
+    assert normalize_options({})["min_mapq"] == 0
+    assert normalize_options({"min_mapq": None})["min_mapq"] == 0   # a client that sends null still gets 0
+    assert option_args(normalize_options({}), "dddb", help_text) == ["--min-mapq", "0"]
+    assert option_args(normalize_options({"min_mapq": 20}), "hia5", help_text) == ["--min-mapq", "20"]
+    assert option_args(normalize_options({"min_mapq": "30"}), "ddda", None) == ["--min-mapq", "30"]
+    assert changed_options(normalize_options({}), "dddb") == ["MAPQ 0"]
+    assert changed_options(normalize_options({"min_mapq": 20}), "hia5") == ["MAPQ 20"]
+    for bad in (-1, 256, 2.5, "x", True):
+        with pytest.raises(InputError, match="MAPQ"):
+            normalize_options({"min_mapq": bad})
+    # A pipeline without --min-mapq is refused up front, not run at its own default.
+    with pytest.raises(InputError, match="MAPQ"):
+        option_args(normalize_options({}), "dddb", "  --alignments {primary,primary-supplementary,all}\n")
 
 
 def test_jobs_are_started_with_an_argv_list_never_a_shell(fake_env, monkeypatch):
@@ -392,6 +413,7 @@ def test_route_submit_runs_the_job_and_serves_qc(api, fake_env):
     job = result["jobs"][0]
     assert job["sample"] == "my_sample" and job["outdir"].endswith("r1")
     assert "--dedup off" in job["command"]
+    assert "--min-mapq 0" in job["command"]   # always passed (owner, 20 Nov 2026)
     from services.pipeline_jobs import get_job_manager
     _wait(get_job_manager(), job["id"], ("done",))
     detail = api.get(f"/api/pipeline/jobs/{job['id']}").json()
@@ -404,6 +426,86 @@ def test_route_submit_runs_the_job_and_serves_qc(api, fake_env):
     assert job["id"] in [j["id"] for j in listed]
     assert api.delete(f"/api/pipeline/jobs/{job['id']}").json()["success"]
     assert api.get(f"/api/pipeline/jobs/{job['id']}").status_code == 404
+
+
+def test_route_new_run_passes_the_wizards_mapq(api, fake_env):
+    """Owner, 20 Nov 2026: validate and submit build --min-mapq from the wizard's value (0 by default, a changed value
+    as given, for Hia5 too), shown in the run plan as "MAPQ <n>"; the job records it in its options."""
+    from services.pipeline_jobs import get_job_manager
+    checked = api.post("/api/pipeline/validate", json=_run_body(fake_env)).json()
+    assert checked["ok"], checked
+    assert all("--min-mapq 0" in j["command"] for j in checked["jobs"])
+    result = api.post("/api/pipeline/jobs", json=_run_body(fake_env, enzyme="hia5", options={"min_mapq": 20})).json()
+    assert result["success"], result
+    (job,) = result["jobs"]
+    assert "--min-mapq 20" in job["command"] and "--min-mapq 0" not in job["command"]
+    detail = api.get(f"/api/pipeline/jobs/{job['id']}").json()
+    assert "MAPQ 20" in detail["option_labels"] and detail["options"]["min_mapq"] == 20
+    argv = detail.get("argv") or get_job_manager().spec(job["id"])["argv"]
+    at = argv.index("--min-mapq")
+    assert argv[at + 1] == "20" and argv.count("--min-mapq") == 1
+    _wait(get_job_manager(), job["id"], ("done", "failed"))
+    bad = api.post("/api/pipeline/validate", json=_run_body(fake_env, options={"min_mapq": 300})).json()
+    assert not bad["ok"] and any("MAPQ" in e["message"] for e in bad["errors"])
+
+
+OPENER = "tab-0123456789abcdef"
+
+
+def test_auto_open_is_granted_once_and_only_to_the_page_that_started_the_run(api, fake_env):
+    """Finding 3: auto-open was remembered only in each browser's localStorage, so every other profile,
+    origin or window re-opened the result for 24 h. The server now records it per job."""
+    from services.pipeline_jobs import get_job_manager
+    body = _run_body(fake_env, auto_open=True, opener=OPENER)
+    (job,) = api.post("/api/pipeline/jobs", json=body).json()["jobs"]
+    assert job["opener"] == OPENER and job["auto_open"] is True and not job.get("opened_at")
+    opened = f"/api/pipeline/jobs/{job['id']}/opened"
+    # Not before it finished.
+    early = api.post(opened, json={"auto": True, "opener": OPENER}).json()
+    assert early["claimed"] is False and early["reason"] == "the run has not finished"
+    _wait(get_job_manager(), job["id"], ("done",))
+    # Another page (a fresh profile, another origin, the desktop app, a restarted browser) never gets it.
+    for other in ("tab-ffffffffffffffff", "", "x"):
+        refused = api.post(opened, json={"auto": True, "opener": other}).json()
+        assert refused["claimed"] is False and refused["reason"] == "another page started the run"
+    assert not api.get(f"/api/pipeline/jobs/{job['id']}").json().get("opened_at")
+    # The page that started it: once.
+    first = api.post(opened, json={"auto": True, "opener": OPENER}).json()
+    assert first["claimed"] is True and first["opened_at"]
+    again = api.post(opened, json={"auto": True, "opener": OPENER}).json()
+    assert again["claimed"] is False and again["reason"] == "already opened"
+    detail = api.get(f"/api/pipeline/jobs/{job['id']}").json()
+    assert detail["opened_at"] == first["opened_at"] and detail["opened_by"] == "auto"
+    # A retry keeps it opened.
+    get_job_manager().retry(job["id"])
+    _wait(get_job_manager(), job["id"], ("done",))
+    assert api.post(opened, json={"auto": True, "opener": OPENER}).json()["claimed"] is False
+
+
+def test_open_in_browser_records_the_opening_and_auto_open_needs_a_request_and_a_token(api, fake_env):
+    from services.pipeline_jobs import get_job_manager
+    manager = get_job_manager()
+    # Asked to open, then opened by hand first: no automatic opening follows.
+    (job,) = api.post("/api/pipeline/jobs", json=_run_body(fake_env, auto_open=True, opener=OPENER)).json()["jobs"]
+    _wait(manager, job["id"], ("done",))
+    manual = api.post(f"/api/pipeline/jobs/{job['id']}/opened", json={}).json()
+    assert manual["claimed"] is True and manager.state(job["id"])["opened_by"] == "user"
+    assert api.post(f"/api/pipeline/jobs/{job['id']}/opened", json={"auto": True, "opener": OPENER}).json()["claimed"] is False
+    # Did not ask to be opened: the token is not even kept, and nothing is granted.
+    (quiet,) = api.post("/api/pipeline/jobs", json=_run_body(fake_env, output_root=str(fake_env / "runs" / "r2"),
+                                                             auto_open=False, opener=OPENER)).json()["jobs"]
+    assert quiet["opener"] is None
+    _wait(manager, quiet["id"], ("done",))
+    refused = api.post(f"/api/pipeline/jobs/{quiet['id']}/opened", json={"auto": True, "opener": OPENER}).json()
+    assert refused == {"claimed": False, "opened_at": None, "reason": "the run did not ask to be opened"}
+    # A run from before the server kept the opener (no token): never opened automatically again.
+    (old,) = api.post("/api/pipeline/jobs", json=_run_body(fake_env, output_root=str(fake_env / "runs" / "r3"),
+                                                           auto_open=True)).json()["jobs"]
+    _wait(manager, old["id"], ("done",))
+    assert api.post(f"/api/pipeline/jobs/{old['id']}/opened", json={"auto": True, "opener": ""}).json()["claimed"] is False
+    # Unknown or malformed jobs.
+    assert api.post("/api/pipeline/jobs/20260101-000000-abcdef/opened", json={}).status_code == 404
+    assert api.post("/api/pipeline/jobs/not-a-job/opened", json={}).status_code == 400
 
 
 def test_route_rejects_malformed_job_ids(api):

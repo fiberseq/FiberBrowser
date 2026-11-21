@@ -4,7 +4,7 @@ import { applyReadGroups, groupingIsCurrent, restoreReadGroups } from './readGro
 
 const reset = () => useBrowserStore.setState({
   clusterAssignments: {}, clusterOrder: {}, clusterFocus: {}, clusterPatterns: {}, clusterPeakRegions: [], clusterCentroids: {},
-  clusterPeakWidths: [], dynamicClustering: false, svSplits: {}, clusterGroupLabels: {}, clusterTreeNodes: {}, activeClusterTreeNodeId: null, _historyStack: [], _historyPointer: -1,
+  clusterPeakWidths: [], dynamicClustering: false, svSplits: {}, svCarrierEvidence: {}, clusterGroupLabels: {}, clusterTreeNodes: {}, activeClusterTreeNodeId: null, _historyStack: [], _historyPointer: -1,
 } as never);
 
 const SPLIT = {
@@ -91,4 +91,17 @@ describe('read groups through the cluster store', () => {
     useBrowserStore.getState().redo();
     expect(groupingIsCurrent(applied)).toBe(true);
   });
+});
+
+it('keeps SV evidence tiers through group replacement, Clear and snapshots', () => {
+  reset();
+  const levels = { r1: 'confirmed' as const, r2: 'putative' as const };
+  const first = applyReadGroups({ ...SPLIT, svEvidenceLevels: levels }, { ds1: ['ds1'] }, 'SV genotype');
+  expect(useBrowserStore.getState().svCarrierEvidence.ds1).toEqual(levels);
+  const second = applyReadGroups(SPLIT, { ds1: ['ds1'] }, 'Other grouping');
+  expect(useBrowserStore.getState().svCarrierEvidence.ds1).toBeUndefined();
+  restoreReadGroups(second);
+  expect(useBrowserStore.getState().svCarrierEvidence.ds1).toEqual(levels);
+  restoreReadGroups(first);
+  expect(useBrowserStore.getState().svCarrierEvidence.ds1).toBeUndefined();
 });

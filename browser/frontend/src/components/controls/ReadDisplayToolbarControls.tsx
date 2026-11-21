@@ -27,7 +27,7 @@ interface ReadDisplayToolbarControlsProps {
   mode?: ReadDisplayToolbarControlsMode;
 }
 
-const ROW_HEIGHT_TITLE = 'Row height: how tall each read is drawn. The [ and ] keys make rows thinner or thicker.';
+const ROW_HEIGHT_TITLE = 'Row height: how tall each read is drawn. Shift+scroll sizes rows in all panels together; the [ and ] keys also make rows thinner or thicker.';
 const FILL_TITLE = 'Fill: when there are only a few reads, stretch the rows to fill the panel. With many reads the row height is used.';
 
 function FillToggle({

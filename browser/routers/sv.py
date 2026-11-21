@@ -27,8 +27,17 @@ def _int(body: dict, key: str, default=None):
 async def post_sv_split(request: Request, state=Depends(get_state)):
     """Classify every read in a region by one SV: carrier, reference or not informative."""
     body = await json_object_body(request)
+    from services.background_work import Cancelled, cancelled_response, run_background
+    from services.signal_evidence import body_hide_uncalled
+    from services.reconstruction_budget import ResourceResult
+    # Geometry scans and diagnostic DP both stop when the client goes away.
+    # Requests share completed extraction, never policy-specific calls.
+    async def compute(function, *args, **kwargs):
+        if body.get('allele_target') is not None:
+            return await run_background(request, ('sv-allele-enrichment', id(body)), function, *args, **kwargs)
+        return await run_background(request, ('sv-geometry-scan', id(body)), function, *args, wait_for_reads=False, **kwargs)
     try:
-        payload = await asyncio.to_thread(
+        payload = await compute(
             sv_split_payload, state,
             dataset_id=str(body.get("dataset_id") or ""),
             chrom=str(body.get("chrom") or ""),
@@ -36,9 +45,22 @@ async def post_sv_split(request: Request, state=Depends(get_state)):
             t=str(body.get("t") or ""), ref=_int(body, "ref"), length=_int(body, "len"),
             margin=body.get("margin"),
             include_duplicates=bool(body.get("include_duplicates", False)), include_qcfail=bool(body.get("include_qcfail", False)),
+            include_putative=bool(body.get("include_putative", True)),
+            include_ambiguous=bool(body.get("include_ambiguous", False)),
+            include_conflicting=bool(body.get("include_conflicting", False)),
+            conflict_options=body.get("conflict_options"),
+            target_end=_int(body, 'ref_end') if body.get('ref_end') is not None else None,
+            payload_version=_int(body, 'payload_version', 1),
+            allele_target=body.get('allele_target'),
+            hide_uncalled=body_hide_uncalled(body),
         )
     except SvRequestError as exc:
         return JSONResponse({"detail": str(exc)}, status_code=exc.status)
+    except ResourceResult as exc:
+        return ORJSONResponse({**exc.payload(), 'detail': f'{exc.status}: {exc.reason}'},
+                              status_code=499 if exc.status == 'cancelled' else 413)
+    except Cancelled:
+        return cancelled_response()
     return ORJSONResponse(payload)
 
 

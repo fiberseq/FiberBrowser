@@ -335,3 +335,114 @@ def test_public_visitor_forks_share_the_templates_reference_lock(tmp_path, monke
     tb.join(10)
     assert results["b"]["fasta_loaded"] is True
     assert template.fasta is not None and template.fasta_path == good
+
+
+def _pending_gtf_env(tmp_path, monkeypatch):
+    """A registry genome whose FASTA loads locally and whose annotation is over the download warning size
+    until confirmed (the first ``_download_gtf`` raises LargeDownload, later ones write it)."""
+    import services.genome_loading as gl
+    from services.http_download import LargeDownload
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    (tmp_path / "home" / ".fiberhmm" / "genomes").mkdir(parents=True)
+    good = _fasta(tmp_path, "pg.fa", 300)
+    real = BrowserState._load_fasta
+    monkeypatch.setattr(BrowserState, "_load_fasta", lambda self, path, **k: real(self, good))
+    attempts = []
+
+    def gtf(url, path):
+        attempts.append(url)
+        if len(attempts) == 1:
+            raise LargeDownload(url, 10_000, 5_000)
+        open(path, "w").write(open(_gtf(tmp_path, "pg.src.gtf", "PGGENE")).read())
+    monkeypatch.setattr(gl, "_download_gtf", gtf)
+    info = {"name": "Pending GTF", "fasta_url": "https://example.invalid/pg.fa", "gtf_url": "https://example.invalid/pg.gtf"}
+    return info, attempts
+
+
+def test_a_pending_annotation_belongs_to_the_panel_genomes_context(tmp_path, monkeypatch):
+    """3.1.0 re-check N4: the pending-annotation mark sat on the state object it was written through; a panel
+    view (one per request) wrote it on itself, so the next view found the genome "already loaded"."""
+    from services import panel_genomes
+    from services.genome_loading import genome_already_loaded, load_genome_blocking
+    info, attempts = _pending_gtf_env(tmp_path, monkeypatch)
+    state = BrowserState(None)
+    ctx = BrowserState(None)
+    monkeypatch.setattr(panel_genomes, "contexts", lambda s: {"other": ctx})
+    first = load_genome_blocking(panel_genomes.genome_view(state, "other"), "pg", info)
+    assert first.get("needs_confirmation") and first.get("fasta_loaded")
+    retry_view = panel_genomes.genome_view(state, "other")
+    assert not genome_already_loaded(retry_view, "pg") and not genome_already_loaded(ctx, "pg")
+    assert getattr(state, "__dict__", {}).get("pending_annotation") is None     # the main reference is untouched
+    second = load_genome_blocking(retry_view, "pg", info)
+    assert second.get("gtf_loaded") and not second.get("needs_confirmation") and len(attempts) == 2
+    assert genome_already_loaded(panel_genomes.genome_view(state, "other"), "pg")
+
+
+def test_a_pending_annotation_is_shared_by_forks_of_one_reference(tmp_path, monkeypatch):
+    from services.genome_loading import genome_already_loaded, load_genome_blocking
+    from services.runtime import allow_shared_writes
+    info, attempts = _pending_gtf_env(tmp_path, monkeypatch)
+    template = BrowserState(None)
+    a = BrowserState.fork_for_session(template)
+    b = BrowserState.fork_for_session(template)
+    with allow_shared_writes():
+        first = load_genome_blocking(a, "pg", info)
+        assert first.get("needs_confirmation")
+        assert not genome_already_loaded(b, "pg") and not genome_already_loaded(template, "pg")
+        second = load_genome_blocking(b, "pg", info)
+    assert second.get("gtf_loaded") and len(attempts) == 2
+    assert genome_already_loaded(a, "pg") and genome_already_loaded(template, "pg")
+
+
+def test_a_copy_of_a_pending_reference_keeps_its_pending_annotation(tmp_path, monkeypatch):
+    """3.1.0 re-check 2 (item 4): a copy_shared fork (a tour tab) copied the FASTA and genome id of a reference
+    whose annotation waited for confirmation, but not the mark: the copy's retry answered "already loaded"."""
+    from services.genome_loading import genome_already_loaded, load_genome_blocking
+    from services.runtime import allow_shared_writes
+    info, attempts = _pending_gtf_env(tmp_path, monkeypatch)
+    template = BrowserState(None)
+    with allow_shared_writes():
+        assert load_genome_blocking(template, "pg", info).get("needs_confirmation")
+    tour = BrowserState.fork_for_session(template, copy_shared=True, include_data=False)
+    assert not genome_already_loaded(tour, "pg")
+    assert load_genome_blocking(tour, "pg", info).get("gtf_loaded") and len(attempts) == 2
+    # The copy owns its reference: the template's annotation still waits.
+    assert not genome_already_loaded(template, "pg") and genome_already_loaded(tour, "pg")
+
+
+def test_the_public_routes_confirmed_retry_finishes_the_annotation(tmp_path, monkeypatch):
+    """3.1.0 re-check 2 (item 3): on a public server the route's own "already loaded" shortcut (genome id and a
+    FASTA) answered the confirmed retry without loading the pending annotation."""
+    import asyncio
+    from routers import genome as route
+    from services import catalog_endpoint, genome_registry, runtime
+    from services.genome_loading import genome_already_loaded
+    info, attempts = _pending_gtf_env(tmp_path, monkeypatch)
+    monkeypatch.setitem(genome_registry.GENOME_REGISTRY, "pg", info)
+    monkeypatch.setitem(route.GENOME_REGISTRY, "pg", info)
+    monkeypatch.setattr(runtime, "get_public_mode", lambda: True)
+    monkeypatch.setattr(catalog_endpoint, "catalog_genome", lambda: "pg")
+    state = BrowserState(None)
+    first = asyncio.run(route.load_genome(genome_id="pg", confirm_large=False, state=state))
+    assert first.get("needs_confirmation")
+    second = asyncio.run(route.load_genome(genome_id="pg", confirm_large=True, state=state))
+    assert second.get("gtf_loaded") and len(attempts) == 2, second
+    assert genome_already_loaded(state, "pg")
+
+
+def test_a_panel_genome_with_a_pending_annotation_is_not_reused(tmp_path, monkeypatch):
+    """3.1.0 re-check 2 (item 2), mitigation: attaching a registry genome whose annotation is over the download
+    warning size made a sequence-only context, and every later attachment reused it (the annotation was never
+    tried again). The attachment now says the annotation is pending, and the next one loads the context again."""
+    from models.domain import Dataset
+    from services import genome_registry, panel_genomes
+    info, attempts = _pending_gtf_env(tmp_path, monkeypatch)
+    monkeypatch.setitem(genome_registry.GENOME_REGISTRY, "pg", info)
+    state = BrowserState(None)
+    state.datasets["ds"] = Dataset("ds", [str(tmp_path / "x.bam")], "ds", data_type="bam")
+    first = panel_genomes.attach(state, ["ds"], genome_id="pg", span=0)
+    assert first["genome"]["annotation_pending"]["url"].endswith("pg.gtf") and not first["genome"]["has_gtf"]
+    second = panel_genomes.attach(state, ["ds"], genome_id="pg", span=0)
+    assert len(attempts) == 2 and second["genome"]["has_gtf"] and second["genome"]["annotation_pending"] is None
+    third = panel_genomes.attach(state, ["ds"], genome_id="pg", span=0)
+    assert len(attempts) == 2 and third["genome"]["has_gtf"]      # a complete context is reused

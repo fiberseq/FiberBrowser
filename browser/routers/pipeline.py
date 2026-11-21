@@ -60,8 +60,24 @@ class RunRequest(BaseModel):
     cores: int = 0
     options: dict[str, Any] = Field(default_factory=dict)
     auto_open: bool = False
+    # The page that started the run (a random per-tab token): only it opens the result automatically.
+    opener: str = ""
     input_kind: str = "reads"  # reads | pod5
     basecall: dict[str, Any] = Field(default_factory=dict)  # POD5 only: model, modified_bases, device, batchsize
+
+
+class OpenedRequest(BaseModel):
+    auto: bool = False
+    opener: str = ""
+
+
+OPENER_TOKEN = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
+
+
+def _opener(value: str) -> str:
+    """A page's opener token, or '' for anything that is not one (never stored as given)."""
+    text = str(value or "").strip()
+    return text if OPENER_TOKEN.match(text) else ""
 
 
 class DatasetQcRequest(BaseModel):
@@ -315,11 +331,19 @@ async def pipeline_genome_download_status(genome_id: str):
 
 
 @router.post("/api/pipeline/genome_download", dependencies=[Depends(local_only)])
-async def pipeline_genome_download_start(genome_id: str):
+async def pipeline_genome_download_start(genome_id: str, confirm_large: bool = False):
     """Download a catalog genome's FASTA into the cache, in the background (the browser's open genome is
     untouched); poll the GET for progress."""
     from services import genome_download
-    return await asyncio.to_thread(genome_download.start, genome_id)
+    return await asyncio.to_thread(genome_download.start, genome_id, confirm_large)
+
+
+@router.get("/api/pipeline/genome_download/size", dependencies=[Depends(local_only)])
+async def pipeline_genome_download_size(genome_id: str):
+    """The download's size before it starts (the first mirror's Content-Length, when it says) and the size
+    warning threshold (services/genome_download.size)."""
+    from services import genome_download
+    return await asyncio.to_thread(genome_download.size, genome_id)
 
 
 @router.post("/api/pipeline/genome_download/cancel", dependencies=[Depends(local_only)])
@@ -379,7 +403,8 @@ async def pipeline_submit(req: RunRequest, state=Depends(get_state)):
             if busy:
                 return {"success": False, "errors": [{"field": "", "message": busy, "hint": ""}],
                         "warnings": plan["warnings"]}
-            _create_jobs(manager, plan, job_reads, group, created, owner(), bool(req.auto_open))
+            _create_jobs(manager, plan, job_reads, group, created, owner(), bool(req.auto_open),
+                         _opener(req.opener) if req.auto_open else "")
         return {"success": True, "jobs": created, "warnings": plan["warnings"], "group": group}
 
     try:
@@ -390,7 +415,7 @@ async def pipeline_submit(req: RunRequest, state=Depends(get_state)):
 
 
 def _create_jobs(manager, plan: dict, job_reads: list, group: str, created: list, user,
-                 auto_open: bool) -> None:
+                 auto_open: bool, opener: str = "") -> None:
     """Register one job per sample of a validated plan (under manager.admission())."""
     from services import pipeline_inputs as pi
     from services.pipeline_jobs import new_job_id
@@ -412,6 +437,8 @@ def _create_jobs(manager, plan: dict, job_reads: list, group: str, created: list
             "argv": argv, "env": plan["command"].get("env") or {},
             "display_command": pi.display_command(args), "auto_open": auto_open,
         }
+        if opener:
+            spec["opener"] = opener  # the page that may open it automatically (POST .../opened)
         if user:
             spec["user"] = user  # lab servers: who started it
         created.append(manager.create(spec))
@@ -436,6 +463,19 @@ async def pipeline_job_log(job_id: str):
     except PermissionError as exc:  # a lab server refused what is there: not this job's log
         raise HTTPException(status_code=404, detail="No such log.") from exc
     return PlainTextResponse(text)
+
+
+@router.post("/api/pipeline/jobs/{job_id}/opened", dependencies=[Depends(local_only)])
+async def pipeline_job_opened(job_id: str, req: OpenedRequest):
+    """A run's result was opened (``auto``: the automatic opening claims it; granted once, to the page
+    that started the run). Kept in the job's state, so it holds for every browser, origin and restart."""
+    from services.lab.jobs import may_manage
+    _job_or_404(job_id)
+    manager = _manager()
+    if not may_manage(manager.spec(job_id)):  # a lab member opening another's run records nothing
+        return {"claimed": False, "opened_at": manager.state(job_id).get("opened_at"),
+                "reason": "another member's run"}
+    return await asyncio.to_thread(manager.mark_opened, job_id, auto=bool(req.auto), opener=_opener(req.opener))
 
 
 @router.post("/api/pipeline/jobs/{job_id}/cancel", dependencies=[Depends(local_only)])

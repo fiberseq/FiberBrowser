@@ -75,8 +75,19 @@ def _placeholder_quality_array(layer_name: str, quality_name: str, values) -> bo
     )
 
 
+#: list-valued layer fields that describe the whole layer, not one entry per interval
+_WHOLE_LAYER_LISTS = frozenset({'reach'})
+
+
+def _layer_fields(layer: dict) -> dict:
+    """A layer's own fields a filtered copy keeps: everything that is not per interval (colour, draw style, the
+    nucreg scale and window-grid reach, a live row's label key and patch generation, overlay receipts)."""
+    return {k: v for k, v in layer.items() if not isinstance(v, list) or k in _WHOLE_LAYER_LISTS}
+
+
 def apply_quality_filters(read: dict, quality_filters: Iterable[dict]) -> Optional[dict]:
     """Return a filtered compact read, or None when no intervals survive."""
+    original_read = read
     layers = read.get('layers') or {}
     quality_filters = list(quality_filters or [])
     read = {**read}  # shallow copy so broad-cache reads are not mutated
@@ -135,6 +146,7 @@ def apply_quality_filters(read: dict, quality_filters: Iterable[dict]) -> Option
                 # unfiltered primary intervals (loaders never emit empty
                 # layers, so a present layer is authoritative).
                 empty_layer = {
+                    **_layer_fields(layer),
                     'intervals': [],
                     'qualities': [[] for _ in qualities] if qualities else None,
                     'quality_names': quality_names,
@@ -150,6 +162,7 @@ def apply_quality_filters(read: dict, quality_filters: Iterable[dict]) -> Option
                     for qarr in qualities
                 ] if qualities else []
                 filtered_layer = {
+                    **_layer_fields(layer),
                     'intervals': new_intervals,
                     'qualities': new_qualities if new_qualities else None,
                     'quality_names': quality_names,
@@ -224,6 +237,9 @@ def apply_quality_filters(read: dict, quality_filters: Iterable[dict]) -> Option
     if not read.get('intervals'):
         return None
 
+    if read.get("live_lift"):
+        from services.lift.reads import realign_call_metadata
+        return realign_call_metadata(original_read, read)
     return read
 
 

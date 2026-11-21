@@ -17,7 +17,7 @@ def test_browser_and_package_prepare_identical_native_bam_evidence(tmp_path):
         read=pysam.AlignedSegment(header);read.query_name='test_molecule'
         read.query_sequence='AYGT'*50;read.reference_id=0;read.reference_start=100
         read.mapping_quality=60;read.cigarstring='200M';read.set_tag('st','CT')
-        read.set_tag('MA','200;msp:1-200;tf:61-80');bam.write(read)
+        read.set_tag('MA','200;msp.:1-200;tf.:61-80');bam.write(read)
     pysam.index(str(path))
     ds=SimpleNamespace(data_type='bam',paths=[str(path)],path=str(path),family_scan_chemistry='ddda')
     state=SimpleNamespace(get_dataset=lambda _:ds)

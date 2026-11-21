@@ -1,3 +1,4 @@
+import { normalizeSvConflictOptions, type SvConflictOptions, type SvConflictReason } from './svConflicts';
 /**
  * "Split by this SV" (fb-n9-sv): group a panel's reads in view by one SV's
  * allele (0 carriers, 1 reference, 2 not informative) through the existing
@@ -7,18 +8,23 @@
  */
 import { fetchJson } from '../api/sharedFetch';
 import { useBrowserStore } from '../stores/browserStore';
+import { seedHistoryBaseline } from '../stores/historySlice';
 import { useSplitPanelStore } from '../stores/splitPanelStore';
 import type { SvSplitDef } from '../stores/svSlice';
 import { SV_SPAN_MARGIN, svAlleleLabel } from '../components/tracks/read-track/svDrawing';
 import type { SvCluster } from '../components/tracks/read-track/types';
 
 export const SV_GROUP_LABELS: Record<number, string> = { 0: 'Carriers', 1: 'Reference', 2: 'Not informative' };
+type SvSplitAllele = Pick<SvCluster, 't' | 'ref' | 'len'> & Partial<Pick<SvCluster, 'end'>>;
 
 export interface SvSplitResponse {
   assignments: Record<string, number>;
   counts: [number, number, number];
   label: string;
   margin: number;
+  evidence_levels?: Record<string, 'confirmed' | 'putative' | 'conflicting' | 'ambiguous' | null>;
+  evidence_reasons?: Record<string, SvConflictReason>;
+  evidence_counts?: { confirmed: number; putative: number; conflicting?: number; ambiguous: number };
 }
 
 export interface SvSplitTarget {
@@ -27,55 +33,98 @@ export interface SvSplitTarget {
   chrom: string;
   viewStart: number;
   viewEnd: number;
+  includePutative?: boolean;
+  includeAmbiguous?: boolean;
+  includeConflicting?: boolean;
+  conflictOptions?: SvConflictOptions;
 }
 
-export function requestSvSplit(target: SvSplitTarget, sv: Pick<SvCluster, 't' | 'ref' | 'len'>, margin = SV_SPAN_MARGIN, signal?: AbortSignal): Promise<SvSplitResponse> {
+export function requestSvSplit(target: SvSplitTarget, sv: SvSplitAllele, margin = SV_SPAN_MARGIN, signal?: AbortSignal, includeDuplicates = Boolean(useBrowserStore.getState().showDuplicateReads)): Promise<SvSplitResponse> {
   return fetchJson<SvSplitResponse>('/api/sv/split', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       dataset_id: target.datasetId, chrom: target.chrom, start: Math.floor(target.viewStart), end: Math.ceil(target.viewEnd),
       t: sv.t, ref: sv.ref, len: sv.len, margin,
+      ref_end: sv.end,
       // Reads the panel shows: duplicates too when they are on (else they'd get no group).
-      include_duplicates: Boolean(useBrowserStore.getState().showDuplicateReads),
+      include_duplicates: includeDuplicates,
       include_qcfail: Boolean(useBrowserStore.getState().showQcFailReads),
+      include_putative: target.includePutative ?? true,
+      include_ambiguous: Boolean(target.includeAmbiguous),
+      include_conflicting: Boolean(target.includeConflicting),
+      conflict_options: target.conflictOptions ?? useBrowserStore.getState().svConflictOptions,
     }),
     signal,
   });
 }
 
-export function svSplitDef(target: SvSplitTarget, sv: Pick<SvCluster, 't' | 'ref' | 'len'>, response: SvSplitResponse): SvSplitDef {
+export function svSplitDef(target: SvSplitTarget, sv: SvSplitAllele, response: SvSplitResponse, includeDuplicates = Boolean(useBrowserStore.getState().showDuplicateReads)): SvSplitDef {
   return {
     datasetId: target.datasetId, chrom: target.chrom, t: sv.t, ref: sv.ref, len: sv.len,
-    end: sv.t === 'D' ? sv.ref + sv.len : sv.ref,
+    end: sv.end ?? (sv.t === 'D' ? sv.ref + sv.len : sv.ref),
     margin: response.margin ?? SV_SPAN_MARGIN,
     label: svAlleleLabel(sv.t, sv.ref, sv.len, target.chrom),
     counts: response.counts,
     viewStart: target.viewStart, viewEnd: target.viewEnd,
+    includeDuplicates,
     includeQcFail: Boolean(useBrowserStore.getState().showQcFailReads),
-    includeDuplicates: Boolean(useBrowserStore.getState().showDuplicateReads),
+    includePutative: target.includePutative ?? true,
+    includeAmbiguous: Boolean(target.includeAmbiguous),
+    includeConflicting: Boolean(target.includeConflicting),
+    conflictOptions: normalizeSvConflictOptions(target.conflictOptions ?? useBrowserStore.getState().svConflictOptions),
+    evidenceReasons: response.evidence_reasons,
+    evidenceCounts: response.evidence_counts,
+    evidenceLevels: response.evidence_levels,
   };
 }
 
 /** Put a split's groups in the store, as a clustering run would (one undo step). */
 export function applySvSplit(stateKey: string, def: SvSplitDef, assignments: Record<string, number>): void {
   const store = useBrowserStore.getState();
+  // A step to return to (an empty history, or changes since the last step), before any of the split's changes.
+  seedHistoryBaseline(store, 'Before split by SV allele', 'clustering');
   store.setClusterAssignments(stateKey, assignments, { svSplit: true });
   store.setClusterOrder(stateKey, [0, 1, 2]);
-  store.setClusterFocus(stateKey, null);
+  // (Part of this step: its own "Set cluster focus" step made Undo after a split take two presses.)
+  store.setClusterFocus(stateKey, null, { record: false });
   store.clearClusterSelection(stateKey);
   // An allele is not an accessibility pattern: never re-derived on pan.
   store.setDynamicClustering(false);
   store.setClusterPatterns({});
   store.setClusterCentroids({}, []);
   store.setClusterPeakRegions([]);
-  store.setSvSplit(stateKey, def, SV_GROUP_LABELS);
+  store.setSvSplit(stateKey, def, evidenceGroupLabels(def));
   store.pushSnapshot(`Split by SV allele: ${def.label}`);
 }
 
-export async function splitBySv(target: SvSplitTarget, sv: Pick<SvCluster, 't' | 'ref' | 'len'>): Promise<SvSplitDef> {
-  const response = await requestSvSplit(target, sv);
-  const def = svSplitDef(target, sv, response);
+function evidenceGroupLabels(def: SvSplitDef): Record<number, string> {
+  if (!def.evidenceCounts) return SV_GROUP_LABELS;
+  const counts = def.evidenceCounts;
+  const excluded = [!def.includePutative ? `${counts.putative} putative` : null,
+    !def.includeConflicting ? `${counts.conflicting ?? 0} conflicting (supporting clip aligns elsewhere)` : null,
+    !def.includeAmbiguous ? `${counts.ambiguous} ambiguous` : null].filter(Boolean);
+  return { ...SV_GROUP_LABELS,
+    0: `Confirmed (${counts.confirmed})${def.includePutative ? ` + putative (${counts.putative})` : ''}${def.includeConflicting ? ` + conflicting (${counts.conflicting ?? 0}; clip aligns elsewhere)` : ''}${def.includeAmbiguous ? ` + ambiguous (${counts.ambiguous})` : ''}`,
+    2: `Not informative${excluded.length ? ` (${excluded.join(', ')})` : ''}`,
+  };
+}
+
+const initialRequests = new Map<string, symbol>();
+
+export async function splitBySv(target: SvSplitTarget, sv: SvSplitAllele): Promise<SvSplitDef> {
+  target = { ...target, conflictOptions: normalizeSvConflictOptions(target.conflictOptions ?? useBrowserStore.getState().svConflictOptions) };
+  const request = Symbol();
+  initialRequests.set(target.stateKey, request);
+  let response: SvSplitResponse;
+  let includeDuplicates: boolean;
+  do {
+    includeDuplicates = Boolean(useBrowserStore.getState().showDuplicateReads);
+    response = await requestSvSplit(target, sv, SV_SPAN_MARGIN, undefined, includeDuplicates);
+    if (initialRequests.get(target.stateKey) !== request) throw new Error('SV split superseded');
+  } while (includeDuplicates !== Boolean(useBrowserStore.getState().showDuplicateReads));
+  initialRequests.delete(target.stateKey);
+  const def = svSplitDef(target, sv, response, includeDuplicates);
   applySvSplit(target.stateKey, def, response.assignments);
   return def;
 }
@@ -85,7 +134,7 @@ export async function splitBySv(target: SvSplitTarget, sv: Pick<SvCluster, 't' |
  * panel-count dialog for one panel per group (Carriers / Reference / Not informative; an insertion's
  * Carriers open with the insert expanded, components/controls/SplitPanelsDialog.tsx).
  */
-export async function splitIntoPanelsBySv(target: SvSplitTarget, sv: Pick<SvCluster, 't' | 'ref' | 'len'>, panelId: string): Promise<SvSplitDef> {
+export async function splitIntoPanelsBySv(target: SvSplitTarget, sv: SvSplitAllele, panelId: string): Promise<SvSplitDef> {
   const def = await splitBySv(target, sv);
   useSplitPanelStore.getState().request({ kind: 'frozen', panelId, title: def.label }, [panelId]);
   return def;
@@ -98,31 +147,42 @@ export async function splitIntoPanelsBySv(target: SvSplitTarget, sv: Pick<SvClus
  * Not an undo step.
  */
 export async function refreshSvSplit(target: SvSplitTarget, def: SvSplitDef, signal?: AbortSignal): Promise<void> {
+  if (def.frozenImport) return;
   const { showQcFailReads, showDuplicateReads } = useBrowserStore.getState();
   const includeQcFail = Boolean(showQcFailReads);
   const includeDuplicates = Boolean(showDuplicateReads);
-  const response = await requestSvSplit(target, def, def.margin, signal);
+  const response = await requestSvSplit({ ...target, includePutative: Boolean(def.includePutative), includeAmbiguous: Boolean(def.includeAmbiguous), includeConflicting: Boolean(def.includeConflicting), conflictOptions: def.conflictOptions ?? normalizeSvConflictOptions({ enabled: false }) }, def, def.margin, signal, includeDuplicates);
   const store = useBrowserStore.getState();
-  if (signal?.aborted || store.svSplits[target.stateKey] !== def) return;  // replaced or dropped meanwhile
-  if (Boolean(store.showQcFailReads) !== includeQcFail || Boolean(store.showDuplicateReads) !== includeDuplicates) return;
+  if (signal?.aborted || store.svSplits[target.stateKey] !== def
+      || Boolean(store.showDuplicateReads) !== includeDuplicates || Boolean(store.showQcFailReads) !== includeQcFail) return;
+  // A changed duplicate/QC-fail policy resets the groups (as 3.0.2): reads the panel no longer shows must not keep
+  // an assignment, so exports match the reads shown. Otherwise retained assignments preserve groups when molecules
+  // re-enter the view.
   const policyChanged = Boolean(def.includeQcFail) !== includeQcFail || Boolean(def.includeDuplicates) !== includeDuplicates;
-  const merged = { ...(policyChanged ? {} : store.clusterAssignments[target.stateKey]), ...response.assignments };
-  const counts: [number, number, number] = [0, 0, 0];
-  for (const group of Object.values(merged)) if (group >= 0 && group <= 2) counts[group] += 1;
+  const merged = { ...(policyChanged ? {} : (store.clusterAssignments[target.stateKey] ?? {})), ...response.assignments };
+  // Counts describe only this response's region and visibility settings.
+  const counts = response.counts;
   store.setClusterAssignments(target.stateKey, merged, { svSplit: true, mirror: false });
-  store.setSvSplit(target.stateKey, {
+  const updated = {
     ...def, counts, viewStart: target.viewStart, viewEnd: target.viewEnd,
-    includeQcFail, includeDuplicates,
-  }, SV_GROUP_LABELS);
+    includeDuplicates,
+    includeQcFail,
+    evidenceCounts: response.evidence_counts,
+    evidenceLevels: response.evidence_levels,
+    evidenceReasons: response.evidence_reasons,
+  };
+  store.setSvSplit(target.stateKey, updated, evidenceGroupLabels(updated));
 }
 
 /** "Clear SV split": this panel's groups, names and split go (one undo step); other panels keep theirs. */
 export function clearSvSplit(stateKey: string): void {
+  initialRequests.delete(stateKey);
   const store = useBrowserStore.getState();
   if (!store.svSplits[stateKey]) return;
+  seedHistoryBaseline(store, 'Before clearing the SV split', 'clustering');
   store.setClusterAssignments(stateKey, {});
   store.setClusterOrder(stateKey, []);
-  store.setClusterFocus(stateKey, null);
+  store.setClusterFocus(stateKey, null, { record: false });
   store.clearClusterSelection(stateKey);
   store.setSvSelectedCluster(stateKey, null);
   store.pushSnapshot('Clear SV split');

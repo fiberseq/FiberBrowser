@@ -11,6 +11,7 @@ describe('selectedClusterPeakRegions', () => {
   const base = {
     chrom: 'chr2L', start: 9_462_000, end: 9_492_000, clusterPeakMode: 'accessibility', clusterFeatureRules: [],
     peakModes: {}, selectedGenes: [],
+    panels: [], datasets: [], selectedDatasets: new Set(), filteredReadIds: {},
     getAllPeaks: () => [{ index: 7, start: 9_470_000, end: 9_470_400 }],
     selectedPeaks: new Set([7]),
   };
@@ -27,8 +28,8 @@ describe('selectedClusterPeakRegions', () => {
     ] };
     expect(selectedClusterPeakRegions(st as never)).toEqual([]);
   });
-  it('no peaks and only SVs: nothing to cluster on (the caller says so)', () => {
+  it('no peaks and only SVs: uses the whole view for a region method', () => {
     const st = { ...base, selectedPeaks: new Set<number>(), selectedFeatures: [{ kind: 'sv', id: 'a', chrom: 'chr2L', start: 1, end: 2, datasetId: 'd' }] };
-    expect(selectedClusterPeakRegions(st as never)).toEqual([]);
+    expect(selectedClusterPeakRegions(st as never)).toEqual([{ start: base.start, end: base.end, chrom: base.chrom, mode: 'accessibility' }]);
   });
 });

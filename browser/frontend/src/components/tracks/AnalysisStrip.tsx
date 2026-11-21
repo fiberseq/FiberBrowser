@@ -1,3 +1,4 @@
+import { META_HIDDEN_PANELS, isMetaChrom } from '../../features/metaLocus/metaChrom';
 import { PreviewBadge } from '../ui/PreviewBadge';
 import { usePreviewsEnabled } from '../../utils/previewFeatures';
 import { useState, useRef, useEffect, useMemo, type CSSProperties } from 'react';
@@ -105,11 +106,14 @@ export function AnalysisStrip() {
   usePreviewsEnabled();  // re-render when Settings → Show preview features flips (the Preview panels' buttons)
   const contactPanelOpen = panels.some(panel => panel.contentType === 'contact-map');
   const needsData = (contentType: string) => contentType === 'contact-map' && !dafcLoaded && !contactPanelOpen;
+  // The meta-locus: panels that need a real genome position are not offered (features/metaLocus).
+  const metaView = useBrowserStore(s => isMetaChrom(s.chrom));
 
   const allGroups = getGroupedAnalysisPanels()
     .map(g => ({
       ...g,
-      plugins: g.plugins.filter(p => !HIDDEN_PANELS.has(p.contentType) && !needsData(p.contentType)),
+      plugins: g.plugins.filter(p => !HIDDEN_PANELS.has(p.contentType) && !needsData(p.contentType)
+        && !(metaView && META_HIDDEN_PANELS.has(p.contentType))),
     }))
     .filter(g => g.plugins.length > 0);
 

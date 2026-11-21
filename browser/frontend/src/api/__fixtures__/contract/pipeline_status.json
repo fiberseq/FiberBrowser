@@ -1,0 +1,85 @@
+{
+ "aligner": {
+  "checked": false,
+  "hint": "",
+  "name": null,
+  "ok": true
+ },
+ "available": true,
+ "cores": 16,
+ "current_genome": null,
+ "default_basecall": {
+  "batchsize": null,
+  "device": "auto",
+  "model": "sup",
+  "modified_bases": "auto"
+ },
+ "default_cores": 4,
+ "default_options": {
+  "alignments": "primary-supplementary",
+  "chimera_filter": true,
+  "cpg_mask_policy": "unmethylated-only",
+  "dedup": "auto",
+  "dedup_mode": "flag",
+  "min_mapq": 0,
+  "prob_threshold": null,
+  "snp_mask": "",
+  "snp_screen": "auto",
+  "use_m5c": "auto"
+ },
+ "default_output_root": "/data/2026-11-20_run",
+ "dorado": {
+  "hint": "",
+  "label": "dorado 2.0.0+20e87c8 (/data/dorado)",
+  "name": "dorado",
+  "ok": true,
+  "path": "/data/dorado",
+  "rejected": [],
+  "source": "PATH",
+  "version": "2.0.0+20e87c8"
+ },
+ "enzymes": [
+  {
+   "description": "DddB: deaminates C on both strands; the recommended DAF-seq enzyme (Plasmidsaurus route).",
+   "id": "dddb",
+   "raw_only": false
+  },
+  {
+   "description": "DddA: deaminates C in TC context on one strand per molecule; for DddA (SsDddA) libraries.",
+   "id": "ddda",
+   "raw_only": false
+  },
+  {
+   "description": "Hia5: m6A Fiber-seq. Reads that carry MM/ML m6A calls, PacBio or Nanopore (an aligned or unaligned BAM; the platform is detected from the reads, and no kinetics are needed), or raw Nanopore POD5, basecalled with dorado sup and the 6mA modification model.",
+   "id": "hia5",
+   "raw_only": false
+  }
+ ],
+ "genomes": [
+  {
+   "downloaded": false,
+   "fasta": null,
+   "id": "hg38",
+   "loaded": false,
+   "name": "Human (GRCh38/hg38)"
+  },
+  {
+   "downloaded": false,
+   "fasta": null,
+   "id": "hg19",
+   "loaded": false,
+   "name": "Human (GRCh37/hg19)"
+  },
+  {
+   "downloaded": false,
+   "fasta": null,
+   "id": "mm39",
+   "loaded": false,
+   "name": "Mouse (GRCm39/mm39)"
+  }
+ ],
+ "hint": "",
+ "loaded_references": [],
+ "output_parent": "/data/FiberHMM runs",
+ "source": "environment"
+}

@@ -24,7 +24,9 @@
  *                                    strip above the reads, as if each viewer had chosen it)
  */
 import { spawn, type ChildProcess } from 'child_process';
-import { test as base, type Locator, type Page } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
+// Native file dialogs are answered in the browser in every test context (fixtures/nativeDialogs.ts).
+import { test as base } from './nativeDialogs';
 import { existsSync, mkdtempSync, statSync } from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
@@ -50,6 +52,15 @@ export function testPorts(raw = process.env.FIBERBROWSER_TEST_PORTS): number[] {
 }
 const TEST_PORTS = testPorts();
 const portListText = () => TEST_PORTS.join(', ');
+
+/**
+ * Skip (with the reason) a test that runs `count` servers at once when FIBERBROWSER_TEST_PORTS lists fewer
+ * ports. Call it in the test, its describe or at the top of the spec file.
+ */
+export function requireTestPorts(count: number): void {
+  base.skip(TEST_PORTS.length < count,
+    `runs ${count} servers at once: list ${count} ports in FIBERBROWSER_TEST_PORTS (e.g. 8880,8881); it has ${portListText()}`);
+}
 const RICH_DAF_REGION = { chrom: 'chr2R', start: 9_929_319, end: 10_029_319 };
 // The tracked NAPA demo BAM: 3,202 DddA reads on chr19 starting 47,514,488-47,517,768.
 const DEMO_REGION = { chrom: 'chr19', start: 47_514_000, end: 47_518_000 };
@@ -192,7 +203,8 @@ export async function pickPort(preferred: number, exclude: number[] = []): Promi
  * Exported for specs that stop and start their own server (session reopen).
  */
 export async function startServer(
-  bamPath: string | null, port: number, options: { runtimeFile?: string; extraArgs?: string[]; public?: boolean; token?: string } = {},
+  bamPath: string | null, port: number,
+  options: { runtimeFile?: string; extraArgs?: string[]; public?: boolean; token?: string; env?: Record<string, string>; noTestFasta?: boolean } = {},
 ): Promise<ServerProcess> {
   // The port is checked here and the server may use only it (FIBERBROWSER_PORT_MIN = MAX): its own fallback walks a
   // range, which could reach a port outside the test list. Taken in between: the next free test port.
@@ -209,7 +221,8 @@ export async function startServer(
 }
 
 async function startServerOn(
-  bamPath: string | null, port: number, options: { runtimeFile?: string; extraArgs?: string[]; public?: boolean; token?: string },
+  bamPath: string | null, port: number,
+  options: { runtimeFile?: string; extraArgs?: string[]; public?: boolean; token?: string; env?: Record<string, string>; noTestFasta?: boolean },
 ): Promise<ServerProcess> {
   const runtimeFile = options.runtimeFile ?? path.join(mkdtempSync(path.join(os.tmpdir(), 'fiberbrowser-e2e-runtime-')), 'browser_runtime.json');
   const copilotMode = process.env.FIBERBROWSER_E2E_COPILOT?.trim() || 'off';
@@ -220,8 +233,15 @@ async function startServerOn(
   // A scratch Library (never the user's ~/.fiberhmm/library.json) with an empty
   // job registry, no rescan of watched folders at startup, and a scratch upload cache.
   const scratch = mkdtempSync(path.join(os.tmpdir(), 'fiberbrowser-e2e-library-'));
-  const fastaPath = process.env.FIBERBROWSER_TEST_FASTA?.trim();
-  if (fastaPath) args.push('--fasta', fastaPath);
+  // A spec that names its own reference (or none) opts out of FIBERBROWSER_TEST_FASTA (noTestFasta).
+  const fastaPath = options.noTestFasta ? undefined : process.env.FIBERBROWSER_TEST_FASTA?.trim();
+  if (fastaPath) {
+    // The server runs from the repository root: pass the path absolute, and never start one without the reference
+    // it was meant to have (with none, genome autoload can start an hg38 download).
+    const resolved = path.resolve(fastaPath);
+    if (!existsSync(resolved)) throw new Error(`FIBERBROWSER_TEST_FASTA does not exist: ${resolved}`);
+    args.push('--fasta', resolved);
+  }
   args.push(...(options.extraArgs ?? []));
   const proc = spawn(
     process.env.FIBERBROWSER_TEST_PYTHON?.trim() || 'python',
@@ -256,6 +276,11 @@ async function startServerOn(
         // Analysis preferences (pinned motifs, Show preview features) in a scratch file, never
         // ~/.fiberhmm/analysis_preferences.json: a spec that flips a switch must not change the developer's.
         FIBERBROWSER_PREFERENCES: process.env.FIBERBROWSER_PREFERENCES || path.join(scratch, 'analysis_preferences.json'),
+        // Recent and pinned genomes in a scratch file, never ~/.fiberhmm/recent_genomes.json (a spec that restarts
+        // its server passes the same file in env).
+        FIBERBROWSER_RECENT_GENOMES: process.env.FIBERBROWSER_RECENT_GENOMES || path.join(scratch, 'recent_genomes.json'),
+        // A spec's own environment last (e.g. a scratch HOME whose ~/.fiberhmm/genomes it filled, a dead proxy).
+        ...(options.env ?? {}),
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     }
@@ -338,6 +363,10 @@ export const test = base.extend<{ server: ServerFixture } & ServerOptions>({
   // spec (or ?panels=) saves another. It survives the specs' localStorage.clear(), like a build default.
   // A sandbox or workspace tab swaps in its own storage: pass &panels=${TEST_PANEL_LAUNCHER} there.
   context: async ({ context }, use) => {
+    // Guard: no spec may start a genome download. With no genome loaded, the app's startup autoload fetches hg38
+    // (about 1 GB) into the server's HOME. Every page of the shared context starts with the autoload off; a spec that
+    // opens its own context sets the flag itself (most already do).
+    await context.addInitScript(() => { (window as any).__FIBERBROWSER_E2E_DISABLE_GENOME_AUTOLOAD = true; });
     if (TEST_PANEL_LAUNCHER === 'strip') {
       await context.addInitScript(() => {
         const getItem = Storage.prototype.getItem;
@@ -381,6 +410,7 @@ export const test = base.extend<{ server: ServerFixture } & ServerOptions>({
 });
 
 export { expect } from '@playwright/test';
+export { blockNativeDialogs } from './nativeDialogs';
 
 /**
  * Settings → Show preview features on for this page (Preview features: the Variants panel, insert-expanded panels;

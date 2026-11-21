@@ -23,7 +23,7 @@ usual.
 
 ## What you need
 
-- FiberBrowser 3 and FiberHMM 3 in the same Python environment. The Mac app
+- FiberBrowser 3.1 and FiberHMM 3.2 or later in the same Python environment. The Mac app
   includes both.
 - minimap2. The Mac app includes it. Otherwise install it with
   `brew install minimap2`, `conda install -c bioconda minimap2`,
@@ -107,8 +107,10 @@ to FiberBrowser first. **Choose files…** and **Choose folder…** avoid the co
   calling, per sample. The default is 4. Samples queue: runs start while the
   cores they ask for fit in this computer's total.
 - **Open the results here when the run finishes**: the result opens
-  automatically in this window. This happens once per run, including runs
-  that finished while the tab was closed.
+  automatically, once, in the window or tab that started the run (also after
+  a reload of that tab). Other windows, browser profiles and a restarted app
+  never open it by themselves; **Open in browser** in **Runs** opens it
+  anywhere.
 - **Calling options** (collapsed). The defaults are `fiberhmm-call`'s, and
   only a changed option is passed on:
 
@@ -159,7 +161,10 @@ footprints per read and the QC verdict. **Open in browser** opens it in the
 current window:
 
 - For a genome run: the genome (with its genes), the called BAM, and the
-  region.
+  region. A genome that is already open is never replaced: a result on
+  another reference opens in its own panel with that reference, and the
+  open genome stays (as **Open with … in its own panel** in the
+  wrong-reference banner).
 - For a plasmid run: the map and the called BAM together, linked by sequence
   (see [Plasmids](plasmids.md)). The **Regions** panel opens with the
   amplicon it found on the reads (named after the feature it covers); its
@@ -347,7 +352,7 @@ basecalls again.
 
 | Problem | What to do |
 |---|---|
-| "fiberhmm-pipeline (FiberHMM 3.0 or newer) is not installed" | Install FiberHMM 3 in FiberBrowser's Python: `python -m pip install "fiberhmm[consensus]>=3.0.3,<4"`. |
+| "fiberhmm-pipeline (FiberHMM 3.0 or newer) is not installed" | Install FiberHMM 3.2 in FiberBrowser's Python: `python -m pip install "fiberhmm[consensus]>=3.2.0,<4"`. |
 | "minimap2 is not installed" | Install minimap2 (see [What you need](#what-you-need)) and open the dialog again. |
 | A genome says "not downloaded" | Click **Download**. The genome also loads in the window. |
 | "This FiberHMM's fiberhmm-pipeline has no option for …" | The installed FiberHMM is older than the option. Update FiberHMM, or leave that option at its default. |

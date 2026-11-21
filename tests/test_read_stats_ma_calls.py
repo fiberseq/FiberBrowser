@@ -114,3 +114,24 @@ def test_single_read_view_draws_its_ma_footprints(tmp_path):
     row = stats["per_read"][0]
     # Read-relative, as for legacy reads: footprints at 100-247, 250-280, 300-447.
     assert [iv for iv in row["fp_intervals"] if iv[2] > 0] == [[100, 247, 147], [250, 280, 30], [300, 447, 147]]
+
+
+def test_quality_filters_apply_to_ma_calls(tmp_path):
+    # 3.1.0: Read Stats applies the read track's quality filters; a removed MA call is accessible span.
+    from services.read_endpoint import compact_reads_payload_for_request
+    from services.read_metrics import get_layer_intervals
+    state = _state(_write(tmp_path / "ma_calls.bam"))
+    state.quality_filters = [{"layer": "tf", "quality_name": "aq", "min_value": 190}]
+    state.clear_cache()
+    stats = compute_read_stats(state, CHROM, 900, 1700, False,
+                               ReadStatsRequest(read_ids_by_dataset={"ds": ["ma_fwd"]}, hide_uncalled=False))
+    row = stats["per_read"][0]
+    payload = compact_reads_payload_for_request(
+        state, chrom=CHROM, start=900, end=1700, dataset_id="ds", spanning=False, max_reads=0,
+        include_layers=True, include_layer_qualities=True)
+    track = {r["id"]: len(get_layer_intervals(r, "all_fp")) for r in payload["reads"]}
+    assert row["footprint_count"] == track["ma_fwd"] == 2
+    # The 30 bp TF is now accessible: gaps 3 + 30 + 20 over the 347 bp body.
+    assert row["accessibility_pct"] == round(53 / 347 * 100, 1)
+    (impact,) = stats["aggregate"]["quality_filters"]
+    assert (impact["calls"], impact["removed"]) == (1, 1)

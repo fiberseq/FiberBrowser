@@ -11,7 +11,10 @@ import pandas as pd
 from models.domain import CigarCoordMapper
 from services.bam_tags import (
     interval_tag_pair,
-    read_has_footprint_calls,
+    ma_tag_is_spec,
+    read_has_footprint_calls,  # noqa: F401 (re-exported)
+    record_passes_call_rule,
+    record_passes_read_policy,
     read_legacy_tags_are_molecular,
     MA_ALL_MOLECULAR,
     bam_ma_group_frame,
@@ -47,6 +50,8 @@ def _ma_reference_footprints(read, ref_start, ref_end, tags_are_molecular):
     back with ``msp_only`` set, as legacy as/al do."""
     try:
         ma = read.get_tag("MA")
+        if read.has_tag("Ma") and not ma_tag_is_spec(str(ma)):
+            raise KeyError("MA")  # rejected beside a valid Ma: the read's calls are Ma's
     except KeyError:
         # fibertools-rs v0.13+ writes the same spec as `Ma`, always molecular frame.
         try:
@@ -131,6 +136,8 @@ def load_reads_from_bam(
     chrom_map: Optional[dict] = None,
     contig_links: Optional[dict] = None,
     hide_uncalled: bool = False,
+    include_duplicates: bool = False,
+    include_qcfail: bool = False,
 ):
     """
     Load BAM reads into the legacy signed-footprint DataFrame format.
@@ -139,7 +146,9 @@ def load_reads_from_bam(
     Newer interactive paths should prefer compact-read loading.
 
     ``hide_uncalled``: leave out records without footprint calls
-    (``bam_tags.read_has_footprint_calls``), as the compact loader does.
+    (``bam_tags.read_has_footprint_calls``), as the compact loader does (a QC-fail record shown by choice is
+    exempt: FiberHMM chimeras carry no calls). ``include_duplicates`` / ``include_qcfail``: the read track's
+    toggles; duplicate and QC-fail records are hidden unless shown.
     """
     import pysam
 
@@ -180,17 +189,23 @@ def load_reads_from_bam(
             from services.background_work import checkpoint
             from services.signal_evidence import signal_header, record_keeps_signal
             signal_provenance = signal_header(bam.header)
+            from services.graph_lift import lift_hidden_predicate
+            lift_hidden = lift_hidden_predicate(bam.header)
             records_seen = 0
             for read in bam.fetch(actual_chrom, start, end):
                 records_seen += 1
                 if not records_seen & 255:
                     checkpoint()  # a background job whose client went away stops here
-                if read.is_unmapped or read.is_secondary or read.is_supplementary or read.is_qcfail:
+                if read.is_unmapped or read.is_secondary or read.is_supplementary:
+                    continue
+                if not record_passes_read_policy(read, include_duplicates, include_qcfail):
+                    continue
+                if lift_hidden is not None and lift_hidden(read):
                     continue
 
                 if not record_keeps_signal(read, signal_provenance):
                     continue
-                if hide_uncalled and not read_has_footprint_calls(read):
+                if not record_passes_call_rule(read, hide_uncalled):
                     continue
                 ref_start = read.reference_start
                 ref_end = read.reference_end

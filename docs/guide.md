@@ -10,6 +10,16 @@ The screenshots show the two demos that ship with FiberBrowser: DddA-seq
 PacBio Fiber-seq reads from H1 cells around a 7,471-bp insertion on
 chromosome 1. The steps work the same way on your own data.
 
+Upgrading from 3.0? [What's new in 3.1](whats-new.md) introduces the
+[Plots](workflows/plots.md) workspace, the [meta-locus](workflows/meta-locus.md),
+live lift, Differences, graph mode, the Feature hub and Nucleosomes, and lists
+what changed. Each has a separate workflow page with its controls and limits.
+
+Preview features (the meta-locus, live lift, graph mode, footprint classes
+and insert-expanded panels) carry a **Preview** badge in the app; hover it for
+the known limitations. They are on by default; see
+[What 3.1 includes](release-scope.md).
+
 In each screenshot the dark box is the tour's popover. It gives the step's
 title, one or two sentences about it, and (in green) how to do it yourself.
 The control the step is about has a green ring. **Next** moves on, and many
@@ -24,13 +34,13 @@ time.
 - [Peaks and clustering](#peaks-and-clustering): [13](#13-peaks) peaks · [14](#14-selecting-peaks) selecting peaks · [15](#15-clustering) clustering · [16](#16-merging-similar-clusters) merging · [17](#17-the-clusters-panel) Clusters panel · [18](#18-profiles-and-other-views) profiles · [19](#19-the-read-map) the read map · [20](#20-sort-and-filter) sort and filter
 - [Footprints](#footprints): [21](#21-analysing-a-spot-cmdclick) Cmd+click · [22](#22-saving-a-footprint) saving a footprint · [23](#23-saved-footprints) Saved · [24](#24-footprint-classes) footprint classes · [25](#25-the-class-table) class table · [26](#26-saving-a-class) saving a class · [27](#27-saved-classes-and-their-prevalence) saved classes · [28](#28-co-occupancy) co-occupancy · [29](#29-compare-strands) compare strands
 - [Regions and highlights](#regions-and-highlights): [30](#30-highlight) highlight · [31](#31-regions) regions · [32](#32-comparing-haplotypes) haplotypes
-- [Labeling and rules](#labeling-and-rules): [33](#33-labeling) labeling · [34](#34-quality-filters) quality · [35](#35-rules) rules
+- [Labeling and rules](#labeling-and-rules): [33](#33-labeling) labeling ([layer colours](#layer-colours)) · [34](#34-quality-filters) quality · [35](#35-rules) rules
 - [Tracks](#tracks): [36](#36-adding-a-track) adding a track · [37](#37-track-hubs) track hubs
-- [Other analyses](#other-analyses): [38](#38-co-accessibility) co-accessibility · [39](#39-primers) primers
+- [Other analyses](#other-analyses): [38](#38-plots) Plots · [39](#39-primers) primers
 - [Panels and layout](#panels-and-layout): [40](#40-linking-and-merging-datasets) linking · [41](#41-genomes-and-navigation) genomes · [42](#42-panel-actions) panel actions · [43](#43-layout) layout
-- [Variants](#variants): [44](#44-a-structural-variant-demo) the SV demo · [45](#45-the-variants-panel) Variants panel · [46](#46-snps-in-view) SNPs · [47](#47-reads-split-by-haplotype) split by haplotype · [48](#48-structural-variants) SVs · [49](#49-insertions-on-the-reads) the SV row · [50](#50-the-insert-expanded) insert expanded · [51](#51-inside-the-insert-a-ctcf-site) a CTCF site
+- [Variants](#variants): [44](#44-a-structural-variant-demo) the SV demo · [45](#45-the-variants-panel) Variants panel · [46](#46-snps-in-view) SNPs · [47](#47-reads-split-by-haplotype) split by haplotype · [48](#48-structural-variants) SVs · [49](#49-insertions-on-the-reads) the Differences row · [50](#50-the-insert-expanded) insert expanded · [51](#51-inside-the-insert-a-ctcf-site) a CTCF site
 - [Around the browser](#around-the-browser): [52](#52-undo) undo · [53](#53-save) save · [54](#54-export-a-figure) figure · [55](#55-export-data) data · [56](#56-the-tutorial-panel) Tutorial panel · [57](#57-copilot) Copilot · [58](#58-thats-the-tour) the end
-- [Beyond the tour](#beyond-the-tour): [the read menu](#the-read-menu) · [the command palette](#the-command-palette) · [regions and highlights](#regions-and-highlights-in-depth) · [genomes and panels](#genomes-and-panels) · [side panels](#side-panels-and-the-drawer) · [opening files](#opening-files-and-the-library) · [POD5 runs](#run-everything-from-the-app-pod5) · [read filters](#read-filters) · [footprint classes](#footprint-classes-in-depth) · [DAF-seq strands](#daf-seq-strands-side-by-side) · [haplotypes](#haplotype-comparison) · [figures](#figure-export) · [data](#data-export) · [undo history](#undo-history) · [sessions](#sessions-and-workspaces) · [Jupyter](#jupyter-and-python) · [your own data](#your-own-data)
+- [Beyond the tour](#beyond-the-tour): [Plots and the meta-locus](#plots-and-the-meta-locus) · [the read menu](#the-read-menu) · [the command palette](#the-command-palette) · [regions and highlights](#regions-and-highlights-in-depth) · [genomes and panels](#genomes-and-panels) · [recent and pinned genomes](#recent-and-pinned-genomes) · [side panels](#side-panels-and-the-drawer) · [opening files](#opening-files-and-the-library) · [POD5 runs](#run-everything-from-the-app-pod5) · [read filters](#read-filters) · [footprint classes](#footprint-classes-in-depth) · [DAF-seq strands](#daf-seq-strands-side-by-side) · [haplotypes](#haplotype-comparison) · [figures](#figure-export) · [data](#data-export) · [undo history](#undo-history) · [sessions](#sessions-and-workspaces) · [Jupyter](#jupyter-and-python) · [your own data](#your-own-data) · [your own annotations (MA tags)](#your-own-annotations-ma-tags)
 
 ## Starting the tour
 
@@ -126,6 +136,14 @@ To zoom, use the **+** and **−** buttons, the ↑/↓ keys or the +/− keys. 
 pan, use the arrow keys or drag the reads. The crosshair (*Go to the next
 best-covered locus*) jumps to the best-covered places in your data, deepest
 first.
+
+**Cmd/Ctrl+scroll** over reads, the axis or other genomic tracks, including
+graph panels, zooms the genomic region around the pointer. Linked panels
+follow together. Wheel motion is smooth: the loaded drawing scales while you
+scroll, then data loads after a short pause. Each wheel burst is one Undo step.
+**Shift+scroll** smoothly sets read row height in all side-by-side dataset
+panels together, keeping rows aligned. Horizontal Shift-wheel motion on macOS
+works too. **Plain scroll** moves vertically through read rows.
 
 ### 5. Search commands and settings
 
@@ -225,7 +243,7 @@ keeps its own colour.
 
 - **Fit** squeezes every read into the panel, and **All** shows each read at
   full height.
-- **−** and **+** set the row height.
+- **−** and **+** set the row height; **Shift+scroll** smoothly sizes rows in all panels together.
 
 ### 12. Layers
 
@@ -312,6 +330,8 @@ profiles:
 The **Charts** tab compares the clusters:
 
 - **Profiles** overlays the clusters' average profiles, one plot per layer.
+  The **Profile** chips choose the layers: **Default** shows the layers the
+  default metaprofile shows; click layer chips to pick your own.
 - **Composition** shows each dataset's share of reads in each cluster, as
   **Bar**, **Pie** or **Line** (Line joins datasets, so it needs two).
 - **Footprint sizes** plots footprint size against position, as a **Size
@@ -323,7 +343,16 @@ The **Charts** tab compares the clusters:
 
 Click cluster names above a chart to show only those clusters; **All** shows
 them all again. A cluster picked in the read panel or on the Overview is picked
-in the charts too.
+in the charts too. **Open in Plots** opens the cluster profiles in the
+[Plots](workflows/plots.md) workspace.
+
+![The default metaprofile in the Tracks panel, following the active layers](images/guide/x19_metaprofile_follow_layers.png)
+
+The default metaprofile track above the reads shows the layers switched on in
+the Layers toolbar, and follows them as you switch layers on and off.
+**Follow active layers** (Tracks panel → the **Metaprofile** row) is on by
+default. Adding or removing a source by hand turns it off and keeps your
+choice; turning it back on follows the layers again.
 
 ### Footprint size enrichment plots
 
@@ -486,7 +515,7 @@ as JSON, their sequences as FASTA, or the matched calls.
 
 **Find footprint classes** looks at every read in the view for footprints that
 recur in the same place. It groups them into classes, each with its own
-colour. Footprint classes are a **Preview** feature in 3.0: the section's
+colour. Footprint classes are a **Preview** feature: the section's
 heading carries the PREVIEW badge, and it is there whether or not **Show
 preview features** is on. The card says which region the run analyses ("Analyses: … · this
 view") and outlines it on the panels; choose **Selected peaks**, **This view**
@@ -624,8 +653,8 @@ The **Regions** panel's **Regions** tab keeps saved regions in categories.
 - **Export BED** saves the ticked regions (or all of them).
 - Click a region to go there. Tick several to highlight them, open them side
   by side, or move them to another category.
-- **N** and **P** (or the ‹ › stepper) go to the next and previous region of
-  the current category.
+- **N** and **Shift+N** (or the ‹ › stepper) go to the next and previous
+  region of the current category.
 - Type a region's or category's name, or its nearest gene, in a location box.
 
 The **Map** tab shows where you are on the whole chromosome, or on a circular
@@ -660,6 +689,31 @@ wins. Drag the ≡ handle to reorder rules, and untick a rule to turn it off.
 **Add rule** adds a rule. **Quick add** makes common ones in one click, for
 example *Pol II footprints NOT in* a gene. **Display options** and **Presets**
 are below the list.
+
+#### Layer colours
+
+![Labels → Layer colours, with the nucleosome layer recoloured](images/guide/x22_layer_colours.png)
+
+**Layer colours**, below the rules in Labeling, sets the colour of any layer:
+the built-in ones and any extra MA-tag group. Each row has a colour picker, a
+tag that says where its colour comes from (**this session** or **your
+default**) and **Reset**. The read track, metaprofiles, cluster views, Plots,
+graph mode and exported figures all use the colour. The built-in Nucleosome,
+Accessibility and Subnucleosome rules follow it while they keep their stock
+colours; a rule you recoloured keeps its own.
+
+- **Save as my default colours** keeps the current colours for every new
+  session on this computer. **Clear my defaults** forgets them.
+- A session's own colours win over your defaults, and a layer with neither
+  uses its built-in colour.
+- **Reset all** removes this session's colours.
+- A colour very close to another layer's, also for colour-blind viewers, gets
+  a warning (it never blocks).
+
+![Right-click a layer toggle: Change colour…](images/guide/x23_change_colour.png)
+
+Right-click a layer toggle in the **Layers** bar for **Change colour…**: the
+same picker and **Reset**.
 
 ### 34. Quality filters
 
@@ -717,12 +771,28 @@ type.
 
 ## Other analyses
 
-### 38. Co-accessibility
+### 38. Plots
 
-![Step 38: Co-accessibility](images/guide/38_co_accessibility.png)
+![Step 38: Plots](images/guide/38_plots.png)
+
+**Plots** (press **P**, or click **Plots** at the top of the icon strip on the
+right) opens a full-window workspace for figures made from the reads: a
+metaprofile, footprint size enrichment, a V-plot, a size histogram, a heatmap
+over BED regions, or co-accessibility. Choose the type, the source layer and
+how to group the reads (pooled, by dataset, cluster, class or split panel). A
+plot follows the browser as you move, or stays pinned. **Keep** saves it to the
+Gallery with the browser state it was made in. **Esc** returns to the reads.
+See [Plots](workflows/plots.md).
+
+![Co-accessibility in Plots](images/guide/38_co_accessibility.png)
 
 **Co-accessibility** shows which positions are open together on the same
-molecules, as a matrix, for any layer. **JSON**, **TSV** and **Python** export
+molecules, as a square matrix, for any layer. It is a plot type in **Plots**
+(⌘K **Co-accessibility**, or Type › Co-accessibility): one matrix per
+dataset or pooled, **A − B** between datasets, normalisation, scaling, bins,
+minimum reads, the genes along the edge, and the track under the reads (heatmap
+strip, arcs or virtual 4C). It counts the reads of the targeted panels, with
+their cluster focus and read filters. **JSON**, **TSV** and **Python** export
 the matrix and its settings.
 
 ### 39. Primers
@@ -816,7 +886,8 @@ at its centre, so it shows what a structural variant can add to a locus.
 **Next** loads the demo in a panel named **H1 insertion demo (Fiber-seq)** and
 moves to `chr1:23,273,500-23,281,000`. The NAPA panel folds away meanwhile.
 The reads stop at the breakpoint where the carriers' alignments are clipped,
-and the SV row above the reads flags the insertion.
+and the **Differences** row above the reads (the SV row in FiberBrowser 3.0)
+flags the insertion.
 
 ### 45. The Variants panel
 
@@ -878,32 +949,51 @@ closes the split.
 
 The **SVs** tab lists the deletions and insertions in view (50 bp or more),
 with how many informative reads carry each: here **INS 7.5 kb @
-chr1:23,277,273**, 71 carriers of 108 informative reads. Each row can:
+chr1:23,277,273**, with its confirmed carriers out of the informative reads,
+then the putative, conflicting and ambiguous reads. A *confirmed* carrier's
+alignment holds the insertion or is split across it; a *putative* one is only
+clipped there. Checkboxes above the list choose which of them count as
+carriers (confirmed and putative by default); see
+[Structural variants](workflows/structural-variants.md#evidence-levels). Each
+row can:
 
 - **Group in this panel** or **Split into panels…**: the reads by the SV's
   allele (carriers, reference, not informative);
 - **Open in lens**: the insertion lens (the inserted bases of each carrier);
 - **SNP alleles**: which SNP alleles the carriers have and the reference
-  reads do not, and **Select the linked SNPs** to split by them.
+  reads do not, and **Select the linked SNPs** to split by them;
+- **Inspect difference**: the inspector, with each read's observed bases and
+  chromatin (see [Differences](workflows/differences.md#the-inspector)).
 
 Tick two to four SVs to group or split the reads by their combined genotype.
 
 ### 49. Insertions on the reads
 
-![Step 49: the SV row](images/guide/49_insertions_on_the_reads.png)
+![Step 49: the Differences row](images/guide/49_insertions_on_the_reads.png)
 
-The **SV** row above the reads flags each insertion (with its size and its
-carriers) and draws each deletion as a bar. Hover a flag for its carriers.
-Right-click it for the same actions as the SVs tab:
+The **Differences** row above the reads flags each insertion (with its size,
+then its confirmed carriers over the informative reads) and draws
+each deletion as a bar. Hover a flag for its carriers at each evidence level.
 
-![The SV row's menu](images/guide/x17_sv_row_menu.png)
+- **Click** a flag to highlight its carriers; on an insertion of 50 bp to
+  50 kb, the click also expands the insertion in place, with each carrier's
+  inserted bases in a column of their own (click again to collapse it). See
+  [Differences](workflows/differences.md#expanding-an-insertion).
+- **⌘-click** (Ctrl-click) opens the inspector.
+- **Right-click** for **Inspect…**, **Expand insertion**, the same group and
+  split actions as the SVs tab, highlights by evidence level (**Highlight
+  carriers (confirmed + putative)**, **Highlight confirmed only**, and the
+  putative, conflicting and ambiguous reads), **Open carriers with the insert
+  expanded** and **Open this insertion in the lens**:
+
+![The Differences row's menu on the insertion](images/guide/x17_sv_row_menu.png)
 
 ### 50. The insert, expanded
 
 ![Step 50: the insert expanded](images/guide/50_the_insert_expanded.png)
 
-**Open carriers with the insert expanded** (in the SV row's menu, or **Show
-insert expanded** in a panel's ⋯ menu) re-aligns the insertion's carriers
+**Open carriers with the insert expanded** (in the Differences row's menu, or
+**Show insert expanded** in a panel's ⋯ menu) re-aligns the insertion's carriers
 onto its alternate allele: the reference flank, the consensus of the inserted
 sequence, and the other flank. The reads inside the insert can then be
 clustered, sorted, filtered and analysed like any region. The ruler counts
@@ -916,8 +1006,8 @@ preview features).
 
 ![Step 51: the insert's CTCF footprint](images/guide/51_inside_the_insert_a_ctcf_site.png)
 
-The panel shows insert positions 3,300–4,300, with its SV row hidden (the
-per-read insertion marks only clutter the insert). **Next** on the previous
+The panel shows insert positions 3,300–4,300, with its Differences row hidden
+(the per-read insertion marks only clutter the insert). **Next** on the previous
 step also sorted the carriers by accessibility over the insert's
 nucleosome-free region (insert ~3,723–3,879): most carriers are open there (at
 the top), and most of those have a footprint at its centre (insert ~3,771–3,804) over a
@@ -928,7 +1018,7 @@ To compare carriers with the reads without the insertion, **Split into
 panels…** on the insertion's row of the SVs tab opens the carriers (with the
 insert expanded) and the reference reads side by side. The SVs tab then lists
 the SVs of all the reads the split was made from, so the insertion stays
-listed with its 71 carriers:
+listed with all its carriers:
 
 ![Carriers and reference reads](images/guide/x18_sv_split_carriers.png)
 
@@ -1006,6 +1096,16 @@ class run, the saved class S1, the highlight and the saved region are
 therefore still there.
 The strand pictures come from a fresh tour tab, and the session pictures from
 the main tab.
+
+### Plots and the meta-locus
+
+The [Plots](workflows/plots.md) workspace (step 38) has its own page: plot
+types, BED region sets, comparisons, summaries with bootstrap intervals and the
+Gallery. **Open ▾ → Open BED as meta-locus…** (Preview) pools the reads of
+every site in a BED file into one virtual locus that you browse, cluster and
+plot like any other; see [Meta-locus](workflows/meta-locus.md).
+
+![A meta-locus: the reads of every site in a BED file, clustered](images/meta-locus/clustered.png)
 
 ### The read menu
 
@@ -1094,6 +1194,35 @@ Linked takes each genome's panels to the one moved last. **Match** in a
 panel's location bar moves the other panels on that genome to its locus
 without linking them. Analyses, figures and undo work per panel genome.
 
+### Recent and pinned genomes
+
+![Reference & Tracks → Recent genomes, with two pinned genomes](images/genome/recent-genomes.png)
+
+**Reference & Tracks → Recent genomes** lists the genomes you loaded, most
+recent first: a local FASTA with its annotation, or an online genome. Click a
+row to load it again with its annotation.
+
+- The star pins a genome. Pinned genomes sit above Recent, in the order you
+  drag them to, and **Clear recent** keeps them.
+- **Remove** takes one off the list. A file that has moved shows greyed out
+  with "file not found".
+- **Show** sets how many recent genomes are listed (8 by default).
+
+![The mismatch banner offers the pinned genome that matches the data](images/genome/recent-match-banner.png)
+
+When the loaded reference doesn't fit the data, the **Genome mismatch**
+banner offers the pinned or recent genome that fits it best, for example
+**Switch to dm6 (matches your data) · all 1,870 contigs match**. One click
+switches; nothing switches on its own.
+
+A reference given with `--fasta` when the server starts stays loaded: neither
+a remembered reference nor a restored session replaces it, and the page says
+so in one line. If the annotation loaded doesn't belong to the reference,
+**Reset to dm6 genes** (with your reference's name) in Reference & Tracks (or in the **Gene annotation
+mismatch** banner) loads the reference's own. On a lab server each member has
+their own list, holding only files inside their folders; public servers don't
+show it.
+
 ### Side panels and the drawer
 
 Analysis panels open beside the reads. A side panel's pin button controls
@@ -1152,9 +1281,15 @@ filters:
   a first or last footprint under 90 bp that a read end cuts off, in the
   reads and in the analyses (Find footprint classes is not affected).
 - terminal gaps and gap filling;
-- minimum footprints;
+- **Min footprints**: reads with fewer footprints are hidden (5 by default;
+  0 shows every called read). Reads FiberHMM did not call at all (no footprint
+  calls) are hidden at every setting; **All reads, including uncalled** shows
+  them too. The panel header and the line under the control say how many reads
+  each filter hid, and Read Stats lists uncalled reads as *not called*;
 - **Show duplicate reads**;
 - CIGAR display.
+
+![Min footprints and All reads, including uncalled, in Read Filters](images/guide/x20_min_footprints.png)
 
 ### Footprint classes in depth
 
@@ -1288,6 +1423,12 @@ else starts fresh. **On launch** chooses whether to offer it, always reopen,
 or start fresh. After a crash, a banner offers to **Restore** the unsaved
 session instead; the welcome card still shows below it.
 
+Sessions from 3.0.x keep their saved class and NFR analyses. The Feature hub
+also lists those hits without rerunning discovery. New sessions can embed
+small browser scans and keep association and overlay results. See
+[Opening sessions from 3.0.x](workflows/session-migration.md) for missing scans,
+pinned carts and sharing with older builds.
+
 ![A new independent workspace](images/guide/x10_new_workspace.png)
 
 **New Independent Workspace** opens a new tab with its own datasets and
@@ -1316,10 +1457,101 @@ your last genome (else hg38), choosing one that matches your data's
 chromosome names. Pick another in the sidebar's **Reference & Tracks**
 section, then repeat the steps above.
 
-The display shows a sample of the reads for speed. Clustering and the
-analyses use every eligible read unless you set **Analysis cap** (sidebar →
-**Analysis & Reproducibility**); Read Stats describes the selected reads, or
-the reads shown.
+The display shows a sample of the reads for speed. **Low memory** also caps
+analysis working sets at 2,000 reads. Choose **Standard** or **High performance**
+for full working sets; **Analysis cap** can still limit them (sidebar →
+**Analysis & Reproducibility**). Check sampling notices on results. Read Stats
+describes the selected reads, or the reads shown. See
+[Navigation and speed](workflows/navigation-speed.md).
+
+### Your own annotations (MA tags)
+
+Any interval you can place on a read (a motif hit, a called state, a region
+of interest) can be written into the BAM and FiberBrowser draws it as a layer.
+It uses the same tags FiberHMM writes its calls in and fibertools-rs reads and
+writes: the fiberseq
+[Molecular-annotation spec](https://github.com/fiberseq/Molecular-annotation-spec).
+
+**The tags.**
+
+- `MA:Z`: the read length, then one section per group, separated by `;`:
+  `4494;nuc.QQQ:3-186,189-151;msp.:1-246;promoter.:845-201`.
+- A section is `name`, a strand character, optional quality letters, `:`,
+  then `start-length` pairs separated by commas. **Start is 1-based** and
+  counts along the read (not the reference); **length** is in bases.
+- The strand character (`+`, `-` or `.`) is required; a section without one
+  is skipped. The name ends at the first `+`, `-` or `.`, so names can't
+  contain them. Sections with the same name (for example `ctcf+` and `ctcf-`)
+  form one layer.
+- `AQ:B:C` (optional): one byte per quality letter per interval, in section
+  order. A group without quality letters takes no bytes. The bytes feed the
+  **Quality** filters.
+- `AN:Z` (optional): one name per interval, comma-separated (`.` for none),
+  shown on each interval.
+- `Ma`/`Aq`/`An` are the same fields as fibertools-rs 0.13+ writes them. A read
+  with `MA` uses `MA` only.
+
+**Reverse-strand reads.** Offsets count either along the BAM sequence (SEQ
+frame) or from the molecule's own start (molecular frame, so a reverse read
+counts from its genomic right end). With `start0 = start - 1` (0-based), the
+SEQ-frame start of a molecular interval on a reverse read is
+`read_length - (start0 + length)`.
+
+- `Ma` is always molecular.
+- `MA` is molecular when the header says `coord=molecular` in an `@PG` or
+  `@CO` line (FiberHMM 3 writes `@CO fiberhmm:coord=molecular`), and SEQ frame
+  otherwise. In a header with no footprint-writer `@PG` and no declaration, a
+  `.` group is molecular. Write your groups in the frame of the file you add
+  them to.
+- The full rule is in [Coordinate frame of footprint tags](reference/footprint-tag-frame.md).
+
+**What you get.** A group named anything other than the built-in ones (`nuc`,
+`tf`, `msp`, and the others in the
+[layer table](reference.md#bam-tags-and-layers)) becomes a layer with its own
+toggle in **Layers**, in a colour from a twelve-colour palette (the same
+colour for the same layer in any load order). Like any layer it can be:
+
+- shown in the default metaprofile, which follows the layers you switch on;
+- a source in Plots, a peak source in **Rules → Peaks**, and a term in the
+  cluster, sort and filter rules and in **Labeling** colour rules;
+- declared in the header as `@CO<TAB>MA-TYPES:v1:nuc,msp,promoter`, so a rare
+  layer gets its toggle without being found by sampling reads.
+
+A custom group is not a footprint call: only non-empty `nuc`, `msp` or `tf`
+groups (or legacy `ns`/`nl`, `as`/`al` pairs) make a read "called". A read
+with only a custom group is uncalled and hidden by **Min footprints** unless
+you choose **All reads, including uncalled**.
+
+**Example.** This adds a `promoter` group to every read that covers
+chr19:47,516,400–47,516,600 in a copy of the bundled demo BAM
+(`browser/data/demo/napa_ddda.bam`, whose header declares molecular `MA`):
+
+```python
+import pysam
+
+SRC, OUT = "napa_ddda.bam", "napa_marked.bam"
+CHROM, START, END = "chr19", 47_516_400, 47_516_600   # 0-based, half-open
+NAME = "promoter"                                      # the layer name
+
+with pysam.AlignmentFile(SRC) as bam, pysam.AlignmentFile(OUT, "wb", template=bam) as out:
+    molecular = "coord=molecular" in str(bam.header)   # the file's MA frame
+    for read in bam.fetch(until_eof=True):
+        # Query positions of the read's bases inside the interval.
+        qpos = [q for q, r in read.get_aligned_pairs(matches_only=True) if START <= r < END]
+        if qpos and read.has_tag("MA"):
+            start, length = min(qpos), max(qpos) - min(qpos) + 1     # SEQ frame, 0-based
+            if molecular and read.is_reverse:                      # molecular frame counts from
+                start = read.query_length - (start + length)       # the molecule's own start
+            read.set_tag("MA", f"{read.get_tag('MA')};{NAME}.:{start + 1}-{length}")  # 1-based start
+        out.write(read)
+pysam.index(OUT)
+```
+
+Open `napa_marked.bam` and switch on **promoter** in **Layers**: the interval
+is drawn on every read that covers it, on both strands, and the metaprofile
+gets a promoter line.
+
+![A custom MA group, promoter, drawn on the demo reads and in the metaprofile](images/guide/x21_custom_ma_layer.png)
 
 ## Updating the screenshots
 
@@ -1351,5 +1583,13 @@ Two other scripts make the workflow pages' pictures:
 - `capture-library-screenshots.mjs` for [The Library](workflows/library.md);
 - `capture-daf-run-screenshots.mjs` for
   [A DAF-seq run](workflows/daf-seq-quick-run.md).
+- `capture-plots-screenshots.mjs` for [Plots](workflows/plots.md),
+  [Meta-locus](workflows/meta-locus.md) and the guide's metaprofile and
+  Min footprints pictures (x19, x20), the layer colours pictures (x22, x23), and
+  the custom MA layer (x21) with `--only custom-layer` on a server opened on the
+  example's `napa_marked.bam`.
+- `capture-genome-screenshots.mjs` for
+  [Recent and pinned genomes](#recent-and-pinned-genomes) (it starts its own
+  servers on synthetic data and a local dm6 FASTA).
 
 Their headers say what each needs.

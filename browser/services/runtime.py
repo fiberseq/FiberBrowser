@@ -96,6 +96,18 @@ def current_workspace_id() -> Optional[str]:
     return _workspace_id.get()
 
 
+def lab_owner_key() -> Optional[str]:
+    """Who a request's in-memory jobs belong to on a lab server: the signed-in member and the workspace
+    (member name and workspace id). None off the lab profile and for the server's own work, so
+    single-user registries stay process-wide."""
+    if not _lab_mode:
+        return None
+    user = _lab_user.get()
+    if user is None:
+        return None
+    return f"{getattr(user, 'name', user)}\x00{_workspace_id.get() or ''}"
+
+
 @contextlib.contextmanager
 def workspace_context(workspace_id: Optional[str]):
     token = _workspace_id.set(workspace_id)

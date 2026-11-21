@@ -3,10 +3,12 @@
  * options, output folder. Pure functions (tested in dafRun.test.ts); the
  * server validates again before anything runs (routers/pipeline.py).
  */
+import { largeDownloadQuestion } from './downloadSize';
 import type {
   BasecallSettings, DetectedSample, Enzyme, GenomeDownload, InputKind, PipelineOptions, PipelineStatus, ReadFileEntry, RunRequest,
   ScanResult,
 } from '../api/pipeline';
+import { pageOpenerId } from './pageOpener';
 
 export const WIZARD_STEPS = ['Reads', 'Reference', 'Run'] as const;
 export type WizardStep = 0 | 1 | 2;
@@ -77,7 +79,13 @@ export const DEFAULT_OPTIONS: PipelineOptions = {
   prob_threshold: null,
   use_m5c: 'auto',
   cpg_mask_policy: 'unmethylated-only',
+  min_mapq: 0,
 };
+
+/** The MAPQ a new run passes (a draft from before the setting existed: 0). */
+export function runMinMapq(options: Partial<PipelineOptions>): number {
+  return options.min_mapq ?? DEFAULT_OPTIONS.min_mapq;
+}
 
 export interface WizardSample {
   key: string;
@@ -110,9 +118,12 @@ export interface WizardState {
   autoOpen: boolean;
 }
 
-export function initialWizardState(status?: Pick<PipelineStatus, 'default_cores' | 'current_genome' | 'genomes'> | null,
-  autoOpen = true): WizardState {
+export function initialWizardState(status?: Pick<PipelineStatus, 'default_cores' | 'current_genome' | 'genomes'>
+  & Partial<Pick<PipelineStatus, 'loaded_references'>> | null, autoOpen = true): WizardState {
   const loadedGenome = status?.genomes?.find(g => g.id === status.current_genome);
+  // No catalog genome open, but one FASTA file open in the browser (the user's own): that file is the reference.
+  const loadedFiles = (status?.loaded_references ?? []).filter(r => r.kind === 'file' && r.path);
+  const openFile = !loadedGenome && loadedFiles.length === 1 ? loadedFiles[0].path : '';
   return {
     step: 0,
     inputKind: 'reads',
@@ -122,7 +133,7 @@ export function initialWizardState(status?: Pick<PipelineStatus, 'default_cores'
     scanWarnings: [],
     referenceMode: loadedGenome ? 'genome' : 'file',
     genomeId: loadedGenome?.id ?? '',
-    referencePath: '',
+    referencePath: openFile,
     regionsText: '',
     enzyme: '',
     outputRoot: '',
@@ -263,6 +274,8 @@ export function stepIssues(state: WizardState, step: WizardStep, status?: Pick<P
     }
     const t = state.options.prob_threshold;
     if (t !== null && (!Number.isInteger(t) || t < 0 || t > 255)) invalid('ML threshold: 0 to 255.');
+    const mapq = runMinMapq(state.options);
+    if (!Number.isInteger(mapq) || mapq < 0 || mapq > 255) invalid('Minimum MAPQ: a whole number from 0 to 255.');
     if (state.options.snp_mask && !/\.bed(\.gz)?$/i.test(state.options.snp_mask)) invalid('The SNP mask is a BED file.');
   }
   return issues;
@@ -283,18 +296,24 @@ export function buildRunRequest(state: WizardState): RunRequest {
     enzyme: (state.enzyme || 'dddb') as Enzyme,
     output_root: state.outputRoot.trim(),
     cores: state.cores,
-    options: state.enzyme === 'hia5'
-      ? { ...state.options, ...Object.fromEntries(DAF_ONLY_OPTIONS.map(k => [k, DEFAULT_OPTIONS[k]])) } as PipelineOptions
-      : state.options,
+    options: {
+      ...(state.enzyme === 'hia5'
+        ? { ...state.options, ...Object.fromEntries(DAF_ONLY_OPTIONS.map(k => [k, DEFAULT_OPTIONS[k]])) } as PipelineOptions
+        : state.options),
+      // Always sent, as shown: FiberHMM's own default never decides a new run's MAPQ.
+      min_mapq: runMinMapq(state.options),
+    },
     auto_open: state.autoOpen,
+    // The page that starts the run: only it opens the result by itself when the run finishes.
+    ...(state.autoOpen ? { opener: pageOpenerId() } : {}),
     input_kind: state.inputKind,
     ...(state.inputKind === 'pod5' ? { basecall: { ...state.basecall, model: state.basecall.model.trim() || 'sup' } } : {}),
   };
 }
 
-/** The options that differ from fiberhmm-call's defaults, in words. */
+/** The options that differ from fiberhmm-call's defaults, in words, after the MAPQ a new run always passes. */
 export function changedOptionLabels(options: PipelineOptions, enzyme: Enzyme | ''): string[] {
-  const labels: string[] = [];
+  const labels: string[] = [`MAPQ ${runMinMapq(options)}`];
   if (enzyme === 'hia5') {  // DAF-seq's options do not apply
     if (options.alignments === 'primary') labels.push('primary alignments only');
     else if (options.alignments === 'all') labels.push('all alignments');
@@ -333,17 +352,25 @@ export function hintText(hint?: string | null): string {
 }
 
 /** The wizard's line for a genome download: progress while it runs, the reason (each mirror's) when it failed. */
-export function genomeDownloadText(dl: GenomeDownload | null | undefined): { kind: 'progress' | 'error' | 'none'; text: string } {
+export function genomeDownloadText(dl: GenomeDownload | null | undefined): { kind: 'progress' | 'error' | 'confirm' | 'none'; text: string } {
   if (!dl) return { kind: 'none', text: '' };
   const name = dl.name || dl.genome_id;
+  if (dl.state === 'confirm' && dl.total && dl.threshold) {
+    // Over the download warning size: nothing downloaded until the user agrees.
+    return { kind: 'confirm', text: largeDownloadQuestion(name, { url: dl.url, bytes: dl.total, threshold: dl.threshold }) };
+  }
   if (dl.state === 'running') {
     const done = dl.bytes ?? 0;
     const total = dl.total ?? 0;
     let host = '';
     try { host = dl.url ? new URL(dl.url).host : ''; } catch { host = ''; }
     const from = host ? ` from ${host}` : '';
-    if (total > 0) {
-      const pct = Math.min(100, Math.floor((done * 100) / total));
+    if (dl.cancelling) return { kind: 'progress', text: `Cancelling the ${name} download…` };
+    if (dl.stage === 'decompressing') return { kind: 'progress', text: `Decompressing ${name}…` };
+    if (dl.stage === 'indexing') return { kind: 'progress', text: `Indexing ${name}…` };
+    // A total the bytes outgrew (a transparently gzipped body, a wrong Content-Length) is not shown as "of".
+    if (total > 0 && done <= total) {
+      const pct = Math.floor((done * 100) / total);
       return { kind: 'progress', text: `Downloading ${name}${from}: ${formatBytes(done)} of ${formatBytes(total)} (${pct}%)` };
     }
     return { kind: 'progress', text: done > 0 ? `Downloading ${name}${from}: ${formatBytes(done)}` : `Starting the ${name} download${from}…` };

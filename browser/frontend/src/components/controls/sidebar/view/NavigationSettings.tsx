@@ -2,6 +2,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { useBrowserStore } from '../../../../stores/browserStore';
 import { SidebarSubSection } from '../../SidebarSubSection';
 import { defineSettings, inSidebar, settingAnchor } from '../../../../utils/settingsCatalog';
+import { isMetaChrom } from '../../../../features/metaLocus/metaChrom';
 
 export const NAVIGATION_SETTINGS = defineSettings({
   autozoomDistance: {
@@ -22,6 +23,8 @@ export function NavigationSettings({ onAutozoom }: NavigationSettingsProps) {
   } = useBrowserStore(useShallow(s => ({
     autozoomDistance: s.autozoomDistance, setAutozoomDistance: s.setAutozoomDistance,
   })));
+  // A meta-locus's view is its one virtual locus: no window elsewhere to zoom to.
+  const onMeta = useBrowserStore(s => isMetaChrom(s.chrom));
 
   return (
     <SidebarSubSection
@@ -41,13 +44,13 @@ export function NavigationSettings({ onAutozoom }: NavigationSettingsProps) {
             title="Search distance from viewport center (bp)"
           />
           <span className="text-xs text-gray-500 dark:text-gray-400">bp</span>
-          <button
+          {!onMeta && <button
             onClick={onAutozoom}
             className="btn-tool bg-teal-500 text-white border border-teal-600 hover:bg-teal-600 text-xs"
             title="Find viewport window with most spanning reads"
           >
             Autozoom
-          </button>
+          </button>}
         </div>
       </div>
     </SidebarSubSection>

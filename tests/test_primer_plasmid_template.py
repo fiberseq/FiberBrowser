@@ -431,19 +431,34 @@ def test_self_check_counts_each_circular_site_once():
         assert counts == {"home": 1, "three_prime_threats": 0}, (primer, counts)
 
 
-def test_mixed_genome_and_plasmid_3c_is_refused_clearly(tmp_path):
-    """3.0.4: a 3C request with one locus on the genome and one on a plasmid map is refused (each would need
-    its own database), not run against the genome database for both."""
+def test_mixed_genome_and_plasmid_3c_uses_each_locus_database(tmp_path, monkeypatch):
+    """dm6 open, hg38 chosen as the plasmid background: a 3C request across a dm6 locus and a plasmid locus
+    checks the dm6 locus against dm6 and the plasmid locus against hg38."""
+    from services import primer_blast_runtime as rt
+    from services.primer_config import set_primer_paths
     from services.primer_orchestration import resolve_primer_runtime_config
     fasta = tmp_path / "dm6.fa"
     _write_fasta(fasta, {"chr2L": "ACGT" * 100})
-    (tmp_path / "dm6.nin").write_text("")
-    state = SimpleNamespace(fasta=None, fasta_path=str(fasta), primer_fasta=None, primer_blast_db=str(tmp_path / "dm6"),
+    for name in ("dm6", "hg38"):
+        (tmp_path / f"{name}.nin").write_text("")
+    state = SimpleNamespace(fasta=None, fasta_path=str(fasta), primer_fasta=None, primer_blast_db=None,
                             current_genome="dm6", plasmid_sequences={"pX": "ACGT" * 50}, plasmid_metadata={},
                             circular_chroms={})
+    set_primer_paths(state, blast_db=str(tmp_path / "hg38"), pin=True)
     runtime, error = resolve_primer_runtime_config(state, chroms=["chr2L", "pX"], require_blastn=False)
-    assert runtime is None
-    assert "pX" in error["message"] and "chr2L" in error["message"] and "separately" in error["message"]
+    assert error is None
+    assert runtime.blast_db_for("chr2L") == str(tmp_path / "dm6")
+    assert runtime.blast_db_for("pX") == str(tmp_path / "hg38")
+    seen = []
+
+    def fake(seqs, db, check_three_prime=True, expect_home_hit=True, **kw):
+        seen.append((db, expect_home_hit))
+        return set(seqs), {s: {"on_target": 1 if expect_home_hit else 0, "off_target": 0, "three_prime_threats": 0}
+                           for s in seqs}, 0, len(seqs), ""
+    monkeypatch.setattr(rt, "blast_and_score_cached", fake)
+    rt.score_primer_specificity([(["ACGTACGTAC"], "chr2L"), (["GTACGTACGT"], "pX")], runtime,
+                                templates={"pX": ("ACGT" * 50, True)}, check_template_self=False)
+    assert seen == [(str(tmp_path / "dm6"), True), (str(tmp_path / "hg38"), False)]
 
 
 def test_build_folder_advice_names_only_what_exists(tmp_path, monkeypatch):

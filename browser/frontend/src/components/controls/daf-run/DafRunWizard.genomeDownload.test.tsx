@@ -8,7 +8,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { genomeDownloadText, hintText } from '../../../utils/dafRun';
+import { genomeDownloadText, hintText, initialWizardState } from '../../../utils/dafRun';
 
 const api = vi.hoisted(() => {
   const state = { downloaded: false };
@@ -23,6 +23,7 @@ const api = vi.hoisted(() => {
     startGenomeDownload: vi.fn(),
     getGenomeDownload: vi.fn(),
     cancelGenomeDownload: vi.fn(async () => ({ genome_id: 'dm6', state: 'cancelled' })),
+    getGenomeDownloadSize: vi.fn(),
   };
 });
 vi.mock('../../../api/status', () => ({ getStatus: vi.fn(async () => ({ public_mode: false, has_gtf: false, gene_count: 0, track_count: 0 })) }));
@@ -31,6 +32,7 @@ vi.mock('../../../api/pipeline', () => ({
   startGenomeDownload: api.startGenomeDownload,
   getGenomeDownload: api.getGenomeDownload,
   cancelGenomeDownload: api.cancelGenomeDownload,
+  getGenomeDownloadSize: api.getGenomeDownloadSize,
   scanReads: vi.fn(async () => ({
     success: true,
     samples: [{ key: 'k', name: 'embryo', order: null, barcode: null, size: 123, files: [{ path: '/tmp/embryo.fastq', size: 123 }], kinds: ['fastq'] }],
@@ -64,6 +66,8 @@ describe('run wizard: genome download', () => {
     api.getGenomeDownload.mockReset();
     api.getGenomeDownload.mockResolvedValue({ genome_id: 'dm6', state: 'idle' });
     api.cancelGenomeDownload.mockClear();
+    api.getGenomeDownloadSize.mockReset();
+    api.getGenomeDownloadSize.mockResolvedValue({ genome_id: 'dm6', url: IGV, bytes: null, threshold: 4e9, over: false });
     box = document.createElement('div');
     document.body.appendChild(box);
     root = createRoot(box);
@@ -152,6 +156,66 @@ describe('run wizard: genome download', () => {
     expect(q('daf-run-genome-cancelled')!.textContent).toBe('Download cancelled.');
     expect(q('daf-run-download-genome')!.textContent).toBe('Download dm6');
   });
+
+  it('Cancel says Cancelling at once (decompressing or indexing may finish first)', async () => {
+    api.startGenomeDownload.mockResolvedValue({ genome_id: 'dm6', state: 'running', url: IGV, bytes: 140 * MB, total: 140 * MB, stage: 'indexing' });
+    api.getGenomeDownload.mockResolvedValueOnce({ genome_id: 'dm6', state: 'idle' })
+      .mockResolvedValue({ genome_id: 'dm6', state: 'running', bytes: 140 * MB, total: 140 * MB, stage: 'indexing', cancelling: true });
+    let release!: () => void;
+    api.cancelGenomeDownload.mockImplementationOnce(() => new Promise(resolve => { release = () => resolve({ genome_id: 'dm6', state: 'running' }); }));
+    await toReference();
+    await click('daf-run-download-genome');
+    expect(q('daf-run-genome-progress')!.textContent).toContain('Indexing');
+    await click('daf-run-genome-cancel');
+    expect(q('daf-run-genome-cancel')!.textContent).toBe('Cancelling…');
+    expect((q('daf-run-genome-cancel') as HTMLButtonElement).disabled).toBe(true);
+    expect(q('daf-run-genome-progress')!.textContent).toContain('Cancelling the');
+    await act(async () => { release(); });
+  });
+
+  it('the button shows the download size; over the warning size it asks first', async () => {
+    api.getGenomeDownloadSize.mockResolvedValue({ genome_id: 'dm6', url: IGV, bytes: 5_200_000_000, threshold: 4e9, over: true });
+    api.startGenomeDownload.mockResolvedValue({ genome_id: 'dm6', state: 'running', url: IGV, bytes: 0, total: 0 });
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);
+    try {
+      await toReference();
+      await wait(0);
+      expect(q('daf-run-download-genome')!.textContent).toBe('Download dm6 (5.2 GB)');
+      await click('daf-run-download-genome');
+      expect(confirm.mock.calls[0][0]).toContain('is 5.2 GB to download from s3.amazonaws.com, over the 4.0 GB download warning size');
+      expect(api.startGenomeDownload).not.toHaveBeenCalled();   // declined: nothing starts
+      await click('daf-run-download-genome');
+      expect(api.startGenomeDownload).toHaveBeenCalledWith('dm6', true);
+    } finally {
+      confirm.mockRestore();
+    }
+  });
+
+  it('a download the server holds for confirmation shows its size and Download goes ahead', async () => {
+    api.startGenomeDownload
+      .mockResolvedValueOnce({ genome_id: 'dm6', name: 'D. melanogaster (dm6)', state: 'confirm', url: IGV, total: 5e9, threshold: 4e9 })
+      .mockResolvedValueOnce({ genome_id: 'dm6', state: 'running', url: IGV, bytes: 0, total: 0,
+        warning: 'Large download: 5.0 GB (over the 4.0 GB download warning size) from ' + IGV });
+    await toReference();
+    await click('daf-run-download-genome');
+    expect(q('daf-run-genome-confirm')!.textContent).toContain('D. melanogaster (dm6) is 5.0 GB to download');
+    await click('daf-run-genome-confirm-download');
+    expect(api.startGenomeDownload).toHaveBeenLastCalledWith('dm6', true);
+    expect(q('daf-run-genome-warning')!.textContent).toContain('Large download: 5.0 GB');
+  });
+
+  it('closing the wizard while Download is being started never polls afterwards', async () => {
+    let resolveStart!: (v: unknown) => void;
+    api.startGenomeDownload.mockImplementation(() => new Promise(resolve => { resolveStart = resolve; }));
+    await toReference();
+    await click('daf-run-download-genome');
+    const polls = api.getGenomeDownload.mock.calls.length;
+    act(() => root.unmount());
+    root = createRoot(box);
+    await act(async () => { resolveStart({ genome_id: 'dm6', state: 'running', url: IGV, bytes: 0, total: 140 * MB }); });
+    await wait(1300);
+    expect(api.getGenomeDownload.mock.calls.length).toBe(polls);
+  });
 });
 
 describe('genome download text', () => {
@@ -160,6 +224,23 @@ describe('genome download text', () => {
       .toBe('Downloading hg38 from igv.org: 512 MB of 1.0 GB (50%)');
     expect(genomeDownloadText({ genome_id: 'hg38', state: 'running', bytes: 3 * MB, total: 0 }).text).toBe('Downloading hg38: 3.0 MB');
     expect(genomeDownloadText({ genome_id: 'hg38', state: 'done' }).kind).toBe('none');
+  });
+
+  it('a size the bytes outgrew is not shown as "of"; stages and cancelling read as such', () => {
+    expect(genomeDownloadText({ genome_id: 'hg38', state: 'running', bytes: 140 * MB, total: 42 * MB }).text).toBe('Downloading hg38: 140 MB');
+    expect(genomeDownloadText({ genome_id: 'hg38', state: 'running', bytes: 42 * MB, total: 42 * MB, stage: 'indexing' }).text).toBe('Indexing hg38…');
+    expect(genomeDownloadText({ genome_id: 'hg38', state: 'running', stage: 'decompressing' }).text).toBe('Decompressing hg38…');
+    expect(genomeDownloadText({ genome_id: 'hg38', state: 'running', bytes: MB, total: 42 * MB, cancelling: true }).text).toBe('Cancelling the hg38 download…');
+  });
+
+  it('one FASTA file open in the browser (no catalog genome) seeds the reference path', () => {
+    const base = { default_cores: 2, current_genome: null, genomes: [] };
+    const one = initialWizardState({ ...base, loaded_references: [{ kind: 'file', path: '/data/own.fa', label: 'own.fa' }] });
+    expect(one.referenceMode).toBe('file');
+    expect(one.referencePath).toBe('/data/own.fa');
+    const two = initialWizardState({ ...base, loaded_references: [
+      { kind: 'file', path: '/a.fa', label: 'a' }, { kind: 'file', path: '/b.fa', label: 'b' }] });
+    expect(two.referencePath).toBe('');
   });
 
   it('a failure without per-mirror errors keeps the server message', () => {

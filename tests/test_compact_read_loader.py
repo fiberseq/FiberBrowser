@@ -668,9 +668,12 @@ def test_bam_compact_loader_keeps_raw_read_extents_without_tags():
         bam_handle_getter=lambda _path: FakeBam([read]),
     )
 
+    # A raw read has no calls: it is marked call-less (services/nuc/scalars.drop_stale_nuc_groups) so zero-count
+    # rules and clustering exclude it and no nucleosome group can leak onto it.
     assert result == [{"id": "raw1", "intervals": [[0, 50, 0]],
         "library_id": str(Path("https://example.test/raw.bam").resolve()),
-        "reference_start": 90, "reference_end": 150, "alignment_orientation": "forward"}]
+        "reference_start": 90, "reference_end": 150, "alignment_orientation": "forward",
+        "nuc_live": True, "_fiberbrowser_nuc_without_calls": True}]
 
 
 def test_narrow_bam_view_keeps_named_annotations_before_the_first_footprint():
@@ -715,9 +718,12 @@ def test_bam_compact_loader_raw_only_is_quiet_by_default(capsys, monkeypatch):
         bam_handle_getter=lambda _path: FakeBam([read]),
     )
 
+    # A raw read has no calls: it is marked call-less (services/nuc/scalars.drop_stale_nuc_groups) so zero-count
+    # rules and clustering exclude it and no nucleosome group can leak onto it.
     assert result == [{"id": "raw1", "intervals": [[0, 50, 0]],
         "library_id": str(Path("https://example.test/raw.bam").resolve()),
-        "reference_start": 90, "reference_end": 150, "alignment_orientation": "forward"}]
+        "reference_start": 90, "reference_end": 150, "alignment_orientation": "forward",
+        "nuc_live": True, "_fiberbrowser_nuc_without_calls": True}]
     assert capsys.readouterr().out == ""
 
 

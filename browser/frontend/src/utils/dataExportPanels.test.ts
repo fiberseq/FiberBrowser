@@ -237,3 +237,61 @@ describe('Export data with an hg38 and a dm6 panel (Each panel navigates)', () =
     expect(urls.map(u => u.replace(/^.*\/api/, '/api'))).toEqual(['/api/reads/export_bam', '/api/reads/export_bam?panel_genome=dm6']);
   });
 });
+
+describe('graph primary G8: lifted reads in exports', () => {
+  const s = () => useBrowserStore.getState();
+  beforeEach(() => {
+    useBrowserStore.setState({
+      datasets: [{ id: 'napa', label: 'napa_ddda', data_type: 'bam', paths: ['/d/napa.bam'] },
+        { id: 'lift', label: 'Lifted', data_type: 'bam_livelift', paths: ['/d/src.bam'] }],
+      panels: [panel('napa', { viewportOverride: { ...HUMAN_AT }, navOwn: true }), panel('lift', { viewportOverride: { ...HUMAN_AT }, navOwn: true })],
+      activeReadIds: { napa: ['h1'], lift: ['lift-cohort:v1 ["g|q1","q1","r",0,"primary"]'] },
+    } as never);
+  });
+
+  it('BAM subset: a lifted dataset\'s reads come from its source windows; the export says so', async () => {
+    const urls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      urls.push(String(url));
+      return new Response(new Blob(['BAM']), { status: 200, headers: { 'x-fiberbrowser-missing': '0',
+        ...(String(url).includes('/api/lift/') ? { 'x-fiberbrowser-source-contigs': 'chr19_MATERNAL+chr19_PATERNAL' } : {}) } });
+    }));
+    const entry = getDataExport('read-bam')!;
+    const avail = entryAvailability(entry, { state: s(), readScope: 'shown' } as never);
+    expect(avail.ok).toBe(true);
+    const msg = await entry.run({ state: s(), readScope: 'shown' } as never);
+    expect(urls.map(u => u.replace(/^.*\/api/, '/api')).sort()).toEqual(['/api/lift/export_bam', '/api/reads/export_bam']);
+    expect(String(msg)).toContain('on its source assembly (chr19_MATERNAL, chr19_PATERNAL)');
+  });
+
+  it('graph features: the read table is offered for lifted reads alone and says their bounds are on the source assembly', () => {
+    const entry = getDataExport('read-table')!;
+    expect(entryAvailability(entry, { state: s(), readScope: 'shown' } as never)).toMatchObject({ ok: true });
+    useBrowserStore.setState({ activeReadIds: { lift: ['lift-cohort:v1 ["g|q1","q1","r",0,"primary"]'] } } as never);
+    const avail = entryAvailability(entry, { state: s(), readScope: 'shown' } as never);
+    expect(avail.ok).toBe(true);
+    expect(String((avail as { detail?: string }).detail)).toContain('source assembly');
+  });
+
+  it('graph features: the read table asks Read Stats for lifted datasets too, with their labels by cohort identity', async () => {
+    const aid = 'lift-cohort:v1 ["g|q1","q1","r",0,"primary"]';
+    const bodies: any[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? '{}'));
+      bodies.push(body);
+      return json({ per_read: (body.read_ids_by_dataset.lift ?? []).map((id: string) => ({ read_id: id, dataset_id: 'lift',
+        ref_start: 10, ref_end: 20, ref_contig: 'chrS_MATERNAL' })), aggregate: {}, is_bam: true });
+    }));
+    useBrowserStore.setState({ activeReadIds: { lift: [aid] },
+      clusterAssignments: { lift: { 'lift-record:v1 ["g|q1","q1","r"]': 2 } } } as never);
+    const table = await buildReadTable(s(), readScopeGroups(s(), 'shown'));
+    expect(bodies.length).toBe(1);
+    expect(Object.keys(bodies[0].read_ids_by_dataset).sort()).toEqual(['lift', 'napa'].filter(k => k in bodies[0].read_ids_by_dataset).sort());
+    expect(bodies[0].read_ids_by_dataset.lift).toEqual([aid]);
+    const line = table.tsv.split('\n').find(l => l.includes('chrS_MATERNAL'))!;
+    const cols = table.tsv.split('\n')[0].split('\t');
+    const vals = line.split('\t');
+    expect(vals[cols.indexOf('ref_contig')]).toBe('chrS_MATERNAL');
+    expect(vals[cols.indexOf('cluster')]).toBe('2');
+  });
+});

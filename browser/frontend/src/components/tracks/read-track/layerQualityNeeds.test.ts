@@ -26,6 +26,16 @@ describe('layer qualities the read canvas draws from', () => {
     expect(overlayShadesByQuality('tf', { ...flatTf, tfOverlay: { ...flatTf.tfOverlay, minTq: 50 } })).toBe(true);
   });
 
+  it('nucleosome size classes and array segments always ship their bytes', () => {
+    const flatTf = {
+      ...DEFAULT_COLORMAP,
+      tfOverlay: { ...DEFAULT_COLORMAP.tfOverlay, minOpacity: 0.9, maxOpacity: 0.9 },
+      layerOpacities: { ...DEFAULT_COLORMAP.layerOpacities, tf: 0.9, nucsz: 0.9, nucseg: 0.9 },
+    };
+    expect(layerQualitiesNeeded(['nuc', 'nucsz'], flatTf)).toBe(true);
+    expect(layerQualitiesNeeded(['nucseg'], flatTf)).toBe(true);
+  });
+
   it('FIRE calls are shaded by aq', () => {
     expect(overlayShadesByQuality('msp', DEFAULT_COLORMAP)).toBe(true);
   });

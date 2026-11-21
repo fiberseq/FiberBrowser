@@ -65,6 +65,31 @@ describe('keyboard shortcuts', () => {
     unmount();
   });
 
+  it('a number key over two panels is one undo step, and one Undo clears both (stabilize 3, item 2)', () => {
+    const base = { id: 'p1', contentType: 'dataset', datasetId: 'ds', subTracks: [] };
+    useBrowserStore.setState({
+      datasets: [{ id: 'ds' }],
+      panels: [base, { ...base, id: 'p2', stateKey: 'p2' }],
+      selectedDatasets: new Set<string>(),
+      clusterAssignments: { ds: { a: 0 }, p2: { a: 1, b: 0 } },
+      clusterFocus: {},
+      _historyStack: [], _historyPointer: -1, _lastRestoreTime: 0,
+    } as never);
+    useBrowserStore.getState().pushSnapshot('Cluster kmeans k=2', { kind: 'clustering' });
+    const { unmount } = renderShortcuts();
+    try {
+      press('1');
+      const s = useBrowserStore.getState();
+      expect(s._historyStack.map(x => x.label)).toEqual(['Cluster kmeans k=2', 'Set cluster focus']);
+      s.undo();
+      const after = useBrowserStore.getState().clusterFocus;
+      expect(after.ds ?? null).toBeNull();
+      expect(after.p2 ?? null).toBeNull();
+    } finally {
+      unmount();
+    }
+  });
+
   // --- Escape and dialogs (2026-09-30 UI audit H1, Codex "Export dialog keyboard input") ---
 
   /** A clustering built on 2 selected peaks, with cluster 1 focused. */

@@ -17,8 +17,13 @@ const pick = (s: FootprintSizeSettings, mode: 'comparative' | 'enrichment' | 'vp
   ({ ...s, colormaps: { ...s.colormaps, [mode]: { ...s.colormaps[mode], ...c } } });
 
 describe('footprint size colormaps', () => {
-  it('offers magma, viridis, inferno, plasma, cividis, greys and a diverging RdBu, with the matplotlib ends', () => {
-    expect(FOOTPRINT_SIZE_COLORMAPS).toEqual(['magma', 'viridis', 'inferno', 'plasma', 'cividis', 'greys', 'rdbu_r']);
+  it('offers magma, viridis, inferno, plasma, cividis, greys, a diverging RdBu and the contact maps\' fall, hot, red and blues', () => {
+    expect(FOOTPRINT_SIZE_COLORMAPS).toEqual(['magma', 'viridis', 'inferno', 'plasma', 'cividis', 'greys', 'rdbu_r', 'fall', 'hot', 'red', 'blues']);
+    // The co-accessibility matrix's own maps, as the server drew them (services/contact_rendering.apply_colormap).
+    expect(colormapRgb('fall', 0)).toEqual([255, 255, 255]);
+    expect(colormapRgb('fall', 1)).toEqual([139, 0, 0]);
+    expect(colormapRgb('hot', 0)).toEqual([0, 0, 0]);
+    expect(colormapRgb('blues', 1)).toEqual([0, 0, 255]);
     expect(colormapRgb('magma', 0)).toEqual([0, 0, 4]);
     expect(colormapRgb('magma', 1)).toEqual([252, 253, 191]);
     expect(colormapRgb('inferno', 1)).toEqual([252, 255, 164]);
@@ -58,7 +63,7 @@ describe('footprint size colormaps', () => {
     const seq = colorScaleFor([[[0, 1, 2]]], counts);
     expect(seq.colormap).toBe('viridis');
     expect(scaleRgb(seq.hi, seq)).toEqual(viridisRgb(1));
-    expect(FOOTPRINT_SIZE_COLORMAP_LABELS.viridis).toBe('Viridis (classic V-plot)');
+    expect(FOOTPRINT_SIZE_COLORMAP_LABELS.viridis).toBe('Viridis (V-plot)');
     // Comparative: the log2 ratio plot, RdBu_r with 0 at its white middle, blue below, red above.
     const ratio = ratioScale([[1, -1]], enrich);
     expect(ratio.colormap).toBe('rdbu_r');

@@ -6,7 +6,7 @@ name: Python package
 # workflow; set up once as described in docs/install.md, "Maintainers") and
 # attaches both files to the GitHub release.
 #
-# FiberBrowser requires fiberhmm[consensus]>=3.0.3,<4: publish FiberHMM 3.0 to
+# FiberBrowser requires fiberhmm[consensus]>=3.2.0,<4: publish FiberHMM 3.2.0 to
 # PyPI first. Until then the smoke test installs FiberHMM from the
 # FIBERHMM_REQUIREMENT repository variable, e.g.
 #   fiberhmm[consensus] @ git+https://github.com/fiberseq/FiberHMM@v3.0.0
@@ -31,13 +31,19 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      FIBERHMM_REQUIREMENT: ${{ vars.FIBERHMM_REQUIREMENT || 'fiberhmm[consensus]>=3.0.3,<4' }}
+      FIBERHMM_REQUIREMENT: ${{ vars.FIBERHMM_REQUIREMENT || 'fiberhmm[consensus]>=3.2.0,<4' }}
       FIBERHMM_NO_UPDATE_CHECK: "1"
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # the full history: check_frontend_dist.py compares the dist's last commit with the source's
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Check the tracked frontend build is current
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: python packaging/check_frontend_dist.py
+
       - name: Build the sdist and wheel
         run: |
           python -m pip install --upgrade pip build twine

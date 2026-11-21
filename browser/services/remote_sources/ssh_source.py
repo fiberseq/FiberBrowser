@@ -147,12 +147,20 @@ def make_ssh_ref(user: Optional[str], host: str, path: str) -> str:
     return f"ssh://{target}{path}"
 
 
+CONTROL_DIR_MAX = 70  # longest control folder: ssh appends the socket name (cm-<12 hex>, plus its own suffix)
+
+
 def _control_dir() -> str:
     override = os.environ.get(SSH_DIR_ENV)
     base = override or os.path.join(os.path.expanduser("~"), ".fiberhmm", "ssh")
-    # Unix socket paths are short (104 bytes on macOS); ssh adds ~17 chars.
-    if len(base) > 70:
-        base = os.path.join(tempfile.gettempdir(), f"fb-ssh-{os.getuid() if hasattr(os, 'getuid') else 'u'}")
+    # Unix socket paths are short (104 bytes on macOS); ssh adds ~17 chars. The fallbacks are checked too: a long
+    # $TMPDIR (macOS per-user folders, scratch dirs) would fail the same way, so /tmp is the last resort.
+    if len(base) > CONTROL_DIR_MAX:
+        leaf = f"fb-ssh-{os.getuid() if hasattr(os, 'getuid') else 'u'}"
+        fallbacks = [os.path.join(tempfile.gettempdir(), leaf)]
+        if os.name != "nt":
+            fallbacks.append(os.path.join("/tmp", leaf))
+        base = next((p for p in fallbacks if len(p) <= CONTROL_DIR_MAX), fallbacks[-1])
     os.makedirs(base, mode=0o700, exist_ok=True)
     try:
         os.chmod(base, 0o700)

@@ -131,6 +131,21 @@ test.describe('New run: raw Nanopore (POD5) to the Library', () => {
     expect(job.outputs.settings.basecaller.modbase_models).toEqual(['dna_r10.4.1_e8.2_400bps_sup@v5.2.0_6mA@v1']);
     await dialog.getByRole('button', { name: 'Close' }).click();
 
+    // The called BAM opens with FiberHMM's calls on its reads (coverage plan #11): not just Library metadata.
+    expect(job.outputs.called_bam).toBeTruthy();
+    const added = await (await page.request.post(`${server.baseUrl}/api/datasets/add`,
+      { data: { path: job.outputs.called_bam, label: 'Called POD5 run' } })).json();
+    expect(added.success).toBe(true);
+    const calledId = added.dataset.id as string;
+    expect(calledId).toBeTruthy();
+    expect(Object.keys(added.dataset?.available_layers ?? {})).toEqual(expect.arrayContaining(['nuc', 'msp']));
+    const compact = await (await page.request.get(`${server.baseUrl}/api/reads/compact?dataset_id=${encodeURIComponent(calledId)}`
+      + '&chrom=chrA&start=0&end=20000&include_layers=true&max_reads=100')).json();
+    const reads = compact.reads ?? [];
+    expect(reads.length).toBeGreaterThan(0);
+    const called = reads.filter((r: any) => r.layers?.nuc?.intervals?.length || r.layers?.msp?.intervals?.length);
+    expect(called.length).toBeGreaterThan(0);
+
     // The Library: the run's called BAM, with its Basecaller line.
     await page.evaluate(() => window.dispatchEvent(new CustomEvent('fiberbrowser:open-sidebar-section', {
       detail: { sectionId: 'file', subsectionId: 'file.library' },

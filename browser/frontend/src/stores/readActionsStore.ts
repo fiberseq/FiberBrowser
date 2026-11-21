@@ -20,6 +20,9 @@ export const READ_ACTIONS_HINT_KEY = 'fiberbrowser_read_actions_hint_v1';
 
 export interface ReadHighlight {
   ids: Set<string>;
+  scopedRows?: Record<string, Set<string>>;
+  /** Weaker SV evidence uses a pale dashed outline. */
+  uncertainIds?: Set<string>;
   /** Until when it pulses (epoch ms); null: a steady outline until cleared. */
   pulseUntil: number | null;
   /** Bring this read into view in the read stack (once per panel). */
@@ -47,7 +50,8 @@ interface ReadActionsState {
   /** Pulse these reads (a read gone to by name) and keep them in the sample. */
   pulseReads: (ids: string[], options?: { scrollTo?: string | null }) => void;
   /** A steady outline on these reads in every panel ("Highlight read in all panels"). */
-  highlightReads: (ids: string[]) => void;
+  /** `scopedRows`: outline exactly these display rows per dataset (analysis ids) instead of every row named `ids`. */
+  highlightReads: (ids: string[], options?: { uncertainIds?: string[]; scopedRows?: Record<string, Set<string>> }) => void;
   clearHighlight: () => void;
   markScrolled: (stateKey: string) => void;
   excludeReads: (stateKey: string, ids: Iterable<string>) => void;
@@ -84,8 +88,9 @@ export const useReadActionsStore = create<ReadActionsState>((set) => ({
     },
     pinnedReadIds: pinsFor(ids),
   }),
-  highlightReads: (ids) => set(state => ({
-    highlight: { ids: new Set(ids), pulseUntil: null, scrollTo: null, scrolled: new Set(), nonce: ++nonce },
+  highlightReads: (ids, options) => set(state => ({
+    highlight: { ids: new Set(ids), ...(options?.scopedRows ? { scopedRows: options.scopedRows } : {}),
+      uncertainIds: new Set(options?.uncertainIds ?? []), pulseUntil: null, scrollTo: null, scrolled: new Set(), nonce: ++nonce },
     pinnedReadIds: pinsFor([...ids, ...state.pinnedReadIds]),
   })),
   clearHighlight: () => set({ highlight: null, pinnedReadIds: [] }),

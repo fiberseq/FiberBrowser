@@ -1,0 +1,135 @@
+{
+ "observations": [
+  {
+   "calibration": {
+    "absolute": false,
+    "digest": "8e0da0714ed6c684",
+    "lambdaFloor": null,
+    "method": "self",
+    "nrlPooled": 193.0,
+    "regions": 1,
+    "scanId": null,
+    "scope": "data",
+    "settingsHash": "13fca8d0f55f2d33",
+    "source": "computed",
+    "supported": null,
+    "version": "2.4"
+   },
+   "computed": 17,
+   "datasetId": "ds0",
+   "kind": "linear",
+   "label": "Synthetic",
+   "lowInformation": 0,
+   "molecules": 17,
+   "notComputed": 0,
+   "obsId": "o1",
+   "records": 17,
+   "segments": {
+    "bp": 62483,
+    "disordered": 0.0265,
+    "low_information": 0.0,
+    "missingNucleosomes": 0,
+    "regular": 0.9676,
+    "undersizedRuns": 0,
+    "undetermined": 0.0059
+   },
+   "sizes": {
+    "cantTellFraction": 0.006,
+    "coarse": {
+     "cant_tell": 0,
+     "edge_truncated": 2,
+     "long": 0,
+     "mono": 329,
+     "multi2": 0,
+     "multi3": 0,
+     "short": 0
+    },
+    "footprints": 331,
+    "tf": 0,
+    "z": {
+     "counts": [
+      0,
+      0,
+      0
+     ],
+     "edges": [
+      -6.0,
+      -5.5,
+      -5.0
+     ],
+     "n": 329
+    }
+   },
+   "sources": [
+    "live"
+   ],
+   "spacing": {
+    "gapCv": [
+     0.14,
+     0.148,
+     0.181
+    ],
+    "nrl": {
+     "counts": [
+      0,
+      0,
+      0
+     ],
+     "edges": [
+      150,
+      154,
+      158
+     ],
+     "n": 17,
+     "quantiles": [
+      190.8,
+      192.0,
+      192.0
+     ]
+    },
+    "regularity": [
+     0.283,
+     0.31,
+     0.459
+    ],
+    "tooShortFraction": 0.0
+   },
+   "undecodable": 0,
+   "windowMetrics": {
+    "class_mix": {
+     "cant_tell": 0,
+     "edge_truncated": 0,
+     "long": 0,
+     "mono": 181,
+     "multi2": 0,
+     "multi3+": 0,
+     "short": 0,
+     "tf": 0
+    },
+    "disordered_fraction": 0.015479649840836744,
+    "excluded_low_information": 0,
+    "insufficient": false,
+    "low_information_fraction": 0.0,
+    "missing_per_molecule": 0.0,
+    "n_molecules": 6,
+    "nrl_quantiles": [
+     190.25,
+     190.5,
+     190.5
+    ],
+    "regular_fraction": 0.9615358088725293,
+    "too_short_fraction": 0.0,
+    "undersized_fraction": 0.0,
+    "undetermined_fraction": 0.010222222222222221
+   },
+   "windows": [
+    {
+     "chrom": "chrS",
+     "end": 26000,
+     "start": 20000
+    }
+   ],
+   "withoutCalls": 0
+  }
+ ]
+}

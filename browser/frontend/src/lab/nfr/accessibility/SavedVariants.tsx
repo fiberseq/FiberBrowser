@@ -4,6 +4,8 @@
  * in their colours: the motif map, footprint classes, V-plots, phasing, prevalence by group, and the advanced plots
  * (widths, boundary nucleosomes, sequence).
  */
+import { openPlots } from '../../../features/plots/workspace';
+import { openSuppliedPlot } from '../../../features/plots/supplied';
 import { useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import {
@@ -88,6 +90,16 @@ export function SavedNfrInspect({ entry, stateKeyMap, isFullView }: { entry: Sav
       {view === 'classes' && <NfrClasses entry={entry} names={names} />}
       {view === 'vplots' && <VPlotsView entry={entry} names={names} width={w} />}
       {view === 'phasing' && <PhasingView entry={entry} names={names} width={w} />}
+      {(view === 'phasing') && (
+        <div className="flex justify-end">
+          <button type="button" data-testid="nfr-phasing-open-in-plots"
+            className="rounded border border-gray-200 px-1.5 py-0.5 text-[11px] text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300"
+            title="Open in Plots: a Nuc metaprofile over this NFR's run window, per read group (split the variants into panels to compare them), with Compare and the Gallery. Phasing here keeps its own maths: occupancy per variant member set, from the NFR run."
+            onClick={() => openPlots({ type: 'metaprofile', source: 'nuc', where: 'view', groupBy: 'dataset', pinned: { chrom: entry.region.chrom, start: entry.region.start, end: entry.region.end, genome: null } })}>
+            Open in Plots
+          </button>
+        </div>
+      )}
       {view === 'prevalence' && <PrevalenceView entry={entry} names={names} width={w} stateKeyMap={stateKeyMap} />}
       {view === 'advanced' && <AdvancedView entry={entry} names={names} width={w} />}
       {view === 'export' && <ExportView entry={entry} />}
@@ -227,6 +239,22 @@ function AdvancedView({ entry, names, width }: { entry: SavedNfr; names: string[
           <div>
             <h4 className="mb-0.5 text-[11px] font-semibold text-gray-700 dark:text-gray-300">Opening width</h4>
             <WidthPlot shape={shape.data} names={names} width={width} fileStem={stem(entry)} />
+            <div className="flex justify-end">
+              <button type="button" data-testid="nfr-widths-open-in-plots"
+                className="rounded border border-gray-200 px-1.5 py-0.5 text-[11px] text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300"
+                title="Open in Plots: the opening-width histograms per variant (the run's counts exactly; Compare between variants, export, the Gallery)."
+                onClick={() => {
+                  const sz = shape.data!.sizes;
+                  const vs = [...names, 'other'].filter(n => sz.variants[n]?.hist);
+                  openSuppliedPlot({
+                    type: 'size-histogram', name: `${entry.nfrId} opening widths`, datasets: [], groupBy: 'read-groups',
+                    spec: { origin: 'NFR › Opening widths', x0: sz.lo, dx: sz.step, xLabel: `opening width (${sz.step} bp bins)`, yLabel: 'openings',
+                      measures: `each callable molecule's opening width (end − start) at this NFR, by its most likely variant ('other' when none); ${sz.step} bp bins; openings per bin` },
+                    series: vs.map(n => ({ id: n, title: n, ...(n === 'other' ? {} : { color: variantColor(n) }), values: sz.variants[n].hist.map(Number) })),
+                    locus: { chrom: entry.region.chrom, start: entry.region.start, end: entry.region.end, genome: null },
+                  });
+                }}>Open in Plots</button>
+            </div>
           </div>
           {shape.data.boundary ? (
             <div>
@@ -335,6 +363,25 @@ function VPlotsView({ entry, names, width }: { entry: SavedNfr; names: string[];
           <p className="text-[10px] text-ink-secondary" title="Rows: opening width (dashed at the Timer 175 / 300 / 500-bp depths); columns: position (one grid for every panel). The variants' panels share one colour scale, so their densities compare; 'all' has its own.">
             {bp(data.size[0])}–{bp(data.size[1])} bp · double-click or ⤢ to enlarge, ← / → to step through
           </p>
+          <div className="flex justify-end">
+            <button type="button" data-testid="nfr-vplots-open-in-plots"
+              className="rounded border border-gray-200 px-1.5 py-0.5 text-[11px] text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300"
+              title="Open in Plots: these V-plots as one card (the run's counts exactly; Plots colours raw counts, this panel log1p-scales them)."
+              onClick={() => {
+                const shown = names.filter(n => data.variants[n]);
+                const rows = (m: number[][]) => m.map((r, i) => ({ label: String(data.size[0] + i * data.size_step), values: r.map(v => (Number.isFinite(v) ? v : null)) }));
+                openSuppliedPlot({
+                  type: 'vplot', name: `${entry.nfrId} V-plots (${kind})`, datasets: [],
+                  spec: { origin: 'NFR › V-plots', x0: data.window[0], dx: data.step, xLabel: 'position (bp)', yLabel: 'opening width (bp)',
+                    measures: `NFR openings of the run's callable molecules (not footprints): ${kind === 'centre' ? '1 at each opening\'s centre' : 'the share of each position bin an opening covers'}, by opening width; ${data.step} bp position × ${data.size_step} bp width bins; raw counts ('all' every opening, each variant its own)`,
+                    matrix: { kind: 'vplot', x0: data.window[0], dx: data.step, valueLabel: 'openings' } },
+                  series: [],
+                  matrices: [{ id: 'all', title: `All openings (${data.count_all})`, rows: rows(data.all[kind]) },
+                    ...shown.map(n => ({ id: n, title: `${n} (${data.variants[n].count})`, color: variantColor(n), rows: rows(data.variants[n][kind]) }))],
+                  locus: { chrom: entry.region.chrom, start: entry.region.start, end: entry.region.end, genome: null },
+                });
+              }}>Open in Plots</button>
+          </div>
           {big != null && charts[big] && (
             <VPlotViewer charts={charts} index={big} onIndex={setBig} onClose={() => setBig(null)} kind={kind} positionOrigin={data.window[0]}
               filename={c => `nfr-vplot-${kind}-${c}-${stem(entry)}`} notes={notes} />

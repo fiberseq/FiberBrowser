@@ -137,6 +137,8 @@ export async function getCoaccMatrixData(
     layer?: string | null;
     panelGenome?: string | null;
     sampleSeed?: string;
+    /** Plots' Random N reads per dataset (stable keys, this seed). */
+    readSample?: { n: number; seed: number } | null;
   },
 ): Promise<CoaccMatrixData> {
   const params = new URLSearchParams();
@@ -152,6 +154,7 @@ export async function getCoaccMatrixData(
   if (options?.layer) params.set('layer', options.layer);
   if (options?.panelGenome) params.set('panel_genome', options.panelGenome);
   if (options?.sampleSeed) params.set('sample_seed', options.sampleSeed);
+  if (options?.readSample) { params.set('sample_n', String(options.readSample.n)); params.set('sample_seed_int', String(options.readSample.seed)); }
   return fetchJson(`${API_BASE}/coacc/matrix/data?${params}`);
 }
 

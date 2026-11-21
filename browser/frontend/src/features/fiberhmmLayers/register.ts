@@ -6,6 +6,7 @@
 import { extendTrackMenu } from '../../components/tracks/trackRegistry';
 import { useBrowserStore } from '../../stores/browserStore';
 import { datasetVariantLayers } from './model';
+import { isMetaChrom } from '../metaLocus/metaChrom';
 import { layerSettingsFor, registerFiberhmmLayerState, setLayerSettings } from './state';
 
 let done = false;
@@ -16,8 +17,13 @@ export function registerFiberhmmLayers(): void {
   registerFiberhmmLayerState();
   extendTrackMenu('reads', ctx => {
     const id = ctx.datasetId;
-    if (!id) return [];
+    // Dev line: a graph-mode host or a linked source-assembly panel draws no read-row overlay (bigBed variant
+    // layers are on the dataset's own assembly, read rows only): no items there.
+    if (!id || ctx.panel.viewMode === 'graph' || ctx.panel.liftLink) return [];
     const state = useBrowserStore.getState();
+    // The meta-locus's virtual contig (features/metaLocus): its reads are pooled BAM reads on a virtual axis; the
+    // bigBed var / sv layers are on a real assembly, so they are not offered there.
+    if (isMetaChrom(ctx.panel.viewportOverride?.chrom ?? state.chrom)) return [];
     const has = datasetVariantLayers(state.datasets.find(d => d.id === id));
     const s = layerSettingsFor(state, id);
     const items = [];

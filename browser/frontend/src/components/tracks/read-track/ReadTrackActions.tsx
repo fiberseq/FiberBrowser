@@ -8,7 +8,7 @@ import { useReadActionsStore } from '../../../stores/readActionsStore';
 import { READ_ACTIONS_HINT } from '../../../utils/shortcuts';
 import { copyText } from '../../../utils/clipboard';
 import { formatReadNameList } from '../../../utils/readNames';
-import { beginReadPanelIntent, locateReads, readWindow } from '../../../utils/readLocate';
+import { beginReadPanelIntent, locateReads, navigatePanelTo, readWindow } from '../../../utils/readLocate';
 import { findChromInfo } from '../../../utils/chromAliases';
 import { formatCoordinates } from '../../../utils/coordinates';
 import { X } from '../../ui/Icons';
@@ -22,6 +22,7 @@ import { clusterAtCursor, clusterForEvent, clusterSupportLabel, readSvEventAt, s
 import { clearSvSplit, splitBySv, splitIntoPanelsBySv } from '../../../utils/svAlleleSplit';
 import { copyInsertedSequence } from '../../../utils/svInsertedSequence';
 import type { ReadContextTarget } from './useReadTrackMouse';
+import { readBodyExtent as readExtent } from './readExtent';
 
 const IS_MAC = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform);
 const HINT_MS = 12_000;
@@ -56,18 +57,6 @@ export interface ReadTrackActionsProps {
   svSummary?: SvSummary | null;
   svEnabled?: boolean;
   svMinLen?: number;
-}
-
-/** A read's drawn extent (view-relative bp) from its intervals. */
-function readExtent(read: CompactRead): { lo: number; hi: number } | null {
-  if (read.intervals.length === 0) return null;
-  let lo = Infinity;
-  let hi = -Infinity;
-  for (const iv of read.intervals) {
-    lo = Math.min(lo, iv[0]);
-    hi = Math.max(hi, iv[1]);
-  }
-  return { lo, hi };
 }
 
 /**
@@ -226,10 +215,21 @@ export function ReadTrackActions(props: ReadTrackActionsProps) {
         if (!intent.isCurrent()) break;
         const hit = res?.found[0];
         const ext = readExtent(read);
-        const span = hit && hit.chrom === chrom ? hit : ext ? { start: origin + ext.lo, end: origin + ext.hi } : null;
+        // A hit on another chromosome (a split read's other alignment, a lifted read's primary) moves the view there.
+        if (hit && hit.chrom !== chrom) {
+          actions.pulseReads([read.id]);
+          const win = readWindow(hit, store.spanningOnly);
+          const panel = store.panels.find(p => p.contentType === 'dataset' && (p.stateKey ?? p.datasetId) === stateKey);
+          navigatePanelTo(panel, hit.chrom, Math.max(0, Math.round(win.start)), Math.max(Math.round(win.start) + 1, Math.round(win.end)));
+          break;
+        }
+        const span = hit ? hit : ext ? { start: origin + ext.lo, end: origin + ext.hi } : null;
         if (!span) break;
         actions.pulseReads([read.id]);
         const win = readWindow(span, store.spanningOnly);
+        // A jump: Back (Alt+←) returns to where this panel's view was (a panel with its own view moves like a pan).
+        const own = onViewportChange ? store.panels.find(p => p.contentType === 'dataset' && (p.stateKey ?? p.datasetId) === stateKey && p.viewportOverride) : undefined;
+        store.recordJump(own?.id ?? null, { likePan: Boolean(own), to: { chrom, start: win.start, end: win.end } });
         navigate(win.start, win.end);
         break;
       }
@@ -313,11 +313,18 @@ export function ReadTrackActions(props: ReadTrackActionsProps) {
         }
         break;
       }
-      case 'sv-highlight-supporting': {
+      case 'sv-highlight-supporting':
+      case 'sv-highlight-confirmed':
+      case 'sv-highlight-putative':
+      case 'sv-highlight-conflicting':
+      case 'sv-highlight-ambiguous': {
         const cluster = svTarget?.thisCluster;
         if (!cluster) break;
-        const ids = supportingReadIds(reads, cluster, chrom);
-        if (ids.length) actions.highlightReads(ids);
+        const level = action === 'sv-highlight-conflicting' ? 'conflicting' : action === 'sv-highlight-putative' ? 'putative' : action === 'sv-highlight-ambiguous' ? 'ambiguous' : action === 'sv-highlight-confirmed' ? 'confirmed' : 'carriers';
+        const ids = supportingReadIds(reads, cluster, chrom, level, svSummary?.evidence_targets ?? svSummary?.clusters, svSummary?.conflict_options);
+        if (ids.length) actions.highlightReads(ids, { uncertainIds: level === 'confirmed' ? [] : level === 'carriers'
+          ? supportingReadIds(reads, cluster, chrom, 'putative', svSummary?.evidence_targets ?? svSummary?.clusters, svSummary?.conflict_options) : ids });
+        else actions.clearHighlight();
         store.setSvSelectedCluster(stateKey, cluster.id);
         break;
       }
@@ -346,7 +353,7 @@ export function ReadTrackActions(props: ReadTrackActionsProps) {
         const panelId = store.panels.find(p => (p.stateKey ?? p.datasetId) === stateKey)?.id;
         runReadMenuContribution(action, {
           datasetId, chrom, stateKey, panelId, genomePos: t.genomePos,
-          svClusters: [svTarget?.thisCluster, svTarget?.atCursor], say,
+          svClusters: [svTarget?.thisCluster, svTarget?.atCursor], say, read: read ?? null,
         });
       }
     }

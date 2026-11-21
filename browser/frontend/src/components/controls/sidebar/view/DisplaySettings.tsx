@@ -10,6 +10,7 @@ import { ReadSeparatorSettings } from './ReadSeparatorSettings';
 import { UiScaleSettings } from './UiScaleSettings';
 import { PanelLauncherSettings } from './PanelLauncherSettings';
 import { PreviewFeaturesSettings } from './PreviewFeaturesSettings';
+import { ExperimentalSettings } from './ExperimentalSettings';
 import { PerformanceSettings } from './PerformanceSettings';
 
 export function DisplaySettings() {
@@ -33,6 +34,7 @@ export function DisplaySettings() {
         <PerformanceSettings />
         <PanelLauncherSettings />
         <PreviewFeaturesSettings />
+        <ExperimentalSettings />
         {hasToolbarLayerControls && (
           <div className="rounded-md bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 px-2 py-1 text-[11px] text-slate-600 dark:text-slate-300">
             <div>

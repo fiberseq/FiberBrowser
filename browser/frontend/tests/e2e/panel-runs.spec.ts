@@ -13,7 +13,7 @@
  * changed (3.0.0 audit MED-1).
  */
 import { test, expect } from './fixtures/server';
-import type { Page, Route } from '@playwright/test';
+import type { Page, Request, Route } from '@playwright/test';
 
 test.use({ fixtureBam: 'demo' });
 
@@ -38,15 +38,40 @@ async function movePanel(page: Page, locus: string) {
   await expect.poll(() => panelLocus(page), { timeout: 20_000 }).toBe(locus);
 }
 
-/** Hold the next request to `path` until the returned release() is called. */
+/**
+ * Hold the next request to `path` until the returned release() is called. `answered` settles once the page has
+ * the late answer (or the request was aborted) and has had a frame to act on it: what a "nothing changed" check
+ * after release() waits for.
+ */
 async function hold(page: Page, path: string) {
   let release!: () => void;
   const gate = new Promise<void>(r => { release = r; });
   let seen!: () => void;
   const sent = new Promise<void>(r => { seen = r; });
+  let delivered!: () => void;
+  const continued = new Promise<void>(r => { delivered = r; });
   // The page may abort the held request meanwhile (a cancelled run): continuing it then fails, which is expected.
-  await page.route(`**${path}*`, async (route: Route) => { seen(); await gate; await route.continue().catch(() => {}); }, { times: 1 });
-  return { sent, release };
+  await page.route(`**${path}*`, async (route: Route) => {
+    const request = route.request();
+    // Listen from the start: the page may abort the request (a stopped run) while it is held.
+    const ended = new Promise<void>(resolve => {
+      const onEnd = (r: Request) => {
+        if (r !== request) return;
+        page.off('requestfinished', onEnd); page.off('requestfailed', onEnd); resolve();
+      };
+      page.on('requestfinished', onEnd); page.on('requestfailed', onEnd);
+    });
+    seen(); await gate;
+    // Continuing an aborted request fails; either way, wait (bounded) until the page has the answer or the abort.
+    await route.continue().catch(() => {});
+    await Promise.race([ended, new Promise(r => setTimeout(r, 15_000))]);
+    delivered();
+  }, { times: 1 });
+  const answered = async () => {
+    await continued;
+    await page.evaluate(() => new Promise(r => requestAnimationFrame(() => setTimeout(r, 50))));
+  };
+  return { sent, release, answered };
 }
 
 async function selectPanelPeaks(page: Page) {
@@ -74,7 +99,9 @@ async function openPerPanel(page: Page, baseUrl: string) {
   await page.getByTestId('location-search-input').fill('chr19:47514000-47518000');
   await page.getByTestId('location-search-submit').click();
   await expect.poll(() => store(page, s => s.start), { timeout: 20_000 }).toBe(47_514_000);
-  await page.waitForTimeout(1_200);
+  // The main view's undo step is pushed once it settles (a 500 ms timer): wait for that step, not a fixed time.
+  await expect.poll(() => store(page, s => s._historyStack?.[s._historyPointer]?.label ?? ''), { timeout: 20_000 })
+    .toMatch(/^Navigate to chr19:47,514,000-47,518,000/);
   await page.getByTestId('nav-mode-perPanel').click();
   await movePanel(page, `${OWN.chrom}:${OWN.start}-${OWN.end}`);
   await page.waitForLoadState('networkidle');
@@ -97,7 +124,7 @@ test('Per panel: a clustering answered after its panel moved is not applied ther
   // The move stops the run: the progress line under the toolbar says why (not the global error banner).
   await expect(page.getByTestId('analysis-progress')).toContainText('Cluster: Stopped: the locus changed', { timeout: 10_000 });
   held.release();
-  await page.waitForTimeout(1_000);
+  await held.answered();
   expect(await assigned(page)).toBe(0);
 
   // --- Back at its locus it clusters ---------------------------------------------------------
@@ -132,7 +159,7 @@ test('Per panel: Sort sorts a panel at its own locus; a sort answered after it m
   await expect.poll(() => undoTitle(page), { timeout: 10_000 }).toMatch(/^Undo: (Navigate panel|Panel) to chr19:47,600,000/);
   await expect(page.getByTestId('analysis-progress')).toContainText('Sort: Stopped: the locus changed', { timeout: 10_000 });
   heldSort.release();
-  await page.waitForTimeout(1_000);
+  await heldSort.answered();
   expect(await undoTitle(page)).toMatch(/^Undo: (Navigate panel|Panel) to chr19:47,600,000/);
   expect(await sorted(page)).toBe(0);
 

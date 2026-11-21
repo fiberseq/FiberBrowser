@@ -131,12 +131,14 @@ def feature_digest(features: np.ndarray) -> str:
     return h.hexdigest()[:16]
 
 
-def subsample_indices(n: int, cap: Optional[int], random_state: int) -> Optional[np.ndarray]:
-    """Sorted seeded subsample of n rows, or None when all fit under the cap."""
+def subsample_indices(n: int, cap: Optional[int], random_state: int, names: Optional[Sequence[str]] = None) -> Optional[np.ndarray]:
+    """Sorted seeded subsample of n rows, or None when all fit under the cap: the stable sampling rule
+    (services/stable_sample, 3.1.0), the rows whose names (keys; else their positions) have the smallest keys."""
     if cap is None or cap <= 0 or n <= cap:
         return None
-    rng = np.random.default_rng(int(random_state))
-    return np.sort(rng.choice(n, size=int(cap), replace=False))
+    from services.stable_sample import lowest_k, stable_key
+    name = (lambda i: str(names[i])) if names is not None else (lambda i: f"#{i}")
+    return np.sort(np.asarray(lowest_k(range(n), int(cap), key=lambda i: stable_key(int(random_state), name(i)), ident=lambda i: f"{name(i)}#{i}"), dtype=np.int64))
 
 
 # ── The neighbourhood graph ─────────────────────────────────────────────────
@@ -457,7 +459,7 @@ def compute_tsne_map(features: np.ndarray, *, random_state: int, keys: Optional[
         raise ValueError("t-SNE needs at least 4 reads")
     order = canonical_order(keys, n)
     Xc = np.ascontiguousarray(X[order])
-    sub = subsample_indices(n, max_reads, random_state)
+    sub = subsample_indices(n, max_reads, random_state, None if keys is None else [str(keys[i]) for i in order])
     n_embedded = n if sub is None else int(sub.size)
     embed_rows = Xc if sub is None else Xc[sub]
     if not (embed_rows != embed_rows[0]).any():

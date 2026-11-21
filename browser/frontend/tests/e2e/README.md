@@ -33,6 +33,60 @@ npx playwright test smoke.spec.ts
 npx playwright test -g "quality filters endpoint"
 ```
 
+## The whole suite, locally: `npm run e2e:full`
+
+```bash
+cd browser/frontend
+FIBERBROWSER_TEST_FASTA=/path/to/hg38.fa npm run e2e:full            # every spec
+FIBERBROWSER_TEST_FASTA=/path/to/hg38.fa npm run e2e:full -- tour    # some specs, any playwright arguments
+```
+
+`scripts/e2e-full.sh` is the one documented way to run every spec on a
+developer machine. It:
+
+- **needs an indexed hg38 FASTA** in `FIBERBROWSER_TEST_FASTA` (the file and
+  its `.fai`; any hg38 with chr19 and chr3, e.g. UCSC's `hg38.fa`). The demo BAM
+  is on chr19 and the pangenome specs are on chr3; a chr3-only FASTA puts the
+  demo specs on the wrong contig and raises the genome-mismatch banner. Tests
+  never download hg38, and the script stops without one;
+- uses **two test ports**, `FIBERBROWSER_TEST_PORTS=8880,8881` unless you set
+  it. Specs that run two servers at once (`public-server`'s busy-port test,
+  `session-links`) call `requireTestPorts(2)` and skip, saying so, when only
+  one port is listed;
+- **builds the current source into its work folder** and serves that build
+  (`FIBERBROWSER_FRONTEND_DIST`), so the tracked `dist/` is never rebuilt and
+  there is nothing to restore afterwards;
+- gives the servers a **scratch HOME** in the work folder, so they never read
+  or write `~/.fiberhmm` (its genome cache included). Playwright's browsers and
+  Python's user site stay where they were;
+- sources `FIBERBROWSER_E2E_ENV` first when set: a file outside the repository
+  for machine-specific data (the graph helper and packages, the pg-lift data,
+  dm6 BAMs). Specs whose data is not configured skip with the reason.
+
+`FIBERBROWSER_E2E_WORK` names the work folder (default: a new temporary
+folder); results, traces and screenshots are in its `results/`. A full run
+takes about 1–1.5 h. Specs that need optional data skip with the reason; the
+list is in the table below.
+
+| Skips unless configured | Needs |
+|---|---|
+| `graph-*`, `live-lift`, `diffmatch-gates` | `FIBERBROWSER_TEST_GRAPH_HELPER`, `FIBERBROWSER_TEST_GRAPH_PACKAGES`, `FIBERBROWSER_TEST_GRAPH_HPRC_PACKAGE`, `FIBERBROWSER_TEST_LIFT_{BAM,NATIVE,MAP}` (and `FIBERBROWSER_TEST_GRAPH_GENERALITY_PACKAGES`, `FIBERBROWSER_TEST_GRAPH_LIFT_GENERALITY` for `graph-generality`) |
+| dm6 specs (`panel-genomes`, `cluster-panel-genomes`, `export-panel-genomes`, `palette-panels`, `regions`, `regions-two-references`, `startup-mixed-genomes`, `ui-export-figure`'s two-reference test) | `FIBERBROWSER_TEST_DM6_BAM` (and `_2`; they were written against a lab dm6 amplicon BAM that is not public) and dm6 + hg38 cached in `~/.fiberhmm/genomes`, which the scratch HOME never has: they run only from `npm run test:e2e` with your own HOME |
+| `export-read-ink` deep BAM, streamed exports | `FIBERBROWSER_TEST_BAM` (a deep BAM; it also becomes the default BAM of unpinned specs) |
+| `export-read-ink` BigBed, `bigbed-local` | `FIBERBROWSER_TEST_BIGBED` |
+| `s3-remote` | `FIBERBROWSER_TEST_S3_ENDPOINT` (a local S3-compatible server) |
+| `signal-filter` | `FIBERBROWSER_SIGNAL_DATA` |
+| `performance` | `FIBERBROWSER_RUN_PERF_E2E=1` (benchmarks) |
+| `panel-rail` screenshots, `graph-panel` measurement traces | `FIBERBROWSER_RAIL_SCREENSHOTS`, `FIBERBROWSER_GRAPH_MEASURE_OUT` (they only write pictures or measurements) |
+
+**No native file dialogs.** On a desktop, `/api/pick_file`, `/api/pick_folder`
+and `/api/pick_file_primer` open a real dialog on your screen. Every browser
+context a spec gets answers those requests itself with "cancelled"
+(`fixtures/nativeDialogs.ts`), so import `test` from `./fixtures/server` or
+`./fixtures/nativeDialogs`, never from `@playwright/test`, and call
+`blockNativeDialogs(context)` on a context you make with `browser.newContext()`.
+A spec that tests a picker mocks it with `page.route`, which wins.
+
 The spawned servers run `python browser.py --no-token` from the repository
 root (set `FIBERBROWSER_TEST_PYTHON` for another interpreter; it needs
 FiberHMM importable). They never read `~/.fiberhmm/browser_settings.json`
@@ -75,7 +129,7 @@ FIBERBROWSER_TEST_BAM=/path/to/your.bam npm run test:e2e
 FIBERBROWSER_TEST_REGION=chr2R:9929319-10029319 npm run test:e2e
 FIBERBROWSER_TEST_BIGBED=/path/to/standard_fiber.bb npm run test:e2e
 FIBERBROWSER_TEST_BIGBED_DIR=/path/to/standard_fiber_dir npm run test:e2e
-FIBERBROWSER_TEST_PORT=9000 npm run test:e2e       # default: random free port
+FIBERBROWSER_TEST_PORTS=8880,8881 FIBERBROWSER_TEST_PORT=8880 npm run test:e2e   # the ports test servers may use; the preferred one
 FIBERBROWSER_E2E_CORES=4 npx playwright test release-consensus   # consensus job cores (default 2)
 ```
 

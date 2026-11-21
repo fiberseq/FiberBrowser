@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { findTopLocus, isTopLocusStep, resetTopLoci } from './topLoci';
+import { useBrowserStore } from '../stores/browserStore';
 
 const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
 
@@ -94,5 +95,30 @@ describe('findTopLocus: a reads search always ends', () => {
     const result = await findTopLocus(1000, 'd');
     expect(result).toMatchObject({ window: null, reason: 'error' });
     expect(!isTopLocusStep(result) && result.message).toMatch(/^Could not search for reads/);
+  });
+
+  it('a change of the read policy or signal filters is another ranking', async () => {
+    // A duplicate-dominated locus found with duplicates shown must not be offered once they are hidden.
+    const fetchMock = vi.fn(async (url: string) => json({ success: true, windows: [
+      new URL(url, 'http://x').searchParams.get('include_duplicates') === 'true'
+        ? { chrom: 'chrDup', start: 1, end: 1001, depth: 50 } : { chrom: 'chr2L', start: 1, end: 1001, depth: 4 }] }));
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      useBrowserStore.setState({ showDuplicateReads: true });
+      const shown = await findTopLocus(1000, 'd');
+      useBrowserStore.setState({ showDuplicateReads: false });
+      const hidden = await findTopLocus(1000, 'd');
+      expect(isTopLocusStep(shown) && shown.window.chrom).toBe('chrDup');
+      expect(isTopLocusStep(hidden) && hidden.window.chrom).toBe('chr2L');
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      useBrowserStore.setState({ datasets: [{ id: 'd', signal_tags: true }] as never,
+        signalFilters: { ...useBrowserStore.getState().signalFilters, hideBackground: true } });
+      await findTopLocus(1000, 'd');
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(new URL(String(fetchMock.mock.calls[2][0]), 'http://x').searchParams.get('signal_filters')).toContain('hideBackground');
+    } finally {
+      useBrowserStore.setState({ showDuplicateReads: false, showQcFailReads: false, datasets: [],
+        signalFilters: { ...useBrowserStore.getState().signalFilters, hideBackground: false } });
+    }
   });
 });

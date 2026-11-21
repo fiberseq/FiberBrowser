@@ -9,6 +9,7 @@
 import { useBrowserStore } from '../stores/browserStore';
 import type { Dataset, PanelConfig } from '../types';
 export { restoreOrphanSplitSources } from '../stores/splitSources';
+import { withoutGraphFold } from '../stores/graphMembership';
 
 /** The dataset panel that stands for a dataset: its main-view one, else any of its plain panels, else any. */
 export function mainDatasetPanel(panels: PanelConfig[], datasetId: string): PanelConfig | undefined {
@@ -45,7 +46,7 @@ export function revealDatasetPanel(dataset: Dataset): string | null {
   useBrowserStore.setState(s => {
     const panels = s.panels.map(p => {
       if (p.id !== id) return p;
-      const { collapsedBySplitGroup: _a, collapsedByHaplotypeGroup: _b, collapsedByContactRegionGroup: _c, ...rest } = p;
+      const { collapsedBySplitGroup: _a, collapsedByHaplotypeGroup: _b, collapsedByContactRegionGroup: _c, ...rest } = withoutGraphFold(p);
       return { ...rest, collapsed: false };
     });
     const row = panel!.layoutRow ?? 0;

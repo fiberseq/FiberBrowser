@@ -1,0 +1,16 @@
+{
+  "clusters": [
+    {"id": "mixed", "len": 155, "support": 1, "putative": 5},
+    {"id": "putative", "len": 100, "support": 0, "putative": 3},
+    {"id": "confirmed", "len": 100, "support": 3},
+    {"id": "conflicting", "len": 100, "support": 1, "conflicting": 9},
+    {"id": "ambiguous", "len": 100, "support": 0, "ambiguous": 9},
+    {"id": "short", "len": 20, "support": 8, "putative": 8}
+  ],
+  "cases": [
+    {"min_len": 50, "min_support": 3, "ids": ["mixed", "putative", "confirmed"]},
+    {"min_len": 50, "min_support": 6, "ids": ["mixed"]},
+    {"min_len": 10, "min_support": 7, "ids": ["short"]},
+    {"min_len": 200, "min_support": 3, "ids": []}
+  ]
+}

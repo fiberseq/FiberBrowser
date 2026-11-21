@@ -300,3 +300,99 @@ it('preserves an unfinished nearby fill through pans and cancels it on a distant
     vi.unstubAllGlobals();
   }
 });
+
+it('keeps one fill per live-lift haplotype panel of the same dataset, and cancels both on panel close', async () => {
+  const { getCompactReads, setReadPrefetchMargin, cancelReadPrefetch } = await import('./readOperations');
+  const { clearLoadedReadRegions } = await import('./loadedReadRegion');
+  const { markReadViewDrawn } = await import('../utils/viewIdle');
+  clearLoadedReadRegions();
+  setReadPrefetchMargin(1, 20);
+  vi.useFakeTimers();
+  const frames: FrameRequestCallback[] = [];
+  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => frames.push(callback));
+  const fills: Array<{ query: URLSearchParams; signal: AbortSignal; finish: () => void }> = [];
+  const fetch = vi.fn((url: string, options: RequestInit) => {
+    const query = new URL(url, 'http://localhost').searchParams;
+    if (query.get('prefetch') === 'true') return new Promise<Response>((resolve, reject) => {
+      fills.push({ query, signal: options.signal!, finish: () => resolve({ ok: true, json: async () => ({ reads: [] }) } as Response) });
+      options.signal!.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+    });
+    return Promise.resolve({ ok: true, json: async () => ({ reads: [{ id: `${query.get('lift_hap')}:${query.get('start')}` }] }) } as Response);
+  });
+  vi.stubGlobal('fetch', fetch);
+  const params = (hap: string, start: number) => new URLSearchParams({ dataset_id: 'lifted', lift_hap: hap, chrom: 'chr1',
+    start: String(start), end: String(start + 100), max_reads: '500' });
+  const paint = () => { markReadViewDrawn(); while (frames.length) frames.shift()!(0); };
+  try {
+    // Both panels load their view, then pan together: neither request cancels the other panel's fill.
+    await Promise.all([getCompactReads(params('MAT', 10000)), getCompactReads(params('PAT', 10000))]);
+    paint();
+    await vi.advanceTimersByTimeAsync(1500);
+    await Promise.all([getCompactReads(params('MAT', 10050)), getCompactReads(params('PAT', 10050))]);
+    paint();
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(fills.length).toBeGreaterThan(0);
+    expect(fills.some(f => f.signal.aborted)).toBe(false);
+    // The queue runs one fill at a time: finishing each lets the other panel's next tile go.
+    for (let i = 0; i < 4 && i < fills.length; i++) {
+      fills[i].finish();
+      await vi.advanceTimersByTimeAsync(1500);
+    }
+    expect(fills.some(f => f.signal.aborted)).toBe(false);
+    expect(new Set(fills.map(f => f.query.get('lift_hap')))).toEqual(new Set(['MAT', 'PAT']));
+    const open = fills.filter((_f, i) => i >= 4);
+    expect(open.length).toBeGreaterThan(0);
+    cancelReadPrefetch('lifted');
+    await vi.advanceTimersByTimeAsync(1);
+    expect(open.every(f => f.signal.aborted)).toBe(true);
+  } finally {
+    setReadPrefetchMargin(0.5);
+    await vi.advanceTimersByTimeAsync(1);
+    clearLoadedReadRegions();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  }
+});
+
+it('never remembers a first paint; its full set answers the view (and its first-paint request) afterwards', async () => {
+  const { getCompactReadsAll, isPartialReadsAll, fullSetParams } = await import('./readOperations');
+  const { clearLoadedReadRegions } = await import('./loadedReadRegion');
+  clearLoadedReadRegions();
+  const reads = [{ id: 'one', intervals: [[0, 100, 100]] }];
+  const partial = { width: 100, datasets: { a: { count: 1, total: 9, width: 100, reads,
+    first_paint: { partial: true, shown: 1, total_estimate: 9 } } } };
+  const full = { width: 100, datasets: { a: { count: 1, total: 8, width: 100, reads, sv_summary: { clusters: [] } } } };
+  const urls: string[] = [];
+  const fetchMock = vi.fn(async (url: string) => {
+    urls.push(url);
+    return { ok: true, json: async () => (url.includes('background=true') ? full : partial) } as Response;
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  try {
+    const params = new URLSearchParams({ chrom: 'chr1', start: '100', end: '200', dataset_ids: 'a', max_reads: '1000',
+      coverage_sample: 'true' });
+    const firstPaint = new URLSearchParams(params);
+    firstPaint.set('first_paint', 'true');
+    const first = await getCompactReadsAll(firstPaint);
+    expect(isPartialReadsAll(first)).toBe(true);
+    // Not remembered: asked again, it goes to the server again.
+    await getCompactReadsAll(firstPaint);
+    const compactAllCalls = () => urls.filter(u => u.includes('/reads/compact_all')).length;
+    expect(compactAllCalls()).toBe(2);
+    const background = fullSetParams(params);
+    expect(background.get('background')).toBe('true');
+    expect(background.has('first_paint')).toBe(false);
+    const done = await getCompactReadsAll(background);
+    expect(isPartialReadsAll(done)).toBe(false);
+    expect(compactAllCalls()).toBe(3);
+    // A revisit's first-paint request is answered by the full set, without a request.
+    const revisit = await getCompactReadsAll<typeof full>(firstPaint);
+    expect(revisit.datasets).toEqual(full.datasets);
+    expect(compactAllCalls()).toBe(3);
+    // Speculative neighbour fills never carry the transport flags.
+    expect(urls.filter(u => u.includes('prefetch')).every(u => !u.includes('first_paint') && !u.includes('background'))).toBe(true);
+  } finally {
+    vi.unstubAllGlobals();
+    clearLoadedReadRegions();
+  }
+});

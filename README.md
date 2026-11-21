@@ -1,5 +1,7 @@
 # FiberBrowser
 
+![FiberBrowser: DddA-seq reads at the NAPA promoter with nucleosome, TF and accessible layers, the metaprofile, clustered reads and the cluster profiles](docs/images/hero/fiberbrowser.png)
+
 An interactive genome browser for Fiber-seq and DAF-seq data at single-molecule
 resolution. Each row is one DNA molecule, drawn with its nucleosomes,
 transcription-factor footprints, accessible patches and base modifications.
@@ -9,8 +11,8 @@ by haplotype or structural-variant allele, and export figures and the data
 behind them.
 
 FiberBrowser shows the footprints called by
-[FiberHMM](https://github.com/fiberseq/FiberHMM). FiberBrowser 3.0 is released
-together with FiberHMM 3.0 and installs it.
+[FiberHMM](https://github.com/fiberseq/FiberHMM). FiberBrowser 3.1 needs
+FiberHMM 3.2.0 or later (`fiberhmm[consensus]>=3.2.0,<4`) and installs it.
 
 **Documentation:** [docs/index.md](https://github.com/fiberseq/FiberBrowser/blob/main/docs/index.md)
 · [User guide](https://github.com/fiberseq/FiberBrowser/blob/main/docs/guide.md)
@@ -22,16 +24,17 @@ together with FiberHMM 3.0 and installs it.
 
 | You want | Do this |
 |----------|---------|
-| The Mac app (Apple silicon, macOS 14+) | Download `FiberBrowser-<version>-arm64.dmg` from [Releases](https://github.com/fiberseq/FiberBrowser/releases) and drag it to Applications. It bundles Python, FiberHMM 3, minimap2 and BLAST+. |
+| The Mac app (Apple silicon, macOS 14+) | Download `FiberBrowser-<version>-arm64.dmg` from [Releases](https://github.com/fiberseq/FiberBrowser/releases) and drag it to Applications. It bundles Python, FiberHMM 3.2, minimap2 and BLAST+. |
 | The Windows app (Windows 10 2004+ or 11, x64) | Run `FiberBrowser-<version>-Setup.exe` from [Releases](https://github.com/fiberseq/FiberBrowser/releases). It runs in WSL 2 and opens in its own window. |
-| The `fiberbrowser` command (macOS, Linux, or WSL; Python 3.10+) | `pipx install "fiberbrowser[app]"` (or `python3 -m pip install "fiberbrowser[app]"`). This installs FiberHMM 3 (`fiberhmm[consensus]>=3.0.3,<4`) from PyPI. |
-| A source checkout | `git clone https://github.com/fiberseq/FiberBrowser && cd FiberBrowser`, then `bash scripts/install.sh` (or `python3 -m pip install -r requirements.txt`) and `python browser.py`. |
+| The `fiberbrowser` command (macOS, Linux, or WSL; Python 3.10+) | `pipx install "fiberbrowser[app]"` (or `python3 -m pip install "fiberbrowser[app]"`). This installs FiberHMM 3.2.0 or later from PyPI. |
+| A source checkout | `git clone https://github.com/fiberseq/FiberBrowser && cd FiberBrowser`, then `bash scripts/install.sh` and `.venv/bin/python browser.py` (or, in a Python you manage yourself, `python3 -m pip install -r requirements.txt` and `python browser.py`). |
 | A read-only server for reviewers | The Docker image `ghcr.io/fiberseq/fiberbrowser:<version>` (runs `--public`). |
 
 Extras for the pip install: `app` (its own window), `copilot` (local Copilot on
 Apple silicon), `primers` (primer3-py, seqfold), `contact-maps` (cooler, h5py),
 `umap`, `plots`, `pipeline` (mappy, for DAF-seq runs without minimap2), or
-`all`. Details, conda, the Windows app and Docker:
+`all`. `graph` adds the helper for graph mode (Apple silicon Macs for now; not
+part of `all`). Details, conda, the Windows app and Docker:
 [Installing FiberBrowser](https://github.com/fiberseq/FiberBrowser/blob/main/docs/install.md).
 
 ## Quick start
@@ -63,6 +66,16 @@ excluded from read panels and analyses by default. **Quality → Show QC-fail
 reads (incl. FiberHMM chimeras)** includes them for inspection; the choice is
 saved in sessions. See [Quality filters](docs/guide.md#34-quality-filters).
 
+## Bring your own annotations (MA tags)
+
+FiberBrowser draws any per-read intervals you write into the BAM, not only
+FiberHMM's calls. Add a group such as `;promoter.:845-201` to a read's `MA` tag
+(the fiberseq Molecular-annotation spec that FiberHMM and fibertools use) and
+it appears as its own layer, with a toggle, a colour, a metaprofile line, and a
+place in Plots, peaks, rules and colour rules. The format, a short pysam
+example and the coordinate rules are in
+[Your own annotations](https://github.com/fiberseq/FiberBrowser/blob/main/docs/guide.md#your-own-annotations-ma-tags).
+
 ## What you can do
 
 **Molecule panels.** One read panel per dataset, with the layers each file
@@ -80,8 +93,19 @@ clustering), and see every read on a t-SNE,
 UMAP or PCA map. Sort reads within clusters and filter them with reusable
 rules.
 
-**Metaprofiles.** Per-layer and per-rule profiles over the reads in view,
-per dataset or per cluster, as a track or overlaid in the Clusters panel.
+**Plots.** Press **P** for a full-window plotting workspace that follows the
+browser: metaprofiles (also split by footprint size), footprint size
+enrichment, V-plots, size histograms, heatmaps over BED regions and
+co-accessibility, pooled or by dataset, cluster, class or split panel, with
+A − B and log2 comparisons and summaries with bootstrap intervals. Every
+random step is seeded. **Keep** saves a plot to the Gallery with the browser
+state it was made in. The default metaprofile track follows the layers you
+switch on.
+
+**Meta-locus (Preview).** Open a BED file (every promoter, every CTCF site) as
+one virtual locus that pools the reads from all its sites, and browse, cluster
+and plot a seeded working set of them. Refill clusters from the pool and count
+how often a pattern occurs across all sites.
 
 **Footprints and co-occupancy.** Cmd/Ctrl+click a footprint to see the sizes of
 the footprints at that spot, save a size range as a definition, and look at its
@@ -101,12 +125,28 @@ and splits them into one panel per allele or per haplotype (from HP tags or
 local allele patterns).
 
 **Structural variants and inserts.** Deletions and insertions are drawn on the
-reads and in an SV row; any SV can split the reads into carriers and reference
+reads and in the Differences row; any SV can split the reads into carriers and reference
 reads. The **Insertion lens** shows the chromatin inside a large insertion, and
 **Identify** reports candidate transposable-element families and genome copies
 of the insert. **Open carriers with the insert expanded** (Preview) re-aligns
 the carriers onto the alternate allele so the reads inside the insert can be
 clustered and analysed like any region.
+
+**Live lift and graph mode (Preview).** Draw reads aligned to a sample's own
+assembly on the genome you browse, without realigning; see assembly
+differences and their read evidence; view a dataset on pangenome graph lanes,
+one per haplotype, and pop haplotypes out side by side. Graph mode needs the
+graph helper (Apple silicon Macs for now).
+
+**Nucleosomes.** Score how regular each molecule's nucleosome array is, call
+regular and irregular patches, and find the patch geometries datasets share.
+
+**Feature hub and scans.** Classes, NFRs, nucleosome patches, peaks, SNPs and
+SVs in one list, compared across datasets and haplotypes, from the view, a BED
+file, genes or genome-wide FiberHMM scans.
+
+**Find a sequence.** Paste DNA into the locus box to find where it occurs in
+the genome.
 
 **NFRs.** The NFRs panel runs FiberHMM's `fiberhmm-nfr` on the view: NFR
 variants with their prevalence, which NFRs open together, and motifs at each
@@ -149,8 +189,7 @@ and FiberHMM re-run advisories. **New DAF-seq run** aligns and calls raw reads
 on a cluster, over your own SSH connection. S3 and HTTPS URLs open directly.
 
 **Tracks.** bigWig, bigBed and BED tracks, JASPAR or custom motif tracks,
-UCSC, ENCODE and ChIP-Atlas hubs, contact maps (`.cool`/`.mcool`) and
-co-accessibility matrices.
+UCSC, ENCODE and ChIP-Atlas hubs, and contact maps (`.cool`/`.mcool`).
 
 **Copilot (optional).** The Tutorial panel's Copilot tab answers "how do I…?"
 questions by opening the right panels and pointing at the controls, like the
@@ -159,18 +198,21 @@ click downloads it), or a model you run with Ollama elsewhere. Nothing runs unti
 you set it up. FiberBrowser.app leaves it out. See
 [Local Copilot](https://github.com/fiberseq/FiberBrowser/blob/main/docs/copilot.md).
 
-What is supported and what is Preview in 3.0:
-[What 3.0 includes](https://github.com/fiberseq/FiberBrowser/blob/main/docs/release-scope.md).
+What is supported and what is Preview in 3.1:
+[What 3.1 includes](https://github.com/fiberseq/FiberBrowser/blob/main/docs/release-scope.md).
+Upgrading from 3.0:
+[What's new in 3.1](https://github.com/fiberseq/FiberBrowser/blob/main/docs/whats-new.md).
 
 ## Documentation
 
 | Page | What it covers |
 |------|----------------|
+| [What's new in 3.1](https://github.com/fiberseq/FiberBrowser/blob/main/docs/whats-new.md) | Plots, the meta-locus, live lift and graph mode, nucleosomes, and what changed since 3.0. |
 | [User guide](https://github.com/fiberseq/FiberBrowser/blob/main/docs/guide.md) | Every step of the guided tour with a screenshot, then footprint classes, haplotypes, figures, data export, sessions and workspaces. |
 | [Tutorial](https://github.com/fiberseq/FiberBrowser/blob/main/docs/tutorial.md) | A written walkthrough of the tour on the bundled demos. |
 | [Reference](https://github.com/fiberseq/FiberBrowser/blob/main/docs/reference.md) | Command-line options, environment variables, the access token, file formats, BAM tags and layers, the dataset catalog, panels, keyboard shortcuts. |
 | [Installing FiberBrowser](https://github.com/fiberseq/FiberBrowser/blob/main/docs/install.md) | The Mac and Windows apps, pip and extras, conda, Docker, a source checkout. |
-| [Workflows](https://github.com/fiberseq/FiberBrowser/blob/main/docs/index.md#workflows) | DAF-seq runs, the Library, data on a cluster or S3, plasmids, clustering and transcription states, haplotypes. |
+| [Workflows](https://github.com/fiberseq/FiberBrowser/blob/main/docs/index.md#workflows) | Plots, the meta-locus, DAF-seq runs, the Library, data on a cluster or S3, plasmids, clustering and transcription states, haplotypes, live lift, linked panels, differences and structural variants, graph mode, nucleosomes, the Feature hub, sequence search. |
 | [Jupyter / Python API](https://github.com/fiberseq/FiberBrowser/blob/main/docs/jupyter-api.md) | `browser_client.py`: connecting, headless servers, figures, every method. |
 | [Analysis methods and statistics](https://github.com/fiberseq/FiberBrowser/blob/main/docs/analysis_methods_and_statistics.md) | How each analysis is computed and tested. |
 | [Deploying on a server](https://github.com/fiberseq/FiberBrowser/blob/main/docs/deployment/index.md) | Personal, lab and public servers; Open OnDemand. |

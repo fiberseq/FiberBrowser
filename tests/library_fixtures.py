@@ -130,6 +130,9 @@ def pipeline_settings(enzyme="dddb", **changed) -> dict:
         "basecaller_override": None,  # FiberHMM 3.0: --basecaller-info / --modbase-model, when given
     }
     settings.update(changed)
+    if daf and not any(a == "--chimeras" or a.startswith("--chimeras=") for a in settings["call_args"]):
+        # FiberHMM 3.0.3 records the effective chimera mode in call_args for DAF (once).
+        settings["call_args"] = [*settings["call_args"], "--chimeras", "flag" if settings["chimera_filter"] else "keep"]
     return settings
 
 
@@ -140,6 +143,7 @@ def legacy_pipeline_settings(enzyme="dddb", **changed) -> dict:
     settings = pipeline_settings(enzyme)
     for key in ("alignments", "daf_unaligned_mask", "daf_insert_consensus", "basecaller_override"):
         settings.pop(key)
+    settings["call_args"] = []  # no recorded --chimeras before 3.0.3
     settings.update(primary_only=True, hard_clip=enzyme in ("ddda", "dddb"))
     settings.update(changed)
     return settings

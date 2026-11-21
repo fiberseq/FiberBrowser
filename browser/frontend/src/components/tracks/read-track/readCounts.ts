@@ -1,15 +1,37 @@
 import type { WorkingSampling } from './types';
+import { DEFAULT_MIN_FOOTPRINTS } from '../../../stores/uiSlice';
 
-/** Compare before/after filtering within one cohort; never count sampling as filtering. */
-export function readFilterCounts(inScope: number, working: number, sampling: WorkingSampling | null, spanning: boolean) {
-  const total = Math.max(0, sampling ? (spanning ? sampling.kept_spanning : sampling.kept) : inScope);
+/**
+ * Compare before/after filtering within one cohort; never count sampling as filtering.
+ *
+ * ``scoped``: the request asked for a set of reads by name (a cluster cohort, a branch, a split panel's or a read
+ * filter's IDs). The reads outside that set are not hidden by the read filters, and the counts cannot tell the two
+ * apart, so nothing is counted as hidden.
+ */
+export function readFilterCounts(inScope: number, working: number, sampling: WorkingSampling | null, spanning: boolean,
+  scoped = false, inScopeBeforeFilters: number | null = null) {
+  // A full load's in-scope total is counted after the read filters (they apply while decoding), so the alignments
+  // in scope before them come from the server's signal counts: the same footing as a sampled load's `kept`, so the
+  // notice depends on the filters, never on how the view was loaded.
+  const unsampled = inScopeBeforeFilters != null && Number.isFinite(inScopeBeforeFilters)
+    ? Math.max(inScope, inScopeBeforeFilters) : inScope;
+  const total = Math.max(0, sampling ? (spanning ? sampling.kept_spanning : sampling.kept) : unsampled);
   const kept = Math.max(0, sampling ? (spanning ? sampling.loaded_spanning : sampling.loaded) ?? working : working);
-  const hidden = Math.max(0, total - kept);
+  const hidden = scoped ? 0 : Math.max(0, total - kept);
   return { total, hidden, fraction: total > 0 ? hidden / total : 0, sampled: sampling !== null };
+}
+
+/** Whether the user set a read filter: Min FP quality, or a Min footprints other than the untouched default (which
+ * relaxes itself where it hides every read, and has its own notice). */
+export function userReadFilterSet(minFootprints: number, minFootprintsAuto: boolean, minFpQuality: number): boolean {
+  if (minFpQuality > 0) return true;
+  return minFootprints > 0 && !(minFootprintsAuto && minFootprints === DEFAULT_MIN_FOOTPRINTS);
 }
 
 export interface ReadStatusCounts {
   loading: boolean;
+  /** A first paint: the reads drawn are final, the totals estimates while the rest of the view loads. */
+  partial?: boolean;
   displayed: number;
   serverReturned: number;
   working: number;
@@ -54,6 +76,12 @@ export function formatReadStatus(counts: ReadStatusCounts): { text: string; titl
     return { text: `0 spanning / ${fmt(overlapping)} overlapping`, title };
   }
 
+  if (counts.partial) {
+    return {
+      text: `${fmt(displayed)} of ~${fmt(working)} rows drawn`,
+      title: `${title}; loading the rest of the view: the rows drawn are final, the totals are estimates until it lands`,
+    };
+  }
   // One shape in every header, its scope said (round 3, R10: "339/2,698 visible" beside the footer's "1,825 of 3,639
   // reads (sampled)", and split headers mixing "332/697" with "80 reads"): the rows drawn of the reads eligible.
   return { text: `${fmt(displayed)} of ${fmt(working)} ${working === 1 ? 'row' : 'rows'} drawn`, title };
@@ -68,7 +96,7 @@ export function compactReadStatus(full: string): string {
   // The count leads; what follows " · " (reads hidden by Min footprints, QC-fail, duplicates)
   // stays in the full text and the tooltip, so a narrow header keeps the count.
   const text = full.split(' · ')[0];
-  const drawn = text.match(/^([\d,]+) of ([\d,]+) rows? drawn$/);
+  const drawn = text.match(/^([\d,]+) of (~?[\d,]+) rows? drawn$/);
   if (drawn) return `${drawn[1]}/${drawn[2]}`;
   const visible = text.match(/^([\d,]+)\/([\d,]+) visible$/);
   if (visible) return `${visible[1]}/${visible[2]}`;

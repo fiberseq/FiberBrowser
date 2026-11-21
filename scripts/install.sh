@@ -120,14 +120,18 @@ fi
 # A clean PATH: only the venv and the system tools (no conda / Homebrew
 # curl-config or compilers leaking into source builds).
 CLEAN_PATH="$VENV/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+# The supported FiberHMM range, from requirements.txt (e.g. fiberhmm[consensus]>=3.2.0,<4).
+FIBERHMM_REQ="$(grep -i '^fiberhmm' requirements.txt | head -n 1 | sed 's/[[:space:]]*#.*//; s/[[:space:]]*$//')"
+FIBERHMM_MIN="$(printf '%s' "$FIBERHMM_REQ" | sed -n 's/.*>=[[:space:]]*\([0-9][0-9.]*\).*/\1/p')"
+FIBERHMM_MAX_MAJOR="$(printf '%s' "$FIBERHMM_REQ" | sed -n 's/.*<[[:space:]]*\([0-9][0-9]*\).*/\1/p')"
 say "Upgrading pip..."
 env PATH="$CLEAN_PATH" "$PY" -m pip install --quiet --upgrade pip setuptools wheel \
   || die "pip upgrade failed (offline? behind a proxy? set HTTPS_PROXY and try again)."
 say "Installing FiberBrowser's packages (a few minutes the first time)..."
 if ! env PATH="$CLEAN_PATH" "$PY" -m pip install -r requirements.txt; then
-  if ! env PATH="$CLEAN_PATH" "$PY" -m pip install --dry-run --quiet "fiberhmm[consensus]>=3.0.3,<4" >/dev/null 2>&1; then
+  if ! env PATH="$CLEAN_PATH" "$PY" -m pip install --dry-run --quiet "$FIBERHMM_REQ" >/dev/null 2>&1; then
     say
-    say "pip could not find FiberHMM 3.0.3 or later (fiberhmm[consensus]>=3.0.3,<4), which footprint classes,"
+    say "pip could not find FiberHMM $FIBERHMM_MIN or later ($FIBERHMM_REQ), which footprint classes,"
     say "chemistry detection and BAM export need. If you have a FiberHMM 3 source checkout, install it"
     say "into this venv and re-run this script:"
     say "  $PY -m pip install \"/path/to/FiberHMM[consensus]\""
@@ -164,14 +168,19 @@ if ! "$PY" -c 'import requests' 2>/dev/null; then
   die "the requests package won't load (the Jupyter client needs it); see the pip output above."
 fi
 if ! "$PY" -c 'import sys, fiberhmm
-major = int(str(getattr(fiberhmm, "__version__", "0")).split(".")[0] or 0)
-sys.exit(0 if major >= 3 else 1)' 2>/dev/null; then
-  say "Warning: FiberHMM 3.x is not importable in $VENV. The browser runs, but footprint classes,"
+import re
+def release(text):
+    m = re.match(r"v?([0-9]+(?:[.][0-9]+)*)", str(text or ""))
+    parts = tuple(int(p) for p in m.group(1).split(".")) if m else (0,)
+    return parts + (0,) * (3 - len(parts))
+have = release(getattr(fiberhmm, "__version__", "0"))
+sys.exit(0 if release(sys.argv[1]) <= have and have[0] < int(sys.argv[2]) else 1)' "$FIBERHMM_MIN" "$FIBERHMM_MAX_MAJOR" 2>/dev/null; then
+  say "Warning: FiberHMM $FIBERHMM_MIN or later (below $FIBERHMM_MAX_MAJOR) is not importable in $VENV. The browser runs, but footprint classes,"
   say "chemistry detection and BAM export need it:"
-  say "  $PY -m pip install \"fiberhmm[consensus]>=3.0.3,<4\""
+  say "  $PY -m pip install \"$FIBERHMM_REQ\""
 elif ! "$PY" -c 'import numba, sklearn' 2>/dev/null; then
   say "Warning: FiberHMM is installed without its consensus extras; footprint classes need them:"
-  say "  $PY -m pip install \"fiberhmm[consensus]>=3.0.3,<4\""
+  say "  $PY -m pip install \"$FIBERHMM_REQ\""
 fi
 
 say

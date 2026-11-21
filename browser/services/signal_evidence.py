@@ -14,6 +14,11 @@ _filters = ContextVar("signal_filters", default=None)
 # ``hide_uncalled`` query parameter (false: Min footprints' "All reads, including
 # uncalled"); None: not given (hidden).
 _hide_uncalled = ContextVar("hide_uncalled", default=None)
+# The read track's read policy for paths that read BAM records themselves (dense loader, DAF-C, autozoom, lift
+# difference reads): the request's ``include_duplicates`` / ``include_qcfail`` query parameters (true: the
+# toolbar's Show duplicates / Show QC-fail reads); None: not given (hidden).
+_include_duplicates = ContextVar("include_duplicates", default=None)
+_include_qcfail = ContextVar("include_qcfail", default=None)
 _ABSENT = object()
 _CLASSES = {
     "no detectable DddB signal (consistent with untreated/failed)": "background",
@@ -67,6 +72,49 @@ def request_hide_uncalled(default: bool = True) -> bool:
     return default if value is None else bool(value)
 
 
+def body_hide_uncalled(body=None) -> bool:
+    """Min footprints' uncalled-read rule for a JSON request: the body's ``hide_uncalled``, else hidden unless
+    its ``min_footprints`` is -1 ("All reads, including uncalled"), else the query's (default hide)."""
+    body = body if isinstance(body, dict) else {}
+    hide = parse_hide_uncalled(body.get("hide_uncalled"))
+    if hide is None:
+        try:
+            hide = False if int(body.get("min_footprints") or 0) < 0 else None
+        except (TypeError, ValueError):
+            hide = None
+    return request_hide_uncalled() if hide is None else bool(hide)
+
+
+def request_include_duplicates(default: bool = False) -> bool:
+    """Whether this request shows duplicate reads (0x400), as the read track's toggle (default: hidden)."""
+    value = _include_duplicates.get()
+    return default if value is None else bool(value)
+
+
+def request_include_qcfail(default: bool = False) -> bool:
+    """Whether this request shows QC-fail reads (0x200), as the read track's toggle (default: hidden)."""
+    value = _include_qcfail.get()
+    return default if value is None else bool(value)
+
+
+def read_policy_key() -> tuple:
+    """The request's read policy for cache and job keys: () at the default (both hidden)."""
+    dups, qcfail = request_include_duplicates(), request_include_qcfail()
+    return (("duplicates", "shown") if dups else ()) + (("qcfail", "shown") if qcfail else ())
+
+
+@contextmanager
+def read_policy_for_request(include_duplicates=None, include_qcfail=None):
+    """Set the read policy (bool or a query-string value; None: not given) for code run inside."""
+    dup_token = _include_duplicates.set(parse_hide_uncalled(include_duplicates))
+    qc_token = _include_qcfail.set(parse_hide_uncalled(include_qcfail))
+    try:
+        yield
+    finally:
+        _include_qcfail.reset(qc_token)
+        _include_duplicates.reset(dup_token)
+
+
 @contextmanager
 def hide_uncalled_for_request(value):
     token = _hide_uncalled.set(parse_hide_uncalled(value))
@@ -90,7 +138,9 @@ class SignalFilterMiddleware:
             value = json.loads(raw)
         except (ValueError, TypeError):
             value = {}
-        with signal_filters_for_request(value), hide_uncalled_for_request(query.get("hide_uncalled", [None])[0]):
+        with signal_filters_for_request(value), hide_uncalled_for_request(query.get("hide_uncalled", [None])[0]), \
+                read_policy_for_request(query.get("include_duplicates", [None])[0],
+                                        query.get("include_qcfail", [None])[0]):
             await self.app(scope, receive, send)
 
 
@@ -195,6 +245,17 @@ def parse_signal_tags(bg=_ABSENT, me=_ABSENT, db=_ABSENT, *, header=None):
         result["structure"] = dict(status=structure_status, score=score, p_value=p_value,
                                    method=_text(structure.get("method")), reason=_text(structure.get("reason")))
     return result
+
+
+# The record tags signal evidence is read from (schema 5 bg/me, legacy schema 4 db).
+SIGNAL_RECORD_TAGS = ("bg", "me", "db")
+
+
+def state_carries_signal(state) -> bool:
+    """Whether a loaded dataset carries signal evidence (the layer probe's ``has_signal_tags``): the signal
+    filters are offered and applied only then (the frontend's datasetsCarrySignal)."""
+    datasets = getattr(state, "datasets", None) or {}
+    return any(getattr(d, "has_signal_tags", False) for d in datasets.values())
 
 
 def record_signal(read, header=None):

@@ -235,19 +235,9 @@ def catalogue(ref_state, names=None, pinned=None, pwms=None, custom=None):
 
 
 def bh(pvalues):
-    """Benjamini-Hochberg q-values (None stays None; m = the p-values given)."""
-    idx = [i for i, p in enumerate(pvalues) if p is not None]
-    q = [None]*len(pvalues)
-    m = len(idx)
-    if not m:
-        return q
-    order = sorted(idx, key=lambda i: pvalues[i])
-    running = 1.0
-    for rank in range(m, 0, -1):
-        i = order[rank - 1]
-        running = min(running, pvalues[i]*m/rank)
-        q[i] = min(1.0, running)
-    return q
+    """Benjamini-Hochberg q-values (None stays None; m = the p-values given). See services.fdr."""
+    from services.fdr import bh_qvalues
+    return bh_qvalues(pvalues)
 
 
 # ------------------------------------------------------------------ families

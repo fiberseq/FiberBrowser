@@ -1,5 +1,11 @@
 import { removeMatchedGroups } from './matchedGroupActions';
 import { openFootprintSizes } from './footprintSizeEntry';
+import { closePlots, openPlots, toggleFeatureHub, workspaceOpen } from '../features/plots/workspace';
+import { hubWorkspaceEnabled } from '../features/plots/hubWorkspaceFlag';
+import { openCoaccPlot } from '../features/plots/coaccEntry';
+import { openMetaLocusDialog } from '../features/metaLocus/metaLocusStore';
+import { META_LOCUS_PREVIEW } from '../features/metaLocus/preview';
+import { previewHidden } from './previewFeatures';
 /**
  * The app's command bus: named commands that do what the in-app controls do,
  * callable as `window.fiberbrowserCommand(name, args?)`.
@@ -16,6 +22,7 @@ import { openFootprintSizes } from './footprintSizeEntry';
  * 'edit' when they undid typing in the focused text field instead of an app step).
  */
 import { useBrowserStore } from '../stores/browserStore';
+import { isMetaChrom } from '../features/metaLocus/metaChrom';
 import { findOpenAnalysisPanel } from '../plugins/registry';
 import { openLibrary } from '../components/controls/library/libraryStore';
 import { openDafRunDialog } from '../components/controls/daf-run/dafRunStore';
@@ -67,6 +74,7 @@ export const APP_COMMANDS = [
   'back',
   'forward',
   'go-to-locus',
+  'find-sequence',
   'locus',
   'copy-locus',
   'new-daf-run',
@@ -105,6 +113,14 @@ export const APP_COMMANDS = [
   'co-occupancy',
   'footprint-size-enrichment',
   'footprint-vplot',
+  // the Plots workspace (features/plots)
+  'open-plots',
+  'new-plot-from-view',
+  'open-coaccessibility',
+  'toggle-feature-hub',
+  'back-to-browser',
+  // the meta-locus (features/metaLocus): a BED's sites pooled into one virtual locus
+  'open-meta-locus',
   // from the desktop app itself, not the menu: the real paths of dropped files (utils/nativeDrop)
   'native-drop',
 ] as const;
@@ -133,6 +149,8 @@ export interface AppCommandInfo {
   unavailableReason?: () => string | null;
   /** A second line in the palette: where it lives, what it does. */
   detail?: string;
+  /** A Preview feature's id (utils/previewFeatures): its badge in the Open menu and palette. */
+  preview?: string;
 }
 
 /**
@@ -154,7 +172,7 @@ export const APP_COMMAND_INFO: Record<AppCommandName, AppCommandInfo | null> = {
   'sort-reads': { label: 'Sort reads', keywords: ['order', 'arrange'] },
   'filter-reads': { label: 'Filter reads', keywords: ['filter rule', 'subset'] },
   'clear-read-filter': { label: 'Clear read filter', keywords: ['unfilter', 'remove filter', 'show all reads'] },
-  autozoom: { label: 'Autozoom to the best-covered window', keywords: ['spanning reads', 'coverage', 'zoom'] },
+  autozoom: { label: 'Autozoom to the best-covered window', keywords: ['spanning reads', 'coverage', 'zoom'], available: () => !isMetaChrom(useBrowserStore.getState().chrom) },
   'copy-link': { label: 'Copy link to this view', keywords: ['share', 'url', 'permalink'] },
   'command-palette': null,  // the palette itself
   settings: { label: 'Settings', keywords: ['preferences', 'options', 'sidebar'] },
@@ -166,6 +184,12 @@ export const APP_COMMAND_INFO: Record<AppCommandName, AppCommandInfo | null> = {
   back: { label: 'Back (previous locus)', keywords: ['history', 'previous', 'navigation'] },
   forward: { label: 'Forward (next locus)', keywords: ['history', 'next', 'navigation'] },
   'go-to-locus': { label: 'Go to locus…', keywords: ['navigate', 'coordinates', 'gene', 'search', 'location'] },
+  'find-sequence': {
+    label: 'Find sequence in genome…',
+    detail: 'Tools › Find sequence: paste DNA, find where it is (exact / IUPAC for short queries, BLAST for longer ones)',
+    keywords: ['sequence', 'dna', 'blast', 'search sequence', 'find sequence', 'primer', 'oligo', 'iupac', 'where is', 'align', 'map'],
+    available: () => !isPublic(),
+  },
   locus: null,  // answers the locus (Copy Locus)
   'copy-locus': { label: 'Copy locus', keywords: ['coordinates', 'clipboard'] },
   // The top bar's Open ▾ menu lists these with the same labels (utils/openMenu).
@@ -273,7 +297,35 @@ export const APP_COMMAND_INFO: Record<AppCommandName, AppCommandInfo | null> = {
     detail: 'Footprints › Co-occupancy: which saved footprints and classes sit on the same reads',
     keywords: ['co-occupancy', 'cooccupancy', 'co-occurrence', 'cooccurrence', 'together', 'odds ratio', 'pairs', 'classes', 'footprints'],
   },
+  'open-plots': {
+    label: 'Open Plots',
+    detail: 'The Plots workspace: build, save and export plots of the current view (P toggles it, Esc goes back)',
+    keywords: ['plots', 'plot', 'charts', 'figures', 'workspace', 'size enrichment', 'v-plot', 'saved plots'],
+  },
+  'open-coaccessibility': {
+    label: 'Co-accessibility',
+    detail: 'Plots: the position × position co-accessibility matrix of the current view (the Co-accessibility panel moved here)',
+    keywords: ['co-accessibility', 'coaccessibility', 'coacc', 'matrix', 'correlation', 'position by position', 'virtual 4c', 'arcs'],
+    disabledReason: () => (hasDatasets() ? null : NEEDS_DATASET),
+  },
+  'new-plot-from-view': {
+    label: 'New plot from current view',
+    detail: 'Plots: a new Size enrichment plot of the view, by dataset, following the browser',
+    keywords: ['plot', 'new plot', 'chart', 'figure', 'current view', 'size enrichment'],
+    disabledReason: () => (hasDatasets() ? null : NEEDS_DATASET),
+  },
+  'toggle-feature-hub': { available: () => hubWorkspaceEnabled(), label: 'Open Feature hub', detail: 'The Feature hub, full window (H); the docked panel stays in the panel rail', keywords: ['hub', 'features', 'feature sets', 'scans'] },
+  'back-to-browser': { label: 'Back to browser', detail: 'Leave Plots or the Feature hub for the reads (Esc)', keywords: ['browser', 'reads', 'close plots', 'close hub'], disabledReason: () => (workspaceOpen() ? null : 'The browser is already showing') },
   'native-drop': null,  // the desktop app's dropped files
+  'open-meta-locus': {
+    label: 'Open BED as meta-locus…',
+    detail: "A BED file's sites pooled into one virtual locus (e.g. all promoters, TSS ± 10 kb): browse, cluster and plot it like any locus",
+    keywords: ['meta-locus', 'metalocus', 'bed', 'pool', 'promoters', 'sites', 'aggregate', 'virtual locus', 'tss', 'pileup', 'preview'],
+    // A Preview feature: hidden while previews are off (on by default).
+    available: () => !isPublic() && !previewHidden(META_LOCUS_PREVIEW),
+    preview: META_LOCUS_PREVIEW,
+    disabledReason: () => (hasDatasets() ? null : NEEDS_DATASET),
+  },
 };
 
 function isEditable(element: Element | null): boolean {
@@ -353,6 +405,14 @@ export const BUILTIN_COMMANDS: Partial<Record<AppCommandName, AppCommandHandler>
     if (!input) return false;
     input.focus();
     input.select();
+    return true;
+  },
+  // Tools › Find sequence (features/sequenceSearch): opens it, focused on its sequence box.
+  'find-sequence': () => {
+    if (isPublic()) return false;
+    const s = useBrowserStore.getState();
+    if (!findOpenAnalysisPanel(s.panels, 'sequence-search')) s.openAnalysisPanel('sequence-search' as Parameters<typeof s.openAnalysisPanel>[0]);
+    setTimeout(() => document.querySelector<HTMLTextAreaElement>('[data-testid="seqsearch-input"]')?.focus(), 50);
     return true;
   },
   locus: () => currentLocus(),
@@ -447,7 +507,13 @@ export const BUILTIN_COMMANDS: Partial<Record<AppCommandName, AppCommandHandler>
   // The Sort group's "By projection (t-SNE)", as if chosen there and run.
   'sort-by-projection': () => (hasClusters() ? runAppCommand('sort-reads', { by: 'projection' }) : false),
   'co-occupancy': () => openCoOccupancy(),
+  'open-plots': () => openPlots(),
+  'open-coaccessibility': () => (hasDatasets() ? openCoaccPlot() : false),
+  'new-plot-from-view': () => (hasDatasets() ? openPlots({ type: 'size-enrichment', where: 'view', groupBy: 'dataset' }) : false),
+  'toggle-feature-hub': () => toggleFeatureHub(),
+  'back-to-browser': () => closePlots(),
   'native-drop': args => receiveNativeDrop(args),
+  'open-meta-locus': () => (isPublic() || previewHidden(META_LOCUS_PREVIEW) ? false : openMetaLocusDialog()),
   'remove-all-matched-regions': () => removeMatchedGroups(),
 };
 

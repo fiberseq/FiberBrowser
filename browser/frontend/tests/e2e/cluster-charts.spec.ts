@@ -12,6 +12,8 @@ import type { ServerFixture } from './fixtures/server';
 
 test.use({ fixtureBam: 'demo' });
 
+const SHOTS = process.env.FIBERBROWSER_E2E_SHOTS;
+
 async function openAt(page: Page, server: ServerFixture) {
   await page.setViewportSize({ width: 1600, height: 1000 });
   await page.addInitScript(() => {
@@ -131,4 +133,74 @@ test('picking a cluster by its name filters Profiles and selects it in the app',
   // All shows every cluster again.
   await panel.getByTestId('profiles-picks-all').click();
   await expect(chart).toHaveAttribute('data-series', all.join(','));
+});
+
+test('metaprofile cards draw the full legend: a layer one cluster lacks keeps every plot the same width', async ({ server, page }) => {
+  test.setTimeout(240_000);
+  await openAt(page, server);
+  // A second channel on the default metaprofile (a secondary layer the demo BAM carries), so the cards have a legend.
+  const candidates = await getState(page, s => {
+    const track = s.compositeTracks.find((c: any) => c.id === '__default_metaprofile__');
+    return (track?.sources ?? []).filter((x: any) => !x.visible).map((x: any) => x.ref.ruleId);
+  });
+  const layer = ['fire', 'm6a', 'deam'].find(k => candidates.includes(k));
+  expect(layer, `a secondary layer among ${candidates.join(',')}`).toBeTruthy();
+  await page.getByTestId(`layer-checkbox-${layer}`).setChecked(true);
+  await cluster(page);
+  await panelButton(page, 'cluster-detail').click();
+  const panel = page.locator('[data-panel-content-type="cluster-detail"]');
+  await panel.locator('[data-analysis-tab="overview"]').click();
+  const cards = panel.getByTestId('cluster-overview-profile');
+  await expect.poll(() => panel.locator('canvas').count(), { timeout: 30_000 }).toBeGreaterThanOrEqual(2);
+
+  // Fixture: one cluster loses the layer (as when none of its reads carry it).
+  const dropped = await page.evaluate(key => {
+    const store = (window as any).__FIBERBROWSER_STORE__;
+    const profiles = store.getState().clusterProfiles as Record<string, Record<number, Record<string, number[]>>>;
+    const next: typeof profiles = {};
+    let target: number | null = null;
+    for (const [sk, byCluster] of Object.entries(profiles)) {
+      const ids = Object.keys(byCluster).map(Number).filter(c => (byCluster[c]?.[key]?.length ?? 0) > 0).sort((a, b) => a - b);
+      if (target == null) target = ids[0] ?? null;
+      next[sk] = Object.fromEntries(Object.entries(byCluster).map(([c, ch]) => {
+        if (Number(c) !== target) return [c, ch];
+        const rest = { ...ch }; delete rest[key]; return [c, rest];
+      }));
+    }
+    store.setState({ clusterProfiles: next });
+    return target;
+  }, layer!);
+  expect(dropped).not.toBeNull();
+  await page.waitForTimeout(800);
+  if (SHOTS) await panel.screenshot({ path: `${SHOTS}/overview_cards.png` });
+  await expect.poll(() => cards.count(), { timeout: 15_000 }).toBeGreaterThanOrEqual(2);
+  const lacking = panel.locator(`[data-testid="cluster-overview-profile"][data-cluster="${dropped}"]`);
+  await expect(lacking.getByTestId('plot-legend-missing')).toHaveCount(1, { timeout: 15_000 });
+  await expect(lacking.getByTestId('plot-legend-missing')).toHaveAttribute('title', /^no .+ in this cluster$/);
+
+  // Every card: the same legend (labels, order) and the plot at the same left edge and width.
+  const geometry = async (loc: ReturnType<Page['locator']>) => loc.evaluateAll(els => els.map(el => {
+    const chart = el.querySelector('[data-plot-left]') as HTMLElement | null;
+    return chart ? { legend: chart.dataset.legend, left: chart.dataset.plotLeft, width: chart.dataset.plotWidth } : null;
+  }));
+  const overview = await geometry(cards);
+  expect(overview.every(g => g != null)).toBe(true);
+  expect(new Set(overview.map(g => g!.legend)).size).toBe(1);
+  expect(overview[0]!.legend!.split('|').length).toBeGreaterThanOrEqual(2);
+  expect(new Set(overview.map(g => `${g!.left}:${g!.width}`)).size).toBe(1);
+  // The drawn canvases line up on screen too.
+  const boxes = await cards.evaluateAll(els => els.map(el => { const r = el.querySelector('canvas')!.getBoundingClientRect(); return `${Math.round(r.left)}:${Math.round(r.width)}`; }));
+  expect(new Set(boxes).size).toBe(1);
+
+  // Profiles: one chart per channel; the layer's chart lacks a cluster but keeps every cluster in its legend.
+  await panel.locator('[data-analysis-tab="profiles"]').click();
+  const charts = panel.getByTestId('cluster-profile-chart');
+  await expect.poll(() => charts.count(), { timeout: 30_000 }).toBeGreaterThanOrEqual(2);
+  const layerChart = panel.locator(`[data-testid="cluster-profile-chart"][data-layer="${layer}"]`);
+  await expect(layerChart.getByTestId('plot-legend-missing')).toHaveCount(1);
+  if (SHOTS) await panel.screenshot({ path: `${SHOTS}/profiles_tab.png` });
+  const profiles = await geometry(charts);
+  expect(profiles.every(g => g != null)).toBe(true);
+  expect(new Set(profiles.map(g => g!.legend)).size).toBe(1);
+  expect(new Set(profiles.map(g => `${g!.left}:${g!.width}`)).size).toBe(1);
 });

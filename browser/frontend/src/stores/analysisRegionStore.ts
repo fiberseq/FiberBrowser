@@ -1,12 +1,17 @@
 import { create } from 'zustand';
 import type { ClassRegionOutline } from './classRegionOutlineStore';
 
-export type AnalysisOutline = ClassRegionOutline & { color: string };
+export type AnalysisOutline = ClassRegionOutline & { color: string; selected?: boolean; onSelect?: (additive: boolean) => void };
 /** Ephemeral analysis regions share the existing ruler/read outline treatment. */
 export const useAnalysisRegionStore = create<{
   outlines: Record<string, AnalysisOutline[]>;
+  /** Invisible regions used for pointer hit-testing; only the hovered one is drawn. */
+  hitTargets: Record<string, AnalysisOutline[]>;
+  setHitTargets: (kind: string, targets: AnalysisOutline[]) => void;
   set: (kind: string, outlines: AnalysisOutline[]) => void;
-}>(set => ({ outlines: {}, set: (kind, outlines) => set(s => ({ outlines: { ...s.outlines, [kind]: outlines } })) }));
+}>(set => ({ outlines: {}, hitTargets: {},
+  setHitTargets: (kind, targets) => set(s => ({ hitTargets: { ...s.hitTargets, [kind]: targets } })),
+  set: (kind, outlines) => set(s => ({ outlines: { ...s.outlines, [kind]: outlines } })) }));
 
 /** Keep pooled-run outlines visible when the settings card closes. A new card takes ownership. */
 export function holdAnalysisRegions(kind: string, jobId: string, outlines: AnalysisOutline[]) {

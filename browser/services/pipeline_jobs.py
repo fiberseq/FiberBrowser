@@ -686,7 +686,7 @@ class JobManager:
                "reads": spec.get("reads"), "regions": spec.get("regions") or [],
                "options": spec.get("options") or {}, "option_labels": spec.get("option_labels") or [],
                "group": spec.get("group"), "command": spec.get("display_command"),
-               "auto_open": bool(spec.get("auto_open")), "user": spec.get("user"),
+               "auto_open": bool(spec.get("auto_open")), "opener": spec.get("opener"), "user": spec.get("user"),
                "input_kind": spec.get("input_kind") or "reads", "basecall": spec.get("basecall"), **state}
         if with_progress:
             out["progress"] = summarize_progress(read_events(self.progress_path(job_id), root=self.job_dir(job_id)))
@@ -702,6 +702,36 @@ class JobManager:
             with contextlib.suppress(KeyError):
                 out.append(self.describe(job_id))
         return out
+
+    def mark_opened(self, job_id: str, *, auto: bool = False, opener: Optional[str] = None) -> dict:
+        """Record that a finished run's result was opened in a browser (state ``opened_at``), once per job.
+
+        ``auto``: the automatic opening asks to claim it. Granted only to the page that started the run
+        (its ``opener`` token, recorded in the spec at submit), only for a finished run that asked for it,
+        and only the first time: whichever browser profile, origin or window asks later, or after a
+        restart, is refused. Otherwise (Open in browser): recorded the first time, so no automatic
+        opening follows. Returns {"claimed", "opened_at", "reason"}."""
+        with self._registry():
+            spec = self.spec(job_id)
+            state = self.state(job_id)
+            opened_at = state.get("opened_at")
+            if auto:
+                reason = None
+                if opened_at:
+                    reason = "already opened"
+                elif not spec.get("auto_open"):
+                    reason = "the run did not ask to be opened"
+                elif not spec.get("opener") or opener != spec.get("opener"):
+                    reason = "another page started the run"
+                elif state.get("status") != "done":
+                    reason = "the run has not finished"
+                if reason:
+                    return {"claimed": False, "opened_at": opened_at, "reason": reason}
+            if not opened_at:
+                opened_at = _now()
+                self._set_state(job_id, opened_at=opened_at, opened_by="auto" if auto else "user")
+                return {"claimed": True, "opened_at": opened_at, "reason": None}
+            return {"claimed": not auto, "opened_at": opened_at, "reason": None}
 
     def forget(self, job_id: str) -> None:
         with self._registry():
@@ -743,7 +773,9 @@ class JobManager:
             self._verified.discard(job_id)
             _write_json(self._paths(job_id)["state.json"], {
                 "status": "queued", "created": state.get("created") or _now(), "queued_at": _now(),
-                "attempt": int(state.get("attempt") or 1) + 1})
+                "attempt": int(state.get("attempt") or 1) + 1,
+                # Opened once already: a retry does not open it again by itself.
+                **({k: state[k] for k in ("opened_at", "opened_by") if state.get(k)})})
         self.ensure_running()
         return self.describe(job_id)
 

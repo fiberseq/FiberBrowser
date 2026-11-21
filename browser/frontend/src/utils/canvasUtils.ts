@@ -1,3 +1,4 @@
+import { projectReferenceContext } from '../features/differences/referenceCanvas';
 import { type DependencyList, useEffect, useSyncExternalStore } from 'react';
 import { getBrowserPerformanceProfile } from './performanceProfile';
 import { wrapForVectorCapture } from './vectorCapture';
@@ -66,10 +67,20 @@ export function useCanvasRenderVersion(): number {
  * @param height - CSS height in pixels
  * @returns The 2D context, already scaled for logical coordinates
  */
+export interface HighDpiCanvasOptions {
+  /**
+   * 'reference' (default): a canvas inside a linear reference surface replays its drawing through that surface's
+   * insertion-expanded axis (features/differences/referenceCanvas.ts). 'screen': the caller owns its coordinates
+   * (the graph panel, DESIGN_GRAPH_PANEL.md §1): render scale and vector capture only, never that projection.
+   */
+  coordinates?: 'reference' | 'screen';
+}
+
 export function setupHighDpiCanvas(
   canvas: HTMLCanvasElement,
   width: number,
-  height: number
+  height: number,
+  options: HighDpiCanvasOptions = {},
 ): CanvasRenderingContext2D | null {
   const ctx = canvas.getContext('2d');
   if (!ctx) return null;
@@ -89,7 +100,9 @@ export function setupHighDpiCanvas(
 
   // During an SVG/PDF export, also record the drawing (after the scale, so
   // the record is in logical coordinates).
-  return wrapForVectorCapture(canvas, ctx);
+  const captured = wrapForVectorCapture(canvas, ctx);
+  if (options.coordinates === 'screen') return captured;
+  return projectReferenceContext(canvas, captured, width, height);
 }
 
 /**

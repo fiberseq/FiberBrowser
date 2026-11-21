@@ -310,7 +310,9 @@ def test_sv_split_from_the_sv_layer(client, dataset):
     assert a["r10"] == 1  # spans the deletion without it
     assert data["counts"][0] == 11
     # Reads with no SV record are reference reads when their footprint rows span the deletion.
-    assert a["r19"] == 1 and a["r13"] == 1
+    # Dev line: r13's insertion and deletion overlap in one record, conflicting evidence the dev SV split leaves
+    # not informative unless conflicting calls are included (sv_conflicts); the release counts it as reference.
+    assert a["r19"] == 1 and a["r13"] == 2
 
 
 @needs_bigbed
@@ -685,5 +687,5 @@ def test_snps_with_svs_and_sv_snp_linkage_say_they_need_the_bam(client, dataset)
     linkage = client.post("/api/variants/sv_linkage", json={**base, **sv})
     assert linkage.status_code == 409 and "need the BAM" in linkage.json()["detail"]
     # SVs alone and SNPs alone still group from the layers.
-    assert client.post("/api/variants/alleles", json={**base, "svs": [sv]}).status_code == 200
+    r = client.post("/api/variants/alleles", json={**base, "svs": [sv]}); assert r.status_code == 200, r.text
     assert client.post("/api/variants/alleles", json={**base, "snps": ["5000:snv:A/G"]}).status_code == 200

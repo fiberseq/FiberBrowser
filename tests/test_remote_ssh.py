@@ -20,6 +20,18 @@ from remote_fixtures import LocalSshd, write_fixture_files
 from services.remote_sources import ssh_command as cmd
 
 
+@pytest.fixture(autouse=True)
+def _all_reads_including_uncalled(monkeypatch):
+    """These fixtures' synthetic reads carry no footprint calls; Min footprints hides such reads by default
+    (FiberBrowser 3.0.6), so this module's tests ask for all reads, as its "All reads, including uncalled" choice
+    (in-process calls and HTTP requests without an explicit hide_uncalled)."""
+    from services import signal_evidence
+    real = signal_evidence.request_hide_uncalled
+    monkeypatch.setattr(signal_evidence, "request_hide_uncalled",
+                        lambda default=True: real(default=False))
+
+
+
 # --------------------------------------------------------------------------
 # argv building (no ssh needed)
 # --------------------------------------------------------------------------
@@ -206,6 +218,28 @@ def test_redact_hides_tokened_urls():
     text = "Failed to open http://127.0.0.1:50123/" + "A" * 43 + "/f/projects/x.bam"
     assert "A" * 43 not in redact(text)
     assert "/projects/x.bam" in redact(text)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="ssh control sockets are POSIX-only")
+@pytest.mark.parametrize("tmpdir_len", [20, 120])
+def test_control_dir_stays_short_under_a_long_tmpdir(monkeypatch, tmpdir_len):
+    """The control folder's fallback checks its own length: with a long $TMPDIR (and a long default under HOME)
+    the socket folder still fits the Unix-socket limit, by falling back to /tmp."""
+    import tempfile
+    from services.remote_sources import ssh_source as ssh
+    made = []
+    monkeypatch.setattr(os, "makedirs", lambda path, mode=0o777, exist_ok=False: made.append(path))
+    monkeypatch.setattr(os, "chmod", lambda path, mode: None)
+    long_home = "/" + "h" * 100
+    tmp = "/t" + "x" * (tmpdir_len - 2)
+    monkeypatch.setenv(ssh.SSH_DIR_ENV, long_home)
+    monkeypatch.setattr(tempfile, "tempdir", tmp)
+    got = ssh._control_dir()
+    assert len(got) <= ssh.CONTROL_DIR_MAX and made == [got]
+    leaf = f"fb-ssh-{os.getuid()}"
+    assert got == (os.path.join(tmp, leaf) if tmpdir_len < 50 else os.path.join("/tmp", leaf))
+    # The socket path ssh builds from it fits macOS's 104-byte sun_path with room for ssh's suffix.
+    assert len(ssh._control_path("user@cluster.example")) + 17 < 104
 
 
 # --------------------------------------------------------------------------

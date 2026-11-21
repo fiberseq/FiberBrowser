@@ -2,15 +2,19 @@
 
 Each DAF read is one strand of one molecule: deamination shows as C->T on
 one strand and G->A on the other (deam events carry type 1 = C->T / Y and
-0 = G->A / R). A read's strand is the majority type among its events in the
-loaded region, as FiberHMM's class run assigns reads to its ::CT / ::GA
-channels. Reads with no events there have no strand call.
+0 = G->A / R). A read with an ``st:Z`` tag takes its strand from the tag, as FiberHMM does
+(the loader stores it as the read's ``strand``); otherwise the strand is the
+majority type among its events in the loaded region, as FiberHMM's class run
+assigns reads to its ::CT / ::GA channels. Reads with neither have no call.
 """
 from __future__ import annotations
 
 from typing import Iterable, Optional
 
 STRANDS = ("CT", "GA")
+# A read's ``strand`` when its st:Z tag is present but neither CT nor GA:
+# FiberHMM gives such a read no strand ('.'), whatever its R/Y marks say.
+ST_UNKNOWN = "."
 
 
 def normalize_strand(value: Optional[str]) -> Optional[str]:
@@ -27,6 +31,8 @@ def read_strand(read: dict) -> Optional[str]:
     cached = read.get("strand")
     if cached in STRANDS:
         return cached
+    if cached == ST_UNKNOWN:
+        return None  # an st tag FiberHMM reads as no strand: the marks do not decide
     ct = ga = 0
     for event in read.get("deam") or ():
         kind = event[1] if isinstance(event, (list, tuple)) and len(event) > 1 else None
@@ -36,7 +42,79 @@ def read_strand(read: dict) -> Optional[str]:
             ga += 1
     if ct == ga:
         return None
-    return "CT" if ct > ga else "GA"
+    strand = "CT" if ct > ga else "GA"
+    # Marks decoded from a record whose strand fiberhmm-lift reversed are in the target frame.
+    return _SWAP[strand] if read.get("lift_flipped") else strand
+
+
+def st_tag_strand(value) -> Optional[str]:
+    """FiberHMM's DAF strand from an ``st:Z`` tag: ``CT`` or ``GA``, else None.
+
+    Mirrors ``fiberhmm.core.bam_reader.extract_daf_iupac_positions`` (and
+    ``fiberhmm.inference.engine.daf_iupac_strand``): with an ``st`` tag the
+    tag decides; only without one does the R/Y majority in SEQ."""
+    value = str(value or "").strip().upper()
+    return value if value in STRANDS else None
+
+
+def seq_ry_strand(sequence: Optional[str]) -> Optional[str]:
+    """The R/Y majority of a SEQ (Y = C->T marks, R = G->A): FiberHMM's rule
+    when a read has no ``st`` tag. None on a tie or no marks."""
+    upper = (sequence or "").upper()
+    y, r = upper.count("Y"), upper.count("R")
+    if y == r:
+        return None
+    return "CT" if y > r else "GA"
+
+
+_SWAP = {"CT": "GA", "GA": "CT"}
+
+
+def lift_flipped(read) -> bool:
+    """A ``fiberhmm-lift`` record whose strand the lift reversed: its ``Yp:Z`` source
+    locus (``<contig>:<pos>:<strand>``) names the other strand. FiberHMM then swapped
+    ``st`` to describe the reverse-complemented SEQ (the target frame)."""
+    try:
+        if not read.has_tag("Yp"):
+            return False
+        source = str(read.get_tag("Yp")).rsplit(":", 1)[-1]
+    except (AttributeError, KeyError, ValueError):
+        return False
+    return source in ("+", "-") and source != ("-" if read.is_reverse else "+")
+
+
+def record_strand_fields(read) -> dict:
+    """``{'strand': 'CT'|'GA'}`` from a record's ``st:Z`` (FiberHMM's rule; it
+    then decides the read's strand over its deamination marks, see
+    :func:`read_strand`), plus ``strand_conflict: True`` when the SEQ's R/Y
+    marks say the other strand (``st`` not swapped when a lift reversed the
+    read, ``fiberhmm-lift`` repairs it). An ``st`` that is neither CT nor GA
+    gives ``{'strand': '.'}`` (present, no strand, as in FiberHMM); empty
+    without an ``st`` tag (the marks decide)."""
+    # Strand labels are in the molecule frame everywhere (owner, 26 Oct): a record whose strand
+    # fiberhmm-lift reversed shows its source st (as live lift keeps it), while the R/Y check
+    # below compares the tag as written with the SEQ it describes (both target frame).
+    flipped = lift_flipped(read)
+    try:
+        if not read.has_tag("st"):
+            if flipped:
+                seq_strand = seq_ry_strand(getattr(read, "query_sequence", None))
+                # Without R/Y bases the strand comes later from decoded marks (MD mismatches) in the target
+                # frame: read_strand swaps that majority back for a record marked lift_flipped.
+                return {"strand": _SWAP[seq_strand], "strand_frame": "molecule"} if seq_strand else {"lift_flipped": True}
+            return {}
+        strand = st_tag_strand(read.get_tag("st"))
+    except (AttributeError, KeyError):
+        return {}
+    if strand is None:
+        return {"strand": ST_UNKNOWN}
+    seq_strand = seq_ry_strand(getattr(read, "query_sequence", None))
+    out = {"strand": _SWAP[strand] if flipped else strand}
+    if flipped:
+        out["strand_frame"] = "molecule"
+    if seq_strand is not None and seq_strand != strand:
+        out["strand_conflict"] = True
+    return out
 
 
 _MAX_CACHED_CALLS = 500_000
@@ -59,10 +137,39 @@ def strand_calls(state, dataset_id: Optional[str]) -> dict:
     return calls
 
 
+def _lifted_strand(read: dict, calls: Optional[dict]) -> Optional[str]:
+    """A lifted row's strand by molecule (graph features review): its cohort resolved it over every record of the
+    molecule (prepare_lift_cohort); an explicit call is the molecule's and is cached; a call from marks defers to one
+    cached before (another window, the graph view) and is cached; a molecule left without one (a tie, no marks) takes
+    the cached call, else none. Never inferred from one record of the molecule alone."""
+    mol = (read.get("live_lift") or {}).get("molecule")
+    s = read.get("strand")
+    explicit = s in STRANDS and not read.get("_fiberbrowser_inferred_strand")
+    if explicit:
+        if calls is not None and mol is not None:
+            calls[mol] = s
+        return s
+    if s == ST_UNKNOWN and not read.get("_fiberbrowser_inferred_strand"):
+        return None
+    known = calls.get(mol) if calls is not None and mol is not None else None
+    if known is not None:
+        return known
+    if s in STRANDS:
+        if calls is not None and mol is not None:
+            calls[mol] = s
+        return s
+    return None
+
+
 def cached_read_strand(read: dict, calls: Optional[dict]) -> Optional[str]:
-    if calls is None:
+    if read.get("live_lift"):
+        return _lifted_strand(read, calls)
+    if calls is None or ((read.get("strand") in STRANDS or read.get("strand") == ST_UNKNOWN)
+                         and not read.get("_fiberbrowser_inferred_strand")):
+        # A record's own st:Z decides for that record; the per-name cache is
+        # only for strands called from marks (records sharing a name can differ).
         return read_strand(read)
-    read_id = read.get("id")
+    read_id = (read.get("live_lift") or {}).get("molecule") or read.get("analysis_id") or read.get("id")
     known = calls.get(read_id)
     if known is not None:
         return known

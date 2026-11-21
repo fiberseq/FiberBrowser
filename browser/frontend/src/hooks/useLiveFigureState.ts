@@ -12,7 +12,7 @@ const PUSH_DEBOUNCE_MS = 1500;
 const WATCHED_KEYS = [
   ...AUTO_SAVE_WATCHED_KEYS,
   'chrom', 'start', 'end', 'datasets', 'orthogonalTracks', 'slotOrder',
-  'enabledCigarTypes', 'svDisplayEnabled', 'svMinLen', 'svMinSupport', 'svSplits', 'clusterGroupLabels', 'readRowHeight', 'fillReadHeight', 'showCoverageHistogram',
+  'enabledCigarTypes', 'svDisplayEnabled', 'svMinLen', 'svMinSupport', 'svConflictOptions', 'svSplits', 'clusterGroupLabels', 'readRowHeight', 'fillReadHeight', 'showCoverageHistogram',
   'isReversed', 'collapsedRows', 'uiScale', 'darkMode', 'fullViewPanelId', 'readScrollOffsets',
 ] as const;
 

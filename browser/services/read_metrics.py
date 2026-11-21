@@ -11,6 +11,8 @@ from bisect import bisect_left, bisect_right
 from typing import Optional
 
 import numpy as np
+from services.read_selection import read_body_spans, body_overlap
+from services.clustering_features import nuc_item_matches, nuc_rule_conditions, nuc_size_index
 
 
 DEFAULT_SAMPLE_SEED = "fiberbrowser-analysis"
@@ -81,7 +83,7 @@ def compact_reads_to_dataframe(compact_reads, region_start, region_end):
     rows = []
     read_ids = []
     for read in compact_reads:
-        read_id = read["id"]
+        read_id = read.get("analysis_id") or read["id"]
         read_ids.append(read_id)
 
         row = np.full(len(positions), 2, dtype=np.float32)
@@ -114,10 +116,11 @@ def read_covers_regions(read: dict, regions: list) -> bool:
     if not targets:
         return True
 
+    body_spans = read_body_spans(read)
     spans = sorted(
-        (int(iv[0]), int(iv[1]))
-        for iv in intervals
-        if len(iv) >= 2 and iv[1] > iv[0]
+        (int(max(iv[0], a)), int(min(iv[1], b)))
+        for iv in intervals if len(iv) >= 2 for a, b in body_spans
+        if min(iv[1], b) > max(iv[0], a)
     )
     if not spans:
         return False
@@ -159,7 +162,7 @@ def sample_stable_by_id(reads: list, n: int, seed: str = DEFAULT_SAMPLE_SEED) ->
 
     def stable_key(item):
         idx, read = item
-        read_id = str(read.get("id", idx))
+        read_id = str(read.get("analysis_id") or read.get("id", idx))
         digest = hashlib.blake2b(f"{seed}:{read_id}".encode(), digest_size=8).digest()
         return digest, read_id, idx
 
@@ -200,13 +203,7 @@ def sample_by_coverage(reads: list, n: int, region_start: int, region_end: int) 
         intervals = read.get("intervals")
         if not intervals:
             return 0
-        read_start = intervals[0][0] + region_start
-        read_end = intervals[-1][1] + region_start
-        overlap_start = max(read_start, region_start)
-        overlap_end = min(read_end, region_end)
-        if overlap_end <= overlap_start:
-            return 0
-        return (overlap_end - overlap_start) / region_width
+        return body_overlap(read, 0, region_width) / region_width
 
     return heapq.nlargest(n, reads, key=read_coverage)
 
@@ -233,13 +230,11 @@ def compute_metaprofile_from_compact_reads(
         if not primary_intervals:
             continue
 
-        read_start = primary_intervals[0][0]
-        read_end = primary_intervals[-1][1]
-        s_cov = max(0, read_start)
-        e_cov = min(region_width, read_end)
-        if e_cov > s_cov:
-            cov_starts.append(s_cov)
-            cov_ends.append(e_cov)
+        for a, b in read_body_spans(read):
+            s_cov, e_cov = max(0, a), min(region_width, b)
+            if e_cov > s_cov:
+                cov_starts.append(s_cov)
+                cov_ends.append(e_cov)
 
         profile_intervals = get_layer_intervals(read, layer) if layer else primary_intervals
 
@@ -363,6 +358,14 @@ def nuc_layer_duplicates_primary(read: dict) -> bool:
     return True
 
 
+# Layers that are not footprints: accessibility and marks (deamination opportunities included), the nucleosome
+# module's per-footprint annotations (nucsz repeats each footprint; nucseg holds segments), its per-molecule scalar
+# groups, and the derived interval layers built over other calls: regularity tiles (nucreg) and patches (nucpatch)
+# (services/nuc), and the scans' state groups over footprints (fpcls) and NFRs (nfrvar) (services/scan/overlay.py).
+NON_FOOTPRINT_LAYERS = frozenset({"msp", "fire", "m6a", "mod", "m5c", "deam", "deam_opportunity", "nucsz", "nucseg",
+                                  "nucmol", "nfrmol", "nucreg", "nucpatch", "fpcls", "nfrvar"})
+
+
 def get_layer_intervals(read: dict, layer: Optional[str]):
     """Return primary intervals or intervals from a named compact-read layer."""
     if layer is None:
@@ -371,7 +374,7 @@ def get_layer_intervals(read: dict, layer: Optional[str]):
     if layer == "all_fp":
         out = []
         seen = set()
-        non_fp_layers = {"msp", "fire", "m6a", "mod", "m5c", "deam"}
+        non_fp_layers = NON_FOOTPRINT_LAYERS
         for layer_name, layer_data in layers.items():
             if layer_name in non_fp_layers:
                 continue
@@ -502,6 +505,7 @@ def compute_compact_metaprofile_payload(
 
     cov_starts = []
     cov_ends = []
+    cov_reads = []
     profile_points = {
         name: ([], [], [], [])
         for name in profile_defs
@@ -511,25 +515,32 @@ def compute_compact_metaprofile_payload(
         if not primary_intervals:
             continue
 
-        _intervals, primary_starts, primary_ends = _get_interval_index(read)
-        read_start = int(primary_starts[0]) - coordinate_offset if primary_starts else 0
-        read_end = int(primary_ends[-1]) - coordinate_offset if primary_ends else 0
         # The read's coverage spans every layer and FIRE interval it carries, whichever profiles were asked for (as in
         # ReadTrack and the headless engine): an MSP past the last footprint, with terminal gaps hidden, must not add
-        # signal without coverage, and the denominator must not depend on the requested sources.
-        for layer_data in (read.get("layers") or {}).values():
-            if not isinstance(layer_data, dict):
-                continue
-            # Bounds of the intervals as they are now (not the cached index, which keys on identity and length).
-            called = [interval for interval in layer_data.get("intervals") or ()
-                      if len(interval) >= 3 and int(interval[2]) > 0]
-            if called:
-                read_start = min(read_start, min(int(interval[0]) for interval in called) - coordinate_offset)
-                read_end = max(read_end, max(int(interval[1]) for interval in called) - coordinate_offset)
-        for interval in read.get("fire") or []:
-            if len(interval) >= 2:
-                read_start = min(read_start, int(interval[0]) - coordinate_offset)
-                read_end = max(read_end, int(interval[1]) - coordinate_offset)
+        # signal without coverage, and the denominator must not depend on the requested sources. The body spans
+        # (live-lift connectors stay holes) widen at the read's outer ends.
+        body_spans = [[int(a), int(b)] for a, b in read_body_spans(read)]
+        if body_spans:
+            lo, hi = body_spans[0][0], body_spans[-1][1]
+            for layer_data in (read.get("layers") or {}).values():
+                if not isinstance(layer_data, dict):
+                    continue
+                # Bounds of the intervals as they are now (not the cached index, which keys on identity and length).
+                called = [interval for interval in layer_data.get("intervals") or ()
+                          if len(interval) >= 3 and int(interval[2]) > 0]
+                if called:
+                    lo = min(lo, min(int(interval[0]) for interval in called))
+                    hi = max(hi, max(int(interval[1]) for interval in called))
+            for interval in read.get("fire") or ():
+                if len(interval) >= 2:
+                    lo = min(lo, int(interval[0]))
+                    hi = max(hi, int(interval[1]))
+            body_spans[0][0] = min(body_spans[0][0], lo)
+            body_spans[-1][1] = max(body_spans[-1][1], hi)
+        for a, b in body_spans:
+            cov_starts.append(a - coordinate_offset)
+            cov_ends.append(b - coordinate_offset)
+            cov_reads.append(read_index)
 
         view_start = coordinate_offset
         view_end = coordinate_offset + region_width
@@ -543,6 +554,7 @@ def compute_compact_metaprofile_payload(
                 else:
                     profile_intervals = get_layer_intervals(read, source_layer)
             starts_out, ends_out, sizes_out, reads_out = profile_points[name]
+            # Bulk extends (one pass per column) instead of four appends per interval.
             kept = [interval for interval in profile_intervals if len(interval) >= 2]
             if not kept:
                 continue
@@ -551,8 +563,6 @@ def compute_compact_metaprofile_payload(
             sizes_out.extend([int(interval[2]) if len(interval) >= 3 else int(interval[1]) - int(interval[0])
                               for interval in kept])
             reads_out.extend([read_index] * len(kept))
-        cov_starts.append(read_start)
-        cov_ends.append(read_end)
 
     if cov_starts:
         starts = np.clip(np.array(cov_starts, dtype=np.float64), 0, region_width)
@@ -563,7 +573,9 @@ def compute_compact_metaprofile_payload(
             # Half-open [s, e): the last bin is the one before ceil(e / bin), as ReadTrack and the headless engine
             # bin (also when bins are fractional bases wide).
             end_bins = np.clip(np.ceil(ends[valid] / bin_size).astype(np.intp) - 1, 0, resolution - 1)
-            coverage_diff = _interval_bin_diff(start_bins, end_bins, resolution)
+            # A read's body spans count it once per bin (two spans meeting inside a bin).
+            read_ids = np.array(cov_reads, dtype=np.intp)[valid]
+            coverage_diff = _read_union_bin_diff(read_ids, start_bins, end_bins, resolution)
 
     profile_diffs = {}
     for name, (_source_layer, min_size, max_size) in profile_defs.items():
@@ -637,8 +649,12 @@ def compute_rule_metric(
         return gene_regions
 
     gates = rule.get("quality_gates") or rule.get("qualityGates") or []
+    # A labeling rule's nucleosome conditions read each item's nucsz mark (an item without one fails them).
+    nuc_conditions = nuc_rule_conditions(rule)
+    nuc_index = nuc_size_index(read) if nuc_conditions is not None else None
     count = 0
-    for int_start, int_end, size, qualities in _rule_interval_entries(read, layer, bool(gates)):
+    for int_start, int_end, size, qualities, layer_name in _rule_interval_entries(
+            read, layer, bool(gates) or nuc_conditions is not None):
         if size <= 0:
             continue
 
@@ -649,6 +665,8 @@ def compute_rule_metric(
         # The labeling rule's quality gates, as the browser applies them (a
         # missing quality dimension fails the gate).
         if gates and not _quality_gates_pass(rule, qualities):
+            continue
+        if not nuc_item_matches(nuc_conditions, nuc_index, layer_name, int_start, int_end, size):
             continue
 
         abs_midpoint = region_start + (int_start + int_end) // 2
@@ -681,16 +699,17 @@ def compute_rule_metric(
 
 
 def _rule_interval_entries(read: dict, layer: Optional[str], with_qualities: bool):
-    """(start, end, size, qualities) for each interval a rule metric counts;
-    the qualities only when a rule has gates to check."""
+    """(start, end, size, qualities, layer name) for each interval a rule metric counts (layer name None: primary
+    footprints); the qualities and each interval's own layer only when a rule has gates or nucleosome conditions
+    to check."""
     if not with_qualities:
         for interval in get_layer_intervals(read, layer):
-            yield interval[0], interval[1], interval[2], {}
+            yield interval[0], interval[1], interval[2], {}, layer
         return
     from services.clustering_features import _interval_quality_map, _iter_layer_interval_entries
     if layer == "all_fp":
         seen = set()
-        non_fp_layers = {"msp", "fire", "m6a", "mod", "m5c", "deam"}
+        non_fp_layers = NON_FOOTPRINT_LAYERS
         for layer_name, layer_data in (read.get("layers") or {}).items():
             if layer_name in non_fp_layers:
                 continue
@@ -701,10 +720,22 @@ def _rule_interval_entries(read: dict, layer: Optional[str], with_qualities: boo
                 if key in seen:
                     continue
                 seen.add(key)
-                yield interval[0], interval[1], interval[2], _interval_quality_map(layer_data, idx)
+                yield interval[0], interval[1], interval[2], _interval_quality_map(layer_data, idx), layer_name
         return
-    for int_start, int_end, size, _layer_name, qualities in _iter_layer_interval_entries(read, layer):
-        yield int_start, int_end, size, qualities
+    for int_start, int_end, size, layer_name, qualities in _iter_layer_interval_entries(read, layer):
+        yield int_start, int_end, size, qualities, layer_name
+
+
+def rule_layer_request(rule: Optional[dict], include_layers: bool,
+                       requested_layers: Optional[list[str]]) -> tuple[bool, Optional[list[str]]]:
+    """(include_layers, requested_layers) for a rule metric: a rule with nucleosome conditions also needs the nucsz
+    marks (loaded with their bytes: AnalysisReadQuery keeps layer qualities by default). Other rules unchanged."""
+    if nuc_rule_conditions(rule) is None:
+        return include_layers, requested_layers
+    if requested_layers is None:
+        # Every layer already (nucsz included), or none yet: just the marks.
+        return True, (None if include_layers else ["nucsz"])
+    return True, list(requested_layers) + ([] if "nucsz" in requested_layers else ["nucsz"])
 
 
 def _quality_gates_pass(rule: dict, qualities: dict) -> bool:

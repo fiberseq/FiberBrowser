@@ -1,0 +1,93 @@
+{
+ "cache": {
+  "broad": "0/20",
+  "methylation": 0
+ },
+ "chroms": 195,
+ "circular_chroms": {},
+ "config": {
+  "prefetch_multiplier": 20
+ },
+ "current_genome": null,
+ "datasets": 1,
+ "fasta_error": null,
+ "fasta_path": null,
+ "features": {
+  "copilot": true
+ },
+ "gene_count": 0,
+ "genome_mismatch": null,
+ "has_fasta": false,
+ "has_fire": false,
+ "has_gtf": false,
+ "initial_position": {
+  "chrom": "chr19",
+  "end": 47517640,
+  "gene_name": "",
+  "start": 47515640
+ },
+ "overlays": 0,
+ "plasmids": {},
+ "primer_config": {
+  "blast_db": null,
+  "blast_db_warning": null,
+  "blast_tool": {
+   "blastn": {
+    "hint": "",
+    "name": "blastn",
+    "ok": true,
+    "path": "/data/blastn",
+    "rejected": [
+     [
+      "/data/blastn",
+      "not found"
+     ],
+     [
+      "/data/blastn",
+      "not found"
+     ],
+     [
+      "/data/blastn",
+      "not found"
+     ]
+    ],
+    "source": "PATH",
+    "version": "2.17.0+"
+   },
+   "hint": "",
+   "label": "BLAST+ 2.17.0+ (/data/blastn)",
+   "makeblastdb": {
+    "hint": "",
+    "name": "makeblastdb",
+    "ok": true,
+    "path": "/data/makeblastdb",
+    "rejected": [
+     [
+      "/data/makeblastdb",
+      "not found"
+     ],
+     [
+      "/data/makeblastdb",
+      "not found"
+     ],
+     [
+      "/data/makeblastdb",
+      "not found"
+     ]
+    ],
+    "source": "PATH",
+    "version": "2.17.0+"
+   },
+   "ok": true
+  },
+  "configured": false,
+  "current_genome": null,
+  "fasta": null,
+  "fasta_local": null,
+  "plasmids": []
+ },
+ "primers_enabled": true,
+ "public_mode": false,
+ "startup_reference": false,
+ "track_count": 0
+}

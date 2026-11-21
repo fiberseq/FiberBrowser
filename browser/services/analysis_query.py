@@ -47,6 +47,7 @@ class AnalysisReadQuery:
     start: int
     end: int
     dataset_ids: list[str]
+    purpose: str = "analysis"
     spanning: bool = False
     sample_seed: str = DEFAULT_SAMPLE_SEED
     read_ids_by_dataset: dict[str, list[str]] = field(default_factory=dict)
@@ -65,6 +66,8 @@ class AnalysisReadQuery:
     legacy_nuc_min_size: int = 90
     # DAF-seq panels showing one strand: dataset id -> 'CT' / 'GA'.
     strand_by_dataset: dict[str, str] = field(default_factory=dict)
+    lift_hap_by_dataset: dict[str, str] = field(default_factory=dict)
+    cohort_descriptions: dict[str, dict] = field(default_factory=dict, compare=False)
 
     @classmethod
     def from_request(
@@ -90,6 +93,8 @@ class AnalysisReadQuery:
         infer_legacy_layers: Optional[bool] = None,
         legacy_nuc_min_size: Optional[int] = None,
         strand_by_dataset: Optional[Mapping[str, str]] = None,
+        capability: str = "analysis",
+        lift_hap_by_dataset: Optional[Mapping[str, str]] = None,
     ) -> "AnalysisReadQuery":
         resolved_dataset_ids = resolve_dataset_ids(state, dataset_ids=dataset_ids, dataset_id=dataset_id)
         if int(getattr(min_footprints, "default", min_footprints) or 0) < 0:
@@ -97,6 +102,20 @@ class AnalysisReadQuery:
             min_footprints = 0
             if _resolve_explicit(hide_uncalled) is None:
                 hide_uncalled = False
+        # Unsupported capabilities refuse explicit lifted scopes and leave
+        # lifted datasets out of implicit all-dataset scopes (default-deny).
+        from services.lift.capability import SUPPORTED, is_lifted, require_for_ids
+        normalized_read_ids = _normalize_read_id_map(state, read_ids_by_dataset)
+        if read_ids_by_dataset:
+            # Selected ids name datasets even when the all-datasets scope
+            # omits lifted panels; never reinterpret their rows as BigBed.
+            require_for_ids(state, normalized_read_ids.keys(), capability)
+        if capability not in SUPPORTED:
+            if dataset_ids is None and dataset_id is None:
+                datasets = getattr(state, "datasets", {}) or {}
+                resolved_dataset_ids = [d for d in resolved_dataset_ids if not is_lifted(datasets.get(d))]
+            else:
+                require_for_ids(state, resolved_dataset_ids, capability)
         from services.read_strand import normalize_strand
         strands = {str(k): s for k, v in (strand_by_dataset or {}).items() if (s := normalize_strand(v))}
         if strands:
@@ -107,8 +126,9 @@ class AnalysisReadQuery:
             end=int(end),
             dataset_ids=resolved_dataset_ids,
             spanning=bool(spanning),
+            purpose="display" if capability in ("compact_reads", "compact_all") else "analysis",
             sample_seed=normalize_sample_seed(sample_seed),
-            read_ids_by_dataset=_normalize_read_id_map(state, read_ids_by_dataset),
+            read_ids_by_dataset=normalized_read_ids,
             singleton_read_ids=(
                 None if read_ids is None else [str(read_id) for read_id in read_ids if str(read_id)]
             ),
@@ -130,6 +150,7 @@ class AnalysisReadQuery:
                 else legacy_nuc_min_size
             ),
             strand_by_dataset=strands,
+            lift_hap_by_dataset=dict(lift_hap_by_dataset or {}),
         )
 
     @property
@@ -157,8 +178,9 @@ class AnalysisReadQuery:
             return reads
         if len(read_ids) == 0:
             return []
-        requested = set(read_ids)
-        filtered = [read for read in reads if read.get("id") in requested]
+        from services.read_selection import read_matches_id_filter, with_graph_record_keys
+        requested = with_graph_record_keys(read_ids)
+        filtered = [read for read in reads if read_matches_id_filter(read, requested)]
         return filtered if filtered or not fallback_to_all else reads
 
     def cap_reads(self, reads: list[dict], *, namespace: str, label: str) -> list[dict]:
@@ -189,15 +211,21 @@ class AnalysisReadQuery:
         legacy_nuc_min_size: Optional[int] = None,
         broad_prefetch_multiplier: Optional[int] = None,
         force_reload: bool = False,
+        lift_hap: Optional[str] = None,
+        strand: Optional[str] = None,
     ) -> WorkingSet:
-        ws = self._build_working_set(state, dataset_id, chrom=chrom, start=start, end=end, spanning=spanning,
+        from services.lift.cohort import using_lift_cohort
+        with using_lift_cohort(self.purpose, lift_hap or self.lift_hap_by_dataset.get(dataset_id), strand or self.strand_by_dataset.get(dataset_id)):
+            ws = self._build_working_set(state, dataset_id, chrom=chrom, start=start, end=end, spanning=spanning,
                                      read_ids=read_ids, include_methylation=include_methylation,
                                      include_layers=include_layers, requested_layers=requested_layers,
                                      include_layer_qualities=include_layer_qualities, quality_filters=quality_filters,
                                      infer_legacy_layers=infer_legacy_layers, legacy_nuc_min_size=legacy_nuc_min_size,
                                      broad_prefetch_multiplier=broad_prefetch_multiplier, force_reload=force_reload)
-        strand = self.strand_by_dataset.get(dataset_id)
-        if not strand:
+        if getattr(ws, "lift_cohort", None):
+            self.cohort_descriptions[dataset_id] = ws.lift_cohort
+        strand = strand or self.strand_by_dataset.get(dataset_id)
+        if not strand or getattr(state.datasets.get(dataset_id), "data_type", None) == "bam_livelift":
             return ws
         from services.read_strand import filter_reads_by_strand, strand_calls, strand_totals
         reads = filter_reads_by_strand(ws.reads, strand, strand_calls(state, dataset_id))

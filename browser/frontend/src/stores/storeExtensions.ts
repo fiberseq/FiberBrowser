@@ -37,6 +37,8 @@ export interface StoreExtension {
   serialize: (state: BrowserState) => Record<string, unknown>;
   /** From a snapshot or crash recovery: what to put back (keys left out are left alone). */
   restoreSnapshot?: (saved: Record<string, unknown>) => Record<string, unknown>;
+  /** Crash recovery only, when it differs from an undo step (``restoreSnapshot`` otherwise): what to put back. */
+  recover?: (saved: Record<string, unknown>) => Record<string, unknown>;
   /** Session import, with the settings (before the view is applied). */
   importSettings?: (frontend: Record<string, unknown>) => Record<string, unknown>;
   /** Session import, after the view is applied: the session's own state, or the reset for a session without it. */
@@ -47,6 +49,9 @@ export interface StoreExtension {
   onPeakRuleChange?: (state: BrowserState, id: string, updates: Partial<PeakRule> | null) => Partial<BrowserState>;
   persist?: (state: BrowserState, previous: BrowserState) => void;
   settingsHistory?: SettingsHistoryWatch[];
+  /** Its keys never change what read lanes or tracks show (a saved list, a bookmark): an undo/redo step that changes
+   * only them is applied alone, with no repaint of the reads (historySlice). */
+  refreshFree?: boolean;
 }
 
 const extensions: StoreExtension[] = [];
@@ -88,7 +93,17 @@ export function restoreExtensions(saved: Record<string, unknown>): Record<string
   return Object.assign({}, ...extensions.map(ext => ext.restoreSnapshot?.(saved) ?? {}));
 }
 
+/** What the extensions put back when a crashed or quit page is recovered (``recover``, else ``restoreSnapshot``). */
+export function recoverExtensions(saved: Record<string, unknown>): Record<string, unknown> {
+  return Object.assign({}, ...extensions.map(ext => (ext.recover ?? ext.restoreSnapshot)?.(saved) ?? {}));
+}
+
 /** The keys the extensions save (autosave watches them). */
+/** The keys of extensions marked ``refreshFree``. */
+export function refreshFreeKeys(): ReadonlySet<string> {
+  return new Set(extensions.filter(e => e.refreshFree).flatMap(e => e.keys));
+}
+
 export function extensionKeys(): string[] {
   return extensions.flatMap(ext => ext.keys);
 }

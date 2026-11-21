@@ -8,11 +8,44 @@ from concurrent.futures import ProcessPoolExecutor
 
 _messages = None
 _cancel = None
-_decode_lock = threading.Lock()
+# Decode pools in flight: by default one at a time. A pool that names a
+# ``capacity`` shares it with other such pools (a view's datasets decoded
+# together), each taking its own worker count.
+_pools = threading.Condition()
+_pool_workers = 0
+_exclusive = False
+
+
+def _enter_pool(workers, capacity):
+    global _pool_workers, _exclusive
+    from services.background_work import checkpoint
+    while True:
+        with _pools:
+            if capacity is None:
+                if not _exclusive and _pool_workers == 0:
+                    _exclusive = True
+                    return
+            elif not _exclusive and (_pool_workers == 0 or _pool_workers + workers <= capacity):
+                _pool_workers += workers
+                return
+            _pools.wait(0.05)
+        checkpoint()
+
+
+def _leave_pool(workers, capacity):
+    global _pool_workers, _exclusive
+    with _pools:
+        if capacity is None:
+            _exclusive = False
+        else:
+            _pool_workers -= workers
+        _pools.notify_all()
 
 
 def _initialize(messages, cancel):
     global _messages, _cancel
+    from services.worker_watchdog import watch_parent
+    watch_parent()              # exit with the server, never linger as an orphan
     _messages, _cancel = messages, cancel
     # A cancelled consumer stops draining the pipe. Workers must be able to
     # exit without waiting for their queue feeder to flush discarded blocks.
@@ -61,10 +94,15 @@ def decode_bam_partition(path, chrom, start, end, options, partition):
     indexed = packed_display.set(options.pop('_packed_display', False))
     filters = options.pop('_signal_filters', None)
     binary = binary_read_context.set(options.pop('_binary_transport', False))
+    # Only these read names (a first paint's drawn reads, services/first_paint.py): the server's explicit scope.
+    only_ids = options.pop('_only_ids', None)
+    from services.read_sampling import Sampler, sampling
+    from contextlib import nullcontext
+    scope = sampling(Sampler(1, only_ids=frozenset(only_ids), exact_ids=True)) if only_ids is not None else nullcontext()
     compact = packed_decode.set(True)
     part = decode_partition.set(partition)
     try:
-        with signal_filters_for_request(filters):
+        with signal_filters_for_request(filters), scope:
             return build_compact_reads_from_bam(path, chrom, start, end, **options)
     finally:
         from services.bam_handles import discard_bam_handle
@@ -75,10 +113,11 @@ def decode_bam_partition(path, chrom, start, end, options, partition):
         packed_display.reset(indexed)
 
 
-def parallel_bam_reads(path, chrom, start, end, options, workers):
-    """Stream bounded batches; name partitions preserve duplicate occurrences."""
+def parallel_bam_reads(path, chrom, start, end, options, workers, *, capacity=None):
+    """Stream bounded batches; name partitions preserve duplicate occurrences.
+    ``capacity``: run alongside other pools that name it, within that many workers in all."""
     return _parallel_jobs([(path, chrom, start, end, options, (i, workers), 0)
-                           for i in range(workers)], workers)
+                           for i in range(workers)], workers, capacity=capacity)
 
 
 def parallel_bam_files(paths, chrom, start, end, options, workers, *, retain_packed=False):
@@ -88,7 +127,7 @@ def parallel_bam_files(paths, chrom, start, end, options, workers, *, retain_pac
                           min(workers, len(paths)), retain_packed=retain_packed)
 
 
-def _parallel_jobs(jobs, workers, *, retain_packed=False):
+def _parallel_jobs(jobs, workers, *, retain_packed=False, capacity=None):
     from services.background_work import checkpoint
     from services.packed_reads import _iter_block
     from services.read_stream import decoded_read_sink
@@ -99,8 +138,7 @@ def _parallel_jobs(jobs, workers, *, retain_packed=False):
     shared = {'_binary_transport': binary_read_context.get(), '_signal_filters': active_signal_filters()}
     if retain_packed:
         shared['_packed_display'] = True
-    while not _decode_lock.acquire(timeout=0.05):
-        checkpoint()
+    _enter_pool(workers, capacity)
     messages = cancel = pool = None
     try:
         context = multiprocessing.get_context('spawn')
@@ -154,4 +192,4 @@ def _parallel_jobs(jobs, workers, *, retain_packed=False):
                 if messages is not None:
                     messages.close()
             finally:
-                _decode_lock.release()
+                _leave_pool(workers, capacity)

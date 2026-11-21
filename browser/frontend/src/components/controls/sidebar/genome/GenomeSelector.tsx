@@ -5,8 +5,10 @@ import { useBrowserStore } from '../../../../stores/browserStore';
 import { findChromInfo } from '../../../../utils/chromAliases';
 import { autoSaveNow } from '../../../../hooks/useAutoSave';
 import { genomeLoadHasFasta } from '../../../../utils/genomeAutoload';
+import { keptFastaPath } from '../../../../utils/registryGenomeLoad';
 import { GenomeSuggestionHint } from './GenomeSuggestionHint';
 import { CheckCircle, Circle, X } from '../../../ui/Icons';
+import { markReferenceChosen } from '../../../../stores/referenceNoticeStore';
 
 /** Compact genome list with load indicators. */
 export function GenomeSelector() {
@@ -30,10 +32,12 @@ export function GenomeSelector() {
     try {
       const res = await loadGenome(genome.id);
       if (res.success) {
+        markReferenceChosen();
         setHasFasta(genomeLoadHasFasta(res));
         // Registry genomes are identified by id; keeping fastaPath null
-        // avoids sending reloads through the local-FASTA branch.
-        setFastaPath(null);
+        // avoids sending reloads through the local-FASTA branch (the user's
+        // own FASTA of this genome keeps its name: only its annotation loaded).
+        setFastaPath(keptFastaPath(res));
         setCurrentGenome(genome.id);
         useBrowserStore.getState().triggerRefresh();
         getStatus().then(statusRes => {

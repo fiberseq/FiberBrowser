@@ -1,3 +1,4 @@
+import { wheelLogFactor } from '../../../utils/wheel';
 export interface ReadTrackLayout {
   trackHeight: number;
   autoRowHeight: number;
@@ -39,21 +40,14 @@ export function shouldDrawReadBoundaryLines(
   return readCount <= 50 && rowHeight >= 6 && separatorMode !== 'off';
 }
 
-/**
- * The row height one Cmd/Ctrl-wheel step leads to. Zooming out returns to
- * automatic sizing only once it reaches the height automatic sizing would fit
- * (`autoFitHeight`, from an 'auto' layout), so a fixed height can be eased
- * down step by step instead of snapping to auto on the first step.
- */
+/** Shift-wheel changes a shared numeric row height continuously, including below auto-fit. */
 export function nextReadRowHeight(
   current: number | 'auto',
   autoFitHeight: number,
-  deltaY: number,
-): number | 'auto' {
+  delta: number,
+): number {
   const from = current === 'auto' ? autoFitHeight : current;
-  const next = from * (deltaY > 0 ? 0.85 : 1.18);
-  if (deltaY > 0 && next <= autoFitHeight) return 'auto';
-  return Math.max(1, Math.min(99, next));
+  return Math.max(0.5, Math.min(99, from * Math.exp(-wheelLogFactor(delta))));
 }
 
 export function computeReadTrackLayout(

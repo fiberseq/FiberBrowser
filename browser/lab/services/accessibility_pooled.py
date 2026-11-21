@@ -138,27 +138,14 @@ def mh_rate_ratio(strata):
 def cmh(tables):
     """tables: [(a, b, c, d)] 2 x 2 per stratum (row 1: event / no event in the group; row 2: the comparison).
     Mantel-Haenszel odds ratio (None when 0 or infinite) and the Cochran-Mantel-Haenszel test with the continuity
-    correction."""
-    from scipy.stats import chi2
-    num = den = s_a = s_e = s_v = 0.
-    used = 0
-    for a, b, c, d in tables:
-        n = a + b + c + d
-        if n < 2 or (a + b) == 0 or (c + d) == 0 or (a + c) == 0 or (b + d) == 0:
-            continue
-        used += 1
-        num += a*d/n
-        den += b*c/n
-        s_a += a
-        s_e += (a + b)*(a + c)/n
-        s_v += (a + b)*(c + d)*(a + c)*(b + d)/(n*n*(n - 1))
-    if not used or s_v <= 0:
-        return dict(strata=used, odds_ratio=None, log2=None, p=None)
-    stat = max(0., abs(s_a - s_e) - 0.5)**2/s_v              # with the continuity correction (small counts)
-    orr = num/den if den > 0 and num > 0 else None          # 0 or infinite: not estimable, the test still holds
-    return dict(strata=used, odds_ratio=None if orr is None else round(float(orr), 4),
-                log2=None if orr is None else round(float(np.log2(orr)), 3), p=float(chi2.sf(stat, 1)),
-                direction=1 if s_a > s_e else -1 if s_a < s_e else 0)
+    correction: services.differential.cmh (the one CMH), rounded for the tables."""
+    from services.differential import cmh as core
+    r = core(tables)
+    if r['p'] is None:
+        return dict(strata=r['strata'], odds_ratio=None, log2=None, p=None)
+    orr = r['odds_ratio']
+    return dict(strata=r['strata'], odds_ratio=None if orr is None else round(float(orr), 4),
+                log2=None if orr is None else round(float(np.log2(orr)), 3), p=r['p'], direction=r['direction'])
 
 
 # ------------------------------------------------------------------ families across NFRs

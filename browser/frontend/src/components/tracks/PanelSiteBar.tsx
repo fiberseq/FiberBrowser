@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { isMetaChrom } from '../../features/metaLocus/metaChrom';
 import { createPortal } from 'react-dom';
 import { usePanelDisplayStore as useBrowserStore } from '../../hooks/usePanelDisplayStore';
 import { panelGenomeLabel, usePanelGenomeStore } from '../../stores/panelGenomeStore';
@@ -308,7 +309,7 @@ export function PanelSiteBar({ panel }: { panel: PanelConfig }) {
     try {
       const res = await getTopCoveredWindows(Math.max(1_000, vpo.end - vpo.start), panel.datasetId, 1, { fit: true, genome: panel.genome });
       const w = res.windows?.[0];
-      if (w) store().navigatePanel(panel.id, w.chrom, w.start, w.end);
+      if (w) { store().recordJump(panel.id); store().navigatePanel(panel.id, w.chrom, w.start, w.end); }
       else setFindError(res.error || 'No reads found on this reference');
     } catch (e) {
       setFindError(e instanceof Error ? e.message : String(e));
@@ -318,6 +319,7 @@ export function PanelSiteBar({ panel }: { panel: PanelConfig }) {
   };
   const pickChrom = (info: ChromInfo) => {
     const width = Math.min(info.size, Math.max(1_000, vpo.end - vpo.start));
+    store().recordJump(panel.id);
     store().navigatePanel(panel.id, info.name, 0, width);
   };
 
@@ -368,7 +370,7 @@ export function PanelSiteBar({ panel }: { panel: PanelConfig }) {
   // Too narrow for everything (audit M14): the location box keeps its width, the rest goes to a ⋯ menu.
   const level = readOnly ? 0 : siteBarLevel(barWidth, {
     genomeLabel, linkedIcon: Boolean(linkedIcon), name, showChroms,
-    findReads: showChroms && Boolean(panel.datasetId), match: match !== 'none', canLink, grouped,
+    findReads: showChroms && Boolean(panel.datasetId) && !isMetaChrom(vpo.chrom), match: match !== 'none', canLink, grouped,
   });
   const compact = level >= 1;
 

@@ -1,0 +1,68 @@
+{
+ "broad_peaks": [],
+ "execution_engine": "scan:peaks",
+ "layer_info": [
+  {
+   "label": "Strong (>50%)",
+   "layer": 0,
+   "n_broad": 0,
+   "n_peaks": 1,
+   "threshold": 0.5
+  },
+  {
+   "label": "Medium (>30%)",
+   "layer": 1,
+   "n_broad": 0,
+   "n_peaks": 0,
+   "threshold": 0.3
+  },
+  {
+   "label": "Weak (>15%)",
+   "layer": 2,
+   "n_broad": 0,
+   "n_peaks": 2,
+   "threshold": 0.15
+  }
+ ],
+ "mode": "Fast",
+ "n_reads": 3045,
+ "peaks": [
+  {
+   "end": 47515677,
+   "index": 0,
+   "layer": 0,
+   "score": 0.9895777106285095,
+   "start": 47514981,
+   "threshold": 0.5,
+   "width": 696
+  },
+  {
+   "end": 47514956,
+   "index": 1,
+   "layer": 2,
+   "score": 0.32991930842399597,
+   "start": 47514800,
+   "threshold": 0.15,
+   "width": 156
+  },
+  {
+   "end": 47515800,
+   "index": 2,
+   "layer": 2,
+   "score": 0.36759138107299805,
+   "start": 47515702,
+   "threshold": 0.15,
+   "width": 98
+  }
+ ],
+ "server_elapsed_ms": 0,
+ "server_timings": {
+  "broad_scan_hits": 1.0,
+  "detect_ms": 0,
+  "format_ms": 0,
+  "signal_ms": 0,
+  "smooth_ms": 0,
+  "working_set_ms": 0
+ },
+ "tier_rule": "local"
+}

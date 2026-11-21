@@ -67,6 +67,8 @@ export interface PlasmidProblem {
 }
 
 export interface Dataset {
+  molecule_groups?: [string, string][];
+  joint_dedup?: 'off' | 'by_molecule';
   id: string;
   /** Its display name: the file stem, or the name the user gave it (one rule for every way of opening it). */
   label: string;
@@ -78,16 +80,30 @@ export interface Dataset {
   path: string;
   paths?: string[];
   source_identity?: string;
+  /** The revisions of its regularity tiles and patches (services/nuc): rows carrying nucreg or nucpatch depend on
+   * them as well as on source_identity; nothing else does. '' without nucleosome outputs. */
+  regularity_identity?: string;
+  /** The nucpatch lane's geometry labels (utils/nucPatchLabels.ts): fetched when this moves, rows stay. */
+  patch_labels_identity?: string;
   color: string;
-  data_type?: 'bam' | 'bigbed' | 'unknown';
+  /** 'bam_livelift': BAM records drawn on the main genome through a graphlift map (utils/datasetKinds). */
+  data_type?: 'bam' | 'bigbed' | 'unknown' | 'bam_livelift';
   layer_type?: ModificationType | 'bam';
   available_layers?: Partial<Record<ModificationType, boolean>>;
+  /** The layer probe saw producer signal evidence (bg/me/db record tags or the signal tagger's header comment):
+   *  the signal read filters are offered only then (utils/signalFilters datasetsCarrySignal). */
+  signal_tags?: boolean;
   companion_layers?: Record<string, string[]>;
   derived_layers?: Record<string, DerivedLayerDefinition>;
   /** The datatype footprint-class runs use for this dataset, from BAM header provenance or chosen in the browser. */
   consensus_chemistry?: 'ddda' | 'dddb' | 'hia5-pacbio' | 'hia5-nanopore' | null;
   /** @deprecated Legacy name of consensus_chemistry (servers before 3.0). */
   family_scan_chemistry?: 'ddda' | 'dddb' | 'hia5-pacbio' | 'hia5-nanopore' | null;
+  /** Opaque keys for the samples its BAM read groups declare (equal for equal samples on this server): a native dataset is matched with the lifted dataset of its sample. */
+  sample_keys?: string[];
+  /** Opened by this live-lift dataset's linked source view: shown only in a source view, never as a panel of its own
+   *  (a page reload without a session would otherwise show it as an empty panel on its first contig). */
+  lift_source_of?: string;
   chemistry_metadata?: {
     chemistry?: 'ddda' | 'dddb' | 'hia5-pacbio' | 'hia5-nanopore' | null;
     source?: string;

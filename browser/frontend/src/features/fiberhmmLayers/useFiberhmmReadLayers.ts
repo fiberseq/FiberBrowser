@@ -2,6 +2,7 @@
  * The read rows' FiberHMM variant-layer overlay for a panel's view: fetched only while a layer is on for the
  * dataset (debounced, the previous request cancelled), cached per request.
  */
+import { isMetaChrom } from '../metaLocus/metaChrom';
 import { useEffect, useMemo, useState } from 'react';
 import { useBrowserStore } from '../../stores/browserStore';
 import { fetchJson } from '../../api/sharedFetch';
@@ -39,7 +40,8 @@ export function useFiberhmmReadLayers(dataset: Pick<Dataset, 'id' | 'data_type' 
   const includeQcfail = useBrowserStore(s => Boolean(s.showQcFailReads));
   const hideUncalled = useBrowserStore(s => s.minFootprints !== -1);
   const includeDuplicates = useBrowserStore(s => Boolean(s.showDuplicateReads));
-  const url = dataset ? overlayQuery(dataset.id, chrom, start, end, settings, minSvLen,
+  // Not on the meta-locus's virtual contig (no real assembly position for the layers' sites).
+  const url = dataset && !isMetaChrom(chrom) ? overlayQuery(dataset.id, chrom, start, end, settings, minSvLen,
     { includeQcfail, hideUncalled, includeDuplicates }) : null;
   const [state, setState] = useState<{ url: string; overlay: FiberhmmOverlay | null; error: string | null }>({ url: '', overlay: null, error: null });
 

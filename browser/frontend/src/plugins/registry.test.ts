@@ -38,7 +38,9 @@ describe('analysis panel registry metadata', () => {
     expect(groups.map(group => group.group)).toEqual(['analysis', 'view', 'tools']);
     expect(groups.map(group => group.label)).toEqual(['Analyze', 'View', 'Tools']);
     const ids = (g: string) => groups.find(group => group.group === g)!.plugins.map(plugin => plugin.contentType);
-    expect(ids('analysis').slice(0, 5)).toEqual(['cluster-detail', 'footprint-analysis', 'transcription-state', 'read-stats', 'co-accessibility']);
+    expect(ids('analysis').slice(0, 5)).toEqual(['cluster-detail', 'footprint-analysis', 'transcription-state', 'read-stats', 'contact-map']);
+    // Co-accessibility moved into Plots (3.1.0): no panel.
+    expect(groups.flatMap(group => group.plugins.map(plugin => plugin.contentType))).not.toContain('co-accessibility');
     expect(ids('view').slice(0, 5)).toEqual(['track-browser', 'colormap', 'cluster-features', 'dataset-layout', 'circular-genome']);
     expect(groups.flatMap(group => group.plugins.map(plugin => plugin.contentType))).toContain('colormap');
   });

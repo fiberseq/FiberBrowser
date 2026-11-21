@@ -95,7 +95,8 @@ def test_contained_direct_projection_matches_fresh_molecules(start, end):
     assert direct_scan_counts(state, scoped, 'sample', 'accessibility') is None
 
 
-def test_explicit_low_memory_scan_cannot_bypass_analysis_cap_with_a_direct_cohort():
+@pytest.mark.parametrize("extended_identity", [False, True])
+def test_explicit_low_memory_scan_cannot_bypass_analysis_cap_with_a_direct_cohort(extended_identity):
     from types import SimpleNamespace
     from services.analysis_query import AnalysisReadQuery
     from services.direct_read_projection import direct_scan_counts
@@ -104,6 +105,8 @@ def test_explicit_low_memory_scan_cannot_bypass_analysis_cap_with_a_direct_cohor
     reads = [dict(id=str(i), intervals=[[0, 100, 100]]) for i in range(3)]
     key = ('sample', 'chr1', 0, 100, False, False, 125, 0, False,
            (), True, False, 0, True, 90, False, 0, read_load_token(state, 'chr1'), 50, False)
+    if extended_identity:
+        key += (None, (), True, None, None)
     state._methylation_cache = {key: (reads, None)}
     query = AnalysisReadQuery(chrom='chr1', start=0, end=100, dataset_ids=['sample'],
                               singleton_read_ids=['0', '1', '2'])

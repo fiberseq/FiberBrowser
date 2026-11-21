@@ -12,6 +12,10 @@ import pytest
 
 from test_plasmid_reconcile import L, _rot, _seq, load_map, write_bam, write_map
 
+# These synthetic reads carry no footprint calls: the tests ask for all reads ("All reads, including uncalled").
+pytestmark = pytest.mark.usefixtures("all_reads_including_uncalled")
+
+
 
 def _workspace():
     from state.browser_state import BrowserState

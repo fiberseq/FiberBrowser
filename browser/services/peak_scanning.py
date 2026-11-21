@@ -101,7 +101,7 @@ def compute_scan_counts(
         intervals = read.get("intervals") or []
 
         if signal_source == "fire":
-            _append_read_span(intervals, total_starts, total_ends, coordinate_offset)
+            _append_read_span(read, total_starts, total_ends, coordinate_offset)
             for fs, fe in _fire_intervals_for_signal(read):
                 _append_range(numerator_starts, numerator_ends, fs, fe, coordinate_offset)
             continue
@@ -114,7 +114,7 @@ def compute_scan_counts(
             continue
 
         if signal_source in MODIFICATION_SIGNAL_SOURCES:
-            _append_read_span(intervals, total_starts, total_ends, coordinate_offset)
+            _append_read_span(read, total_starts, total_ends, coordinate_offset)
             for position in _marks_for_signal(read, signal_source):
                 shifted = int(position) - coordinate_offset
                 if 0 <= shifted < region_width:
@@ -122,7 +122,7 @@ def compute_scan_counts(
             continue
 
         if layer_name is not None:
-            _append_read_span(intervals, total_starts, total_ends, coordinate_offset)
+            _append_read_span(read, total_starts, total_ends, coordinate_offset)
             layer_data = (read.get("layers") or {}).get(layer_name)
             if layer_data:
                 for layer_interval in layer_data.get("intervals", []):
@@ -173,14 +173,27 @@ def _fire_intervals_for_signal(read: dict[str, Any]):
 
 
 def smooth_scan_signal(signal: np.ndarray, smooth_width: int) -> np.ndarray:
-    # np.convolve(..., mode="same") returns max(len(signal), len(kernel)).
-    # Clamp the kernel for short viewports so smoothing never changes the
-    # signal length (and therefore always matches the coverage/mask arrays).
+    # Boxcar mean with np.convolve(signal, ones(w) / w, mode="same") window
+    # semantics: output k averages signal[k - w//2 : k - w//2 + w], positions
+    # outside the array count as 0, and the divisor is always w. The arithmetic
+    # is float64 sums from one sequential prefix sum, divided by w, then cast to
+    # float32. float32 np.convolve used a BLAS-style dot product whose rounding
+    # differs between x86 and Apple Silicon, which moved peak edges sitting on a
+    # threshold. Prefix sums are exact while len(signal) * max coverage < 2**29
+    # (inputs are float32 ratios >= 1/coverage), so each window sum is then the
+    # exact sum of its float32 inputs on every platform.
+    # The kernel is clamped to the signal length for short viewports so
+    # smoothing never changes the signal length.
     if len(signal) == 0:
         return signal.astype(np.float32, copy=True)
-    smooth_width = min(max(1, int(smooth_width)), len(signal))
-    kernel = np.ones(smooth_width, dtype=np.float32) / smooth_width
-    return np.convolve(signal, kernel, mode="same")
+    n = len(signal)
+    w = min(max(1, int(smooth_width)), n)
+    prefix = np.zeros(n + 1, dtype=np.float64)
+    np.cumsum(np.asarray(signal, dtype=np.float64), out=prefix[1:])
+    lo = np.arange(n, dtype=np.int64) - w // 2
+    hi = np.clip(lo + w, 0, n)
+    lo = np.clip(lo, 0, n)
+    return ((prefix[hi] - prefix[lo]) / w).astype(np.float32)
 
 
 def build_peak_thresholds(
@@ -390,32 +403,8 @@ def _marks_for_signal(read: dict[str, Any], signal_source: str) -> list[int]:
     return [event[0] for event in (read.get("deam") or [])]
 
 
-def _range_counts(starts: Sequence[int], ends: Sequence[int], region_width: int) -> np.ndarray:
-    """Return per-base coverage counts for many ranges using a vectorized diff."""
-    width = max(0, int(region_width))
-    if width <= 0:
-        return np.zeros(0, dtype=np.int32)
-    if not starts:
-        return np.zeros(width, dtype=np.int32)
-
-    start_array = np.clip(np.asarray(starts, dtype=np.int64), 0, width)
-    end_array = np.clip(np.asarray(ends, dtype=np.int64), 0, width)
-    valid = end_array > start_array
-    if not np.any(valid):
-        return np.zeros(width, dtype=np.int32)
-
-    delta = (
-        np.bincount(start_array[valid], minlength=width + 1)
-        - np.bincount(end_array[valid], minlength=width + 1)
-    )
-    return np.cumsum(delta[:-1], dtype=np.int64).astype(np.int32, copy=False)
-
-
-def _point_counts(positions: Sequence[int], region_width: int) -> np.ndarray:
-    counts = np.zeros(region_width, dtype=np.int32)
-    if positions:
-        np.add.at(counts, np.asarray(positions, dtype=np.int64), 1)
-    return counts
+# The Plots profile engine's per-base counting (services/profile_engine.py); the old names stay for callers.
+from services.profile_engine import point_counts as _point_counts, range_counts as _range_counts  # noqa: E402
 
 
 def _append_range(starts: list[int], ends: list[int], start: int, end: int, coordinate_offset: int) -> None:
@@ -424,14 +413,14 @@ def _append_range(starts: list[int], ends: list[int], start: int, end: int, coor
 
 
 def _append_read_span(
-    intervals: Sequence[Sequence[int]],
+    read: dict,
     starts: list[int],
     ends: list[int],
     coordinate_offset: int,
 ) -> None:
-    if not intervals:
-        return
-    _append_range(starts, ends, intervals[0][0], intervals[-1][1], coordinate_offset)
+    from services.read_selection import read_body_spans
+    for a, b in read_body_spans(read):
+        _append_range(starts, ends, a, b, coordinate_offset)
 
 
 def _find_threshold_regions(

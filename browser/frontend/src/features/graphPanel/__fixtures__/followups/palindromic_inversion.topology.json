@@ -1,0 +1,854 @@
+{
+ "bindings": [
+  {
+   "assembly": "T",
+   "fragments": [
+    {
+     "end": 1890,
+     "indexed": true,
+     "origin": 0
+    }
+   ],
+   "key": "ref",
+   "path": {
+    "contig": "chrV",
+    "haplotype": "1",
+    "sample": "T"
+   },
+   "reference": "T",
+   "size": 1890,
+   "size_inferred": true,
+   "uncovered": [
+    {
+     "end": null,
+     "kind": "unknown_tail",
+     "start": 1890
+    }
+   ]
+  },
+  {
+   "assembly": "M",
+   "fragments": [
+    {
+     "end": 1890,
+     "indexed": true,
+     "origin": 0
+    }
+   ],
+   "key": "mat",
+   "path": {
+    "contig": "chrV",
+    "haplotype": "1",
+    "sample": "M"
+   },
+   "reference": "M",
+   "size": 1890,
+   "size_inferred": true,
+   "uncovered": [
+    {
+     "end": null,
+     "kind": "unknown_tail",
+     "start": 1890
+    }
+   ]
+  },
+  {
+   "assembly": "P",
+   "fragments": [
+    {
+     "end": 1890,
+     "indexed": true,
+     "origin": 0
+    }
+   ],
+   "key": "pat",
+   "path": {
+    "contig": "chrV",
+    "haplotype": "1",
+    "sample": "P"
+   },
+   "reference": "P",
+   "size": 1890,
+   "size_inferred": true,
+   "uncovered": [
+    {
+     "end": null,
+     "kind": "unknown_tail",
+     "start": 1890
+    }
+   ]
+  },
+  {
+   "assembly": "A",
+   "fragments": [
+    {
+     "end": 1890,
+     "indexed": true,
+     "origin": 0
+    }
+   ],
+   "key": "alt",
+   "path": {
+    "contig": "chrV",
+    "haplotype": "1",
+    "sample": "A"
+   },
+   "reference": "A",
+   "size": 1890,
+   "size_inferred": true,
+   "uncovered": [
+    {
+     "end": null,
+     "kind": "unknown_tail",
+     "start": 1890
+    }
+   ]
+  }
+ ],
+ "note": "Synthetic (A14): a 190 bp inversion whose core is a palindromic walk P,P-; ALT carries it on a minus comparison; PAT two unrelated substitutions.",
+ "topology": {
+  "complete": true,
+  "correspondence_complete": true,
+  "direct_matches": [
+   {
+    "provenance": "direct_named_walk",
+    "reverse": false,
+    "source_binding": "mat",
+    "source_occurrence": "6e229b1d359f8bb74c4031ac875bb8f6c651bd9506ba71ca3b5b3f2f04f9c39a",
+    "target_occurrence": "0ab4028308ab865604ccf0e32af8f0ddad2971978d7c9226929ae9a2130d2799"
+   },
+   {
+    "provenance": "direct_named_walk",
+    "reverse": true,
+    "source_binding": "mat",
+    "source_occurrence": "a1aebaa85068cb8c091ad60ba0a92e4465d60ea2393ec63b4998dbb90f5bd442",
+    "target_occurrence": "3f2e33bf3a994bed21323dc5e1581696224ba2db72fee250b2c2688f79bb30fc"
+   },
+   {
+    "provenance": "direct_named_walk",
+    "reverse": false,
+    "source_binding": "mat",
+    "source_occurrence": "2fd87c6e184c05fe726962e0f342d4bf1be743f03f4fbfe152b072d4cfe3cb3a",
+    "target_occurrence": "2100ae2bce8131f2781c5f88eee430af81cfe35dc9ca170e5294d6e3255fc5bd"
+   },
+   {
+    "provenance": "direct_named_walk",
+    "reverse": true,
+    "source_binding": "mat",
+    "source_occurrence": "2fd87c6e184c05fe726962e0f342d4bf1be743f03f4fbfe152b072d4cfe3cb3a",
+    "target_occurrence": "b9353b648ea0b2a52f12c541361d0d7e38db71d32ee3c8692d62a76c718af656"
+   },
+   {
+    "provenance": "direct_named_walk",
+    "reverse": true,
+    "source_binding": "mat",
+    "source_occurrence": "fcfcd2a7a4885ca2c01e84dfc825cd32791d869481eb8ad5177faefb9a130f90",
+    "target_occurrence": "2100ae2bce8131f2781c5f88eee430af81cfe35dc9ca170e5294d6e3255fc5bd"
+   },
+   {
+    "provenance": "direct_named_walk",
+    "reverse": false,
+    "source_binding": "mat",
+    "source_occurrence": "fcfcd2a7a4885ca2c01e84dfc825cd32791d869481eb8ad5177faefb9a130f90",
+    "target_occurrence": "b9353b648ea0b2a52f12c541361d0d7e38db71d32ee3c8692d62a76c718af656"
+   },
+   {
+    "provenance": "direct_named_walk",
+    "reverse": true,
+    "source_binding": "mat",
+    "source_occurrence": "6d10e1703825e1be5aed49af023fbebb15795cda3615bd5394c57528a2bad214",
+    "target_occurrence": "944ff70d9ea0da4aea486c9617d21f7afe98c2afafa9a4add9b7168a8c669331"
+   },
+   {
+    "provenance": "direct_named_walk",
+    "reverse": false,
+    "source_binding": "mat",
+    "source_occurrence": "d0dae37ad02126228ae75b0c3bd19f667d5e9494808e8923937e5f80c52f7030",
+    "target_occurrence": "073ffe3d9c4ef8b8be6d0dea64e24792ebc1e0883649d5cc3abbee659158182e"
+   },
+   {
+    "provenance": "direct_named_walk",
+    "reverse": false,
+    "source_binding": "pat",
+    "source_occurrence": "a451f61b3d8da4ddc8f41a955984c79714033c2b1cfdeea324dc3c4543884191",
+    "target_occurrence": "0ab4028308ab865604ccf0e32af8f0ddad2971978d7c9226929ae9a2130d2799"
+   },
+   {
+    "provenance": "direct_named_walk",
+    "reverse": false,
+    "source_binding": "pat",
+    "source_occurrence": "8725f239c9fe6c646743c43cc0fa00c3b7c40d3587dd079b70babb00a6cc4db6",
+    "target_occurrence": "2100ae2bce8131f2781c5f88eee430af81cfe35dc9ca170e5294d6e3255fc5bd"
+   },
+   {
+    "provenance": "direct_named_walk",
+    "reverse": true,
+    "source_binding": "pat",
+    "source_occurrence": "8725f239c9fe6c646743c43cc0fa00c3b7c40d3587dd079b70babb00a6cc4db6",
+    "target_occurrence": "b9353b648ea0b2a52f12c541361d0d7e38db71d32ee3c8692d62a76c718af656"
+   },
+   {
+    "provenance": "direct_named_walk",
+    "reverse": true,
+    "source_binding": "pat",
+    "source_occurrence": "e317c51b31febb55f8d9792b8fbd21550f8d0e22c3cc572cea0b40f17b9e5231",
+    "target_occurrence": "2100ae2bce8131f2781c5f88eee430af81cfe35dc9ca170e5294d6e3255fc5bd"
+   },
+   {
+    "provenance": "direct_named_walk",
+    "reverse": false,
+    "source_binding": "pat",
+    "source_occurrence": "e317c51b31febb55f8d9792b8fbd21550f8d0e22c3cc572cea0b40f17b9e5231",
+    "target_occurrence": "b9353b648ea0b2a52f12c541361d0d7e38db71d32ee3c8692d62a76c718af656"
+   },
+   {
+    "provenance": "direct_named_walk",
+    "reverse": false,
+    "source_binding": "pat",
+    "source_occurrence": "8c143c7b2210b6c5835635bc2dacbbf69faeb30f9bb84499444244b9ce77d7f4",
+    "target_occurrence": "073ffe3d9c4ef8b8be6d0dea64e24792ebc1e0883649d5cc3abbee659158182e"
+   },
+   {
+    "provenance": "direct_named_walk",
+    "reverse": true,
+    "source_binding": "alt",
+    "source_occurrence": "f1ccfa24837b8e2c2e548ded683265144f68bfd097dbe451552d169dc8e20860",
+    "target_occurrence": "073ffe3d9c4ef8b8be6d0dea64e24792ebc1e0883649d5cc3abbee659158182e"
+   },
+   {
+    "provenance": "direct_named_walk",
+    "reverse": false,
+    "source_binding": "alt",
+    "source_occurrence": "075ce9b923325d7cbd40f913a8822c881df1c849ceb676d6b32f49a8bf89da10",
+    "target_occurrence": "944ff70d9ea0da4aea486c9617d21f7afe98c2afafa9a4add9b7168a8c669331"
+   },
+   {
+    "provenance": "direct_named_walk",
+    "reverse": false,
+    "source_binding": "alt",
+    "source_occurrence": "d3482b69582aac1a44e32244bddbf503b15af435628a7be637c4e337b356f95d",
+    "target_occurrence": "2100ae2bce8131f2781c5f88eee430af81cfe35dc9ca170e5294d6e3255fc5bd"
+   },
+   {
+    "provenance": "direct_named_walk",
+    "reverse": true,
+    "source_binding": "alt",
+    "source_occurrence": "d3482b69582aac1a44e32244bddbf503b15af435628a7be637c4e337b356f95d",
+    "target_occurrence": "b9353b648ea0b2a52f12c541361d0d7e38db71d32ee3c8692d62a76c718af656"
+   },
+   {
+    "provenance": "direct_named_walk",
+    "reverse": true,
+    "source_binding": "alt",
+    "source_occurrence": "a6f5645a9244644d877837dacf2cf598e43dc8873f0aefcb7456f21d9ee617eb",
+    "target_occurrence": "2100ae2bce8131f2781c5f88eee430af81cfe35dc9ca170e5294d6e3255fc5bd"
+   },
+   {
+    "provenance": "direct_named_walk",
+    "reverse": false,
+    "source_binding": "alt",
+    "source_occurrence": "a6f5645a9244644d877837dacf2cf598e43dc8873f0aefcb7456f21d9ee617eb",
+    "target_occurrence": "b9353b648ea0b2a52f12c541361d0d7e38db71d32ee3c8692d62a76c718af656"
+   },
+   {
+    "provenance": "direct_named_walk",
+    "reverse": false,
+    "source_binding": "alt",
+    "source_occurrence": "246d7d71ffa748d9e21eb68c9951cb901b91eefd5ba80e1e5ffcf405337388ac",
+    "target_occurrence": "3f2e33bf3a994bed21323dc5e1581696224ba2db72fee250b2c2688f79bb30fc"
+   },
+   {
+    "provenance": "direct_named_walk",
+    "reverse": true,
+    "source_binding": "alt",
+    "source_occurrence": "681516e4e39f4c2157e4d14d8b2cca02fb9e71749caf91078d1f37a19a60ab92",
+    "target_occurrence": "0ab4028308ab865604ccf0e32af8f0ddad2971978d7c9226929ae9a2130d2799"
+   }
+  ],
+  "edges": [
+   {
+    "from": "11",
+    "to": "4"
+   },
+   {
+    "from": "12",
+    "to": "6"
+   },
+   {
+    "from": "14",
+    "to": "10"
+   },
+   {
+    "from": "2",
+    "to": "12"
+   },
+   {
+    "from": "2",
+    "to": "4"
+   },
+   {
+    "from": "2",
+    "to": "9"
+   },
+   {
+    "from": "4",
+    "to": "6"
+   },
+   {
+    "from": "5",
+    "to": "10"
+   },
+   {
+    "from": "6",
+    "to": "7"
+   },
+   {
+    "from": "7",
+    "to": "14"
+   },
+   {
+    "from": "7",
+    "to": "5"
+   },
+   {
+    "from": "7",
+    "to": "8"
+   },
+   {
+    "from": "8",
+    "to": "10"
+   },
+   {
+    "from": "8",
+    "to": "3"
+   },
+   {
+    "from": "9",
+    "to": "6"
+   }
+  ],
+  "interval": {
+   "end": 1890,
+   "start": 0
+  },
+  "nodes": [
+   {
+    "context": false,
+    "id": "1",
+    "length": 900,
+    "selected": true
+   },
+   {
+    "context": false,
+    "id": "2",
+    "length": 60,
+    "selected": true
+   },
+   {
+    "context": false,
+    "id": "3",
+    "length": 30,
+    "selected": true
+   },
+   {
+    "context": false,
+    "id": "4",
+    "length": 70,
+    "selected": true
+   },
+   {
+    "context": false,
+    "id": "5",
+    "length": 800,
+    "selected": true
+   },
+   {
+    "context": false,
+    "id": "6",
+    "length": 60,
+    "selected": true
+   },
+   {
+    "context": false,
+    "id": "7",
+    "length": 70,
+    "selected": true
+   }
+  ],
+  "paths": [
+   {
+    "binding": "ref",
+    "complete": true,
+    "coverage": [
+     {
+      "fragment": "T#1#chrV@0",
+      "kind": "covered",
+      "left_end": "fragment_terminal",
+      "right_end": "fragment_terminal",
+      "span": {
+       "end": 1890,
+       "start": 0
+      }
+     }
+    ],
+    "occurrences": [
+     {
+      "clip": {
+       "end": 900,
+       "start": 0
+      },
+      "fragment": "T#1#chrV@0",
+      "handle": "2",
+      "id": "0ab4028308ab865604ccf0e32af8f0ddad2971978d7c9226929ae9a2130d2799",
+      "node": "1",
+      "path_span": {
+       "end": 900,
+       "start": 0
+      },
+      "reverse": false
+     },
+     {
+      "clip": {
+       "end": 60,
+       "start": 0
+      },
+      "fragment": "T#1#chrV@0",
+      "handle": "4",
+      "id": "944ff70d9ea0da4aea486c9617d21f7afe98c2afafa9a4add9b7168a8c669331",
+      "node": "2",
+      "path_span": {
+       "end": 960,
+       "start": 900
+      },
+      "reverse": false
+     },
+     {
+      "clip": {
+       "end": 30,
+       "start": 0
+      },
+      "fragment": "T#1#chrV@0",
+      "handle": "6",
+      "id": "2100ae2bce8131f2781c5f88eee430af81cfe35dc9ca170e5294d6e3255fc5bd",
+      "node": "3",
+      "path_span": {
+       "end": 990,
+       "start": 960
+      },
+      "reverse": false
+     },
+     {
+      "clip": {
+       "end": 30,
+       "start": 0
+      },
+      "fragment": "T#1#chrV@0",
+      "handle": "7",
+      "id": "b9353b648ea0b2a52f12c541361d0d7e38db71d32ee3c8692d62a76c718af656",
+      "node": "3",
+      "path_span": {
+       "end": 1020,
+       "start": 990
+      },
+      "reverse": true
+     },
+     {
+      "clip": {
+       "end": 70,
+       "start": 0
+      },
+      "fragment": "T#1#chrV@0",
+      "handle": "8",
+      "id": "3f2e33bf3a994bed21323dc5e1581696224ba2db72fee250b2c2688f79bb30fc",
+      "node": "4",
+      "path_span": {
+       "end": 1090,
+       "start": 1020
+      },
+      "reverse": false
+     },
+     {
+      "clip": {
+       "end": 800,
+       "start": 0
+      },
+      "fragment": "T#1#chrV@0",
+      "handle": "10",
+      "id": "073ffe3d9c4ef8b8be6d0dea64e24792ebc1e0883649d5cc3abbee659158182e",
+      "node": "5",
+      "path_span": {
+       "end": 1890,
+       "start": 1090
+      },
+      "reverse": false
+     }
+    ],
+    "plan": null,
+    "windows": [
+     {
+      "end": 1890,
+      "start": 0
+     }
+    ]
+   },
+   {
+    "binding": "mat",
+    "complete": true,
+    "coverage": [
+     {
+      "fragment": "M#1#chrV@0",
+      "kind": "covered",
+      "left_end": "fragment_terminal",
+      "right_end": "fragment_terminal",
+      "span": {
+       "end": 1890,
+       "start": 0
+      }
+     }
+    ],
+    "occurrences": [
+     {
+      "clip": {
+       "end": 900,
+       "start": 0
+      },
+      "fragment": "M#1#chrV@0",
+      "handle": "2",
+      "id": "6e229b1d359f8bb74c4031ac875bb8f6c651bd9506ba71ca3b5b3f2f04f9c39a",
+      "node": "1",
+      "path_span": {
+       "end": 900,
+       "start": 0
+      },
+      "reverse": false
+     },
+     {
+      "clip": {
+       "end": 70,
+       "start": 0
+      },
+      "fragment": "M#1#chrV@0",
+      "handle": "9",
+      "id": "a1aebaa85068cb8c091ad60ba0a92e4465d60ea2393ec63b4998dbb90f5bd442",
+      "node": "4",
+      "path_span": {
+       "end": 970,
+       "start": 900
+      },
+      "reverse": true
+     },
+     {
+      "clip": {
+       "end": 30,
+       "start": 0
+      },
+      "fragment": "M#1#chrV@0",
+      "handle": "6",
+      "id": "2fd87c6e184c05fe726962e0f342d4bf1be743f03f4fbfe152b072d4cfe3cb3a",
+      "node": "3",
+      "path_span": {
+       "end": 1000,
+       "start": 970
+      },
+      "reverse": false
+     },
+     {
+      "clip": {
+       "end": 30,
+       "start": 0
+      },
+      "fragment": "M#1#chrV@0",
+      "handle": "7",
+      "id": "fcfcd2a7a4885ca2c01e84dfc825cd32791d869481eb8ad5177faefb9a130f90",
+      "node": "3",
+      "path_span": {
+       "end": 1030,
+       "start": 1000
+      },
+      "reverse": true
+     },
+     {
+      "clip": {
+       "end": 60,
+       "start": 0
+      },
+      "fragment": "M#1#chrV@0",
+      "handle": "5",
+      "id": "6d10e1703825e1be5aed49af023fbebb15795cda3615bd5394c57528a2bad214",
+      "node": "2",
+      "path_span": {
+       "end": 1090,
+       "start": 1030
+      },
+      "reverse": true
+     },
+     {
+      "clip": {
+       "end": 800,
+       "start": 0
+      },
+      "fragment": "M#1#chrV@0",
+      "handle": "10",
+      "id": "d0dae37ad02126228ae75b0c3bd19f667d5e9494808e8923937e5f80c52f7030",
+      "node": "5",
+      "path_span": {
+       "end": 1890,
+       "start": 1090
+      },
+      "reverse": false
+     }
+    ],
+    "plan": null,
+    "windows": [
+     {
+      "end": 1890,
+      "start": 0
+     }
+    ]
+   },
+   {
+    "binding": "pat",
+    "complete": true,
+    "coverage": [
+     {
+      "fragment": "P#1#chrV@0",
+      "kind": "covered",
+      "left_end": "fragment_terminal",
+      "right_end": "fragment_terminal",
+      "span": {
+       "end": 1890,
+       "start": 0
+      }
+     }
+    ],
+    "occurrences": [
+     {
+      "clip": {
+       "end": 900,
+       "start": 0
+      },
+      "fragment": "P#1#chrV@0",
+      "handle": "2",
+      "id": "a451f61b3d8da4ddc8f41a955984c79714033c2b1cfdeea324dc3c4543884191",
+      "node": "1",
+      "path_span": {
+       "end": 900,
+       "start": 0
+      },
+      "reverse": false
+     },
+     {
+      "clip": {
+       "end": 60,
+       "start": 0
+      },
+      "fragment": "P#1#chrV@0",
+      "handle": "12",
+      "id": "e8e6f6a1ae16828c4cdc39520d9382171cc5b607f460cddedbc4cbede4f4514a",
+      "node": "6",
+      "path_span": {
+       "end": 960,
+       "start": 900
+      },
+      "reverse": false
+     },
+     {
+      "clip": {
+       "end": 30,
+       "start": 0
+      },
+      "fragment": "P#1#chrV@0",
+      "handle": "6",
+      "id": "8725f239c9fe6c646743c43cc0fa00c3b7c40d3587dd079b70babb00a6cc4db6",
+      "node": "3",
+      "path_span": {
+       "end": 990,
+       "start": 960
+      },
+      "reverse": false
+     },
+     {
+      "clip": {
+       "end": 30,
+       "start": 0
+      },
+      "fragment": "P#1#chrV@0",
+      "handle": "7",
+      "id": "e317c51b31febb55f8d9792b8fbd21550f8d0e22c3cc572cea0b40f17b9e5231",
+      "node": "3",
+      "path_span": {
+       "end": 1020,
+       "start": 990
+      },
+      "reverse": true
+     },
+     {
+      "clip": {
+       "end": 70,
+       "start": 0
+      },
+      "fragment": "P#1#chrV@0",
+      "handle": "14",
+      "id": "7e09f87bf4a33ec6b777a2b47aac923cdab528ca360e04289263ff49a81cabbe",
+      "node": "7",
+      "path_span": {
+       "end": 1090,
+       "start": 1020
+      },
+      "reverse": false
+     },
+     {
+      "clip": {
+       "end": 800,
+       "start": 0
+      },
+      "fragment": "P#1#chrV@0",
+      "handle": "10",
+      "id": "8c143c7b2210b6c5835635bc2dacbbf69faeb30f9bb84499444244b9ce77d7f4",
+      "node": "5",
+      "path_span": {
+       "end": 1890,
+       "start": 1090
+      },
+      "reverse": false
+     }
+    ],
+    "plan": null,
+    "windows": [
+     {
+      "end": 1890,
+      "start": 0
+     }
+    ]
+   },
+   {
+    "binding": "alt",
+    "complete": true,
+    "coverage": [
+     {
+      "fragment": "A#1#chrV@0",
+      "kind": "covered",
+      "left_end": "fragment_terminal",
+      "right_end": "fragment_terminal",
+      "span": {
+       "end": 1890,
+       "start": 0
+      }
+     }
+    ],
+    "occurrences": [
+     {
+      "clip": {
+       "end": 800,
+       "start": 0
+      },
+      "fragment": "A#1#chrV@0",
+      "handle": "11",
+      "id": "f1ccfa24837b8e2c2e548ded683265144f68bfd097dbe451552d169dc8e20860",
+      "node": "5",
+      "path_span": {
+       "end": 800,
+       "start": 0
+      },
+      "reverse": true
+     },
+     {
+      "clip": {
+       "end": 60,
+       "start": 0
+      },
+      "fragment": "A#1#chrV@0",
+      "handle": "4",
+      "id": "075ce9b923325d7cbd40f913a8822c881df1c849ceb676d6b32f49a8bf89da10",
+      "node": "2",
+      "path_span": {
+       "end": 860,
+       "start": 800
+      },
+      "reverse": false
+     },
+     {
+      "clip": {
+       "end": 30,
+       "start": 0
+      },
+      "fragment": "A#1#chrV@0",
+      "handle": "6",
+      "id": "d3482b69582aac1a44e32244bddbf503b15af435628a7be637c4e337b356f95d",
+      "node": "3",
+      "path_span": {
+       "end": 890,
+       "start": 860
+      },
+      "reverse": false
+     },
+     {
+      "clip": {
+       "end": 30,
+       "start": 0
+      },
+      "fragment": "A#1#chrV@0",
+      "handle": "7",
+      "id": "a6f5645a9244644d877837dacf2cf598e43dc8873f0aefcb7456f21d9ee617eb",
+      "node": "3",
+      "path_span": {
+       "end": 920,
+       "start": 890
+      },
+      "reverse": true
+     },
+     {
+      "clip": {
+       "end": 70,
+       "start": 0
+      },
+      "fragment": "A#1#chrV@0",
+      "handle": "8",
+      "id": "246d7d71ffa748d9e21eb68c9951cb901b91eefd5ba80e1e5ffcf405337388ac",
+      "node": "4",
+      "path_span": {
+       "end": 990,
+       "start": 920
+      },
+      "reverse": false
+     },
+     {
+      "clip": {
+       "end": 900,
+       "start": 0
+      },
+      "fragment": "A#1#chrV@0",
+      "handle": "3",
+      "id": "681516e4e39f4c2157e4d14d8b2cca02fb9e71749caf91078d1f37a19a60ab92",
+      "node": "1",
+      "path_span": {
+       "end": 1890,
+       "start": 990
+      },
+      "reverse": true
+     }
+    ],
+    "plan": null,
+    "windows": [
+     {
+      "end": 1890,
+      "start": 0
+     }
+    ]
+   }
+  ],
+  "summaries": [],
+  "target": "ref",
+  "target_queries": [
+   {
+    "context_bp": 100,
+    "fragment": "T#1#chrV@0",
+    "interval": {
+     "end": 1890,
+     "start": 0
+    }
+   }
+  ],
+  "timings": {}
+ }
+}

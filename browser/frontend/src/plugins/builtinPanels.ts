@@ -35,9 +35,6 @@ const LazyTrackBrowser = lazy(() =>
 const LazyDatasetLayout = lazy(() =>
   import('../components/controls/DatasetLayoutPanel').then(m => ({ default: m.DatasetLayoutPanel }))
 );
-const LazyCoAccessibility = lazy(() =>
-  import('../components/controls/CoAccessibilityPanel').then(m => ({ default: m.CoAccessibilityPanel }))
-);
 const LazyAnnotations = lazy(() =>
   import('../components/controls/AnnotationPanel').then(m => ({ default: m.AnnotationPanel }))
 );
@@ -76,7 +73,7 @@ registerAnalysisPanel({
   stripOrder: 1,
   settingsTargets: ['Clustering', 'Peak Detection', 'Labeling & Quality'],
   sessionKeys: ['clusterAssignments', 'clusterOrder', 'clusterPeakRegions', 'clusterMatchedRun', 'savedClusters'],
-  apiEndpoints: ['/api/cluster_all', '/api/cluster/vplot', '/api/cluster_projection'],
+  apiEndpoints: ['/api/cluster_all', '/api/cluster/vplot', '/api/cluster_projection', '/api/cluster_molecules'],
 });
 
 registerAnalysisPanel({
@@ -209,19 +206,7 @@ registerAnalysisPanel({
   apiEndpoints: ['/api/datasets/add', '/api/datasets/*', '/api/datasets/merge', '/api/datasets/unmerge'],
 });
 
-registerAnalysisPanel({
-  contentType: 'co-accessibility',
-  label: 'Co-accessibility',
-  shortLabel: 'Co-accessibility',
-  headerColor: '#0d9488',
-  component: LazyCoAccessibility,
-  description: 'Which positions open together on single molecules: a position-by-position matrix',
-  group: 'analysis',
-  stripOrder: 5,
-  settingsTargets: ['Analysis & Reproducibility', 'Cluster Detail'],
-  sessionKeys: ['clusterFocus', 'analysisSampleSeed'],
-  apiEndpoints: ['/api/coacc/metadata', '/api/coacc/matrix/data', '/api/coacc/matrix/image'],
-});
+// Co-accessibility moved into Plots in 3.1.0 (features/plots/coaccEntry: old entry points and sessions open the Plots type).
 
 registerAnalysisPanel({
   contentType: 'annotations',

@@ -93,7 +93,7 @@ def write_fixture(tmp_path, *, topology=True):
         "ns": array("i", [50, 250, 400]), "nl": array("i", [100, 100, 60]),
         "nq": array("B", [10, 20, 30]),
         "as": array("i", [160, 360]), "al": array("i", [80, 40]),
-        "MA": "v1;tf+Q:421-20", "AQ": array("B", [200]),
+        "MA": "600;tf+Q:421-20", "AQ": array("B", [200]),
         "MM": f"A+a,{first_skip},{second_skip};", "ML": array("B", [250, 250]),
     })
 

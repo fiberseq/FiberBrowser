@@ -77,7 +77,7 @@ export function drawSvBand(ctx: Ctx, summary: SvSummary, o: SvBandOptions): void
   ctx.lineTo(width, top + height - 0.5);
   ctx.stroke();
   ctx.globalAlpha = 1;
-  const caption = `SV${summary.scope === 'loaded' ? ' · in loaded reads' : ''}`;
+  const caption = `Differences${summary.scope === 'loaded' ? ' · in loaded reads' : ''}`;
   const base = top + height - 3;
   const inner = m.inner;
   const maxSupport = Math.max(1, ...summary.clusters.map(c => c.support));

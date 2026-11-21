@@ -73,6 +73,20 @@ export interface LibraryEntry {
     version_source?: string;
     programs?: { name: string; version?: string | null }[];
   };
+  /** A pangenome-graph lift the header records (services/graph_lift.lift_summary): the latest
+   *  fiberhmm-lift @PG, and ``unrepaired`` vg/ft lift @PG IDs no fiberhmm-lift repaired. */
+  graph_lift?: {
+    repaired: boolean;
+    unrepaired: string[];
+    lifts: number;
+    mode?: string;
+    source?: string;
+    target?: string;
+    graph?: string;
+    calmd?: string;
+    version?: string;
+    text: string;
+  } | null;
   reference?: {
     n_contigs?: number;
     contigs?: LibraryContig[];

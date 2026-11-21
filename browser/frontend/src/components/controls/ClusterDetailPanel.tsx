@@ -1,12 +1,13 @@
-import { getDatasetLayerLabel, getLayerLabel, isAccessibilityLayer } from '../../utils/layerColors';
+import { getDatasetLayerLabel } from '../../utils/layerColors';
 import { panelReversed } from '../../hooks/usePanelDisplayStore';
 import { openRegionPanels } from '../../utils/regionPanels';
 import { getClusterColor } from '../tracks/ReadTrack';
-import { currentMatchedRun, matchedRunCounts } from '../../utils/clusterMatchedRun';
+import { currentMatchedRun, matchedRunCounts, withGraphSourceColumns } from '../../utils/clusterMatchedRun';
+import { WHOLE_VIEW_LABEL } from '../../utils/clusterTargets';
 import { useMemo, useEffect, useState, useCallback, useRef } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useBrowserStore } from '../../stores/browserStore';
-import { dissolveCluster, autoCullClusters, fetchClusterProjection, type ProjectionResponse, type ProjectionMethod } from '../../api/clustering';
+import { dissolveCluster, autoCullClusters, fetchClusterProjection, fetchClusterMolecules, type ClusterMoleculesResponse, type ProjectionResponse, type ProjectionMethod } from '../../api/clustering';
 import { getCompactReads } from '../../api/readOperations';
 import { formatProjectionTsv, indexProjection, projectionFilename, projectionInputSignature } from '../../utils/projectionExport';
 import { referenceAt } from '../../utils/dataExportActions';
@@ -25,6 +26,14 @@ import { OverviewTabContent } from './cluster-detail/OverviewTabContent';
 import { ProfilesTabContent } from './cluster-detail/ProfilesTabContent';
 import { ProjectionMap, type ProjectionView } from './cluster-detail/ProjectionMap';
 import { MergeToggleChip } from './cluster-detail/MergeToggleChip';
+import { MapColorControls, ProfileChannelPicker } from './cluster-detail/ClusterViewControls';
+import { useClusterRegularity } from './cluster-detail/useClusterRegularity';
+import { useClusterGeometries } from './cluster-detail/useClusterGeometries';
+import {
+  channelLabel, clusterProfileChannelOptions, isPatchChannel, isRegularityChannel, MAP_COLOR_GEOMETRY_LOW, isGeometryColor, isRegularityColor, mapPointColors, profileKeyOf,
+  numericValue, resolveProfileChannels, MAP_COLOR_CLUSTER,
+} from '../../utils/clusterViewChannels';
+import { deriveModeOptions, nucClusterModeOptions } from './ClusterPanel';
 import {
   effectiveOverviewMode,
   nextMapFocus,
@@ -41,6 +50,7 @@ import { SavedClustersTab } from './cluster-detail/SavedClustersTab';
 import { FootprintSizesView, type FootprintSizesTarget } from './cluster-detail/FootprintSizesView';
 import { useFootprintSizesInvokedFrom } from '../../utils/footprintSizeEntry';
 import { FOOTPRINT_SIZE_VIEW_HELP, withView } from '../../utils/footprintSizeSettings';
+import { openPlots } from '../../features/plots/workspace';
 import { viewLocusLabel } from '../../utils/panelScope';
 import { ClusterBranchMap, hasClusterBranches } from './cluster-detail/ClusterBranchMap';
 import { clusterOperationRounds } from './cluster-detail/clusterOperationRounds';
@@ -48,6 +58,7 @@ import { chartRoundStillCurrent, clusterChartScope, clusterChartScopeNote, clust
 import { getGenes } from '../../api/reference';
 import type { Gene } from '../../types';
 import { panelGenomeLabel, usePanelGenomeStore } from '../../stores/panelGenomeStore';
+import { qnameOfId } from '../../utils/recordKeys';
 import {
   AnalysisButton,
   AnalysisPanelHeader,
@@ -60,7 +71,12 @@ import {
   ClusterFocusBadge,
   HiddenTabTargets,
 } from './shared';
-import { buildRuleMatchContext, computePerClusterEnrichment, hydrateOrthogonalTracks, rulesNeedOrthogonalTrackData } from '../../utils/ruleMatching';
+import { buildRuleMatchContext, computePerClusterEnrichment, hydrateOrthogonalTracks, ruleTargetsLayer, rulesNeedOrthogonalTrackData } from '../../utils/ruleMatching';
+import { useNucPatchLabels } from '../../utils/nucPatchLabels';
+
+/** Some enabled rule reads the regularity patches (their geometry labels). */
+const enrichmentLayersTargetPatches = (rules: ReadonlyArray<{ enabled?: boolean; targetLayers?: string[] }>) =>
+  rules.some(r => r.enabled && (r.targetLayers ?? []).length > 0 && ruleTargetsLayer(r as Parameters<typeof ruleTargetsLayer>[0], 'nucpatch'));
 import type { EnrichmentResult } from '../../utils/ruleMatching';
 import { clusterCohorts } from '../../utils/readStatesByDataset';
 import type { OrthogonalTrackViewportData } from '../../types/dataset';
@@ -73,6 +89,7 @@ import {
 import { Check, ReadClusters, Sliders } from '../ui/Icons';
 import { useRememberedState } from '../../hooks/useRememberedState';
 import { defaultMetaprofileTogglesKey, togglesFromKey } from '../../utils/defaultMetaprofile';
+import { useLayerColorVersion } from '../../features/layerColours/state';
 
 const CLUSTER_DETAIL_TAB_STORAGE_KEY = 'fiberbrowser_cluster_detail_tab';
 // 'projection' is not a tab of its own: the read map is part of Overview (fb-n5-projection);
@@ -95,7 +112,13 @@ function consumeRequestedClusterDetailTab(): ClusterDetailTab {
   return consumeRequestedTab(CLUSTER_DETAIL_TAB_STORAGE_KEY, CLUSTER_DETAIL_TABS, 'overview');
 }
 
+/** Dataset layers that aren't per-position calls (no layer share): modification marks, scalars, regularity tiles. */
+const MAP_NON_CALL_LAYERS: ReadonlySet<string> = new Set(['m6a', 'm5c', 'deam', 'deam_opportunity', 'mod', 'fire', 'nucsz',
+  'nucseg', 'nucreg', 'nucpatch', 'nucmol', 'nfrmol']);
+
 export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
+  // Re-render when the user's layer colours change (Labels → Layer colours).
+  const layerColorVersion = useLayerColorVersion();
   const {
     chrom: mainChrom,
     clusterAssignments,
@@ -176,9 +199,12 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
     peaksLocked: s.peaksLocked,
     analysisSampleSeed: s.analysisSampleSeed,
   })));
+  // Cluster views: metaprofile channels, the map's colour and features (display settings, saved with the session).
+  const clusterViewSettings = useBrowserStore(s => s.clusterViewSettings);
   // "Default" = what the default metaprofile shows (it follows the active layers unless set to manual).
   const defaultProfileKey = useBrowserStore(s => defaultMetaprofileTogglesKey(s));
   const defaultProfileToggles = useMemo(() => togglesFromKey(defaultProfileKey), [defaultProfileKey]);
+  const setClusterViewSettings = useBrowserStore(s => s.setClusterViewSettings);
 
   // What the panels show (panelScope): the charts plot a clustered panel's own view.
   const scopeState = useBrowserStore(useShallow(s => ({
@@ -292,13 +318,14 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
   const mapVisible = activeTab === 'overview' && overviewShown !== 'profiles';
 
   const savedMatchedRun = useBrowserStore(s => s.clusterMatchedRun);
-  const matchedRun = useMemo(() => currentMatchedRun(savedMatchedRun, clusterAssignments), [savedMatchedRun, clusterAssignments]);
+  const matchedRun = useMemo(() => withGraphSourceColumns(currentMatchedRun(savedMatchedRun, clusterAssignments), panels, clusterAssignments), [savedMatchedRun, clusterAssignments, panels]);
 
   // stateKeys with cluster data (respects selectedDatasets + link groups + duplicates)
   const datasetIds = useMemo(() => {
     // A joint fit has its own cluster IDs. The folded source panel may still
     // hold the earlier split, which must not enter its counts or profiles.
-    const runKeys = new Set(matchedRun?.windows.map(w => w.stateKey));
+    // (A graph run: every destination panel, folded members and pop-outs too.)
+    const runKeys = new Set([...(matchedRun?.windows.map(w => w.stateKey) ?? []), ...(matchedRun?.destinations ?? []).map(d => d.stateKey)]);
     const keys = targetStateKeys.some(key => runKeys.has(key))
       ? targetStateKeys.filter(key => runKeys.has(key)) : targetStateKeys;
     return keys.filter(sk =>
@@ -383,6 +410,12 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
     }
     return [...layers].sort();
   }, [activeColormap.rules]);
+  // Rules on the regularity patches read each patch's geometry as the lane draws it (the label overlay, utils/
+  // nucPatchLabels.ts): a relabel recomputes the counts from the loaded reads, and new patches (other regularity or
+  // patch settings: the datasets' regularity identity) fetch the reads again.
+  const patchLabelsVersion = useNucPatchLabels(s => s.version);
+  const patchRowsIdentity = useBrowserStore(s => (enrichmentLayersTargetPatches(activeColormap.rules)
+    ? s.datasets.filter(d => actualDatasetIds.includes(d.id)).map(d => `${d.id}:${d.regularity_identity ?? ''}`).join(',') : ''));
   const enrichmentRequestKey = useMemo(() => `${buildClusterEnrichmentRequestKey({
     chrom,
     start,
@@ -391,7 +424,7 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
     layers: enrichmentLayers,
     // The enrichment reads are fetched through the quality filters.
     analysisSettingsKey: settingsKey,
-  })}|${viewGenome ?? ''}|${chartView.followsMain ? 'main' : 'own'}`, [actualDatasetIds, chrom, end, enrichmentLayers, start, settingsKey, viewGenome, chartView.followsMain]);
+  })}|${viewGenome ?? ''}|${chartView.followsMain ? 'main' : 'own'}|${patchRowsIdentity}`, [actualDatasetIds, chrom, end, enrichmentLayers, start, settingsKey, viewGenome, chartView.followsMain, patchRowsIdentity]);
 
   // The peaks the clustering was built on (merging and dissolving compare the
   // clusters on those), else the selected peaks. The Projection preview and the
@@ -433,7 +466,9 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
 
   const clusterFeatureRulesKey = useMemo(() => JSON.stringify(clusterFeatureRules ?? []), [clusterFeatureRules]);
   // The panel whose view it is too (the kept map is checked against that panel's view).
-  const projectionFullKey = `${projectionRequestKey}|${viewGenome ?? ''}|${chartView.followsMain ? '' : chartView.panelId ?? ''}|${peakRegionsKey}|${clusterFeatureRulesKey}|${settingsKey}`;
+  // The map's input features (Cluster views): only a chosen mode changes the key, so the default map is the same request.
+  const mapFeatureMode = clusterViewSettings.mapFeatureMode;
+  const projectionFullKey = `${projectionRequestKey}|${viewGenome ?? ''}|${chartView.followsMain ? '' : chartView.panelId ?? ''}|${peakRegionsKey}|${clusterFeatureRulesKey}|${settingsKey}${mapFeatureMode ? `|features:${mapFeatureMode}` : ''}`;
   const projectionData = projectionFetched?.key === projectionFullKey ? projectionFetched.data : null;
 
 
@@ -541,7 +576,10 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
             sampleSeed: analysisSampleSeed,
             clusterFeatureRules,
             clusterAssignments: projectionRound?.assignments ?? {},
+            // Metric columns rank against the fit's cohort, as the fit did.
+            metricCohort: useBrowserStore.getState().clusterMetricCohort,
             panelGenome: viewGenome,
+            featureMode: mapFeatureMode,
             signal: controller.signal,
           }
         );
@@ -585,8 +623,10 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
           sampleSeed: analysisSampleSeed,
           clusterFeatureRules,
           clusterAssignments: projectionRound?.assignments ?? {},
+          metricCohort: useBrowserStore.getState().clusterMetricCohort,
           includeStrands: true,
           panelGenome: viewGenome,
+          featureMode: mapFeatureMode,
         },
       );
     } catch (err) {
@@ -614,7 +654,7 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
     );
   }, [accessibilityThreshold, analysisSampleSeed, chrom, clusterFeatureRules, end, peakRegions, projectionDatasetIds,
       projectionFetched, projectionFullKey, projectionMethod, projectionRound, projectionView, spanningOnly, start, subnucleosomalThreshold, viewGenome,
-      mergeSettings]);
+      mergeSettings, mapFeatureMode]);
 
   // Export data (fb-r4-export): while a map is shown, its Projection coordinates entry downloads it directly.
   const exportProjectionRef = useRef(exportProjection);
@@ -667,7 +707,7 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
       const assignments = clusterAssignments[sk];
       if (!assignments || Object.keys(assignments).length === 0) continue;
 
-      const result = computePerClusterEnrichment(reads, enabledRules, assignments, ruleCtx);
+      const result = computePerClusterEnrichment(reads, enabledRules, assignments, ruleCtx, dsId);
       // Merge into combined results
       for (const [ruleId, clusterMap] of result) {
         const mergedMap = merged.get(ruleId)!;
@@ -686,7 +726,7 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
     return merged;
   }, [enrichmentReads, enrichmentGenes, hasClusterAssignments, hasRules, genes, getAllPeaks, orthogonalTracksForRules,
       start, end, activeColormap, enabledRules, enrichmentCohorts, stateKeyToDs, clusterAssignments,
-      enrichmentViewportKey, enrichmentRequestKey]);
+      enrichmentViewportKey, enrichmentRequestKey, patchLabelsVersion]);
 
 
   const handleDissolve = useCallback(async (clusterToDissolve: number) => {
@@ -723,6 +763,8 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
           analysisSampleSeed,
           clusterFeatureRules,
           view.genome,
+          // Metric columns rank against the fit's cohort, as the fit did.
+          { metricCohort: useBrowserStore.getState().clusterMetricCohort },
         );
         // Navigated, restored or changed meanwhile: these results are for other clusters.
         if (!mountedRef.current || !chartRoundStillCurrent(round, view, useBrowserStore.getState())) continue;
@@ -738,7 +780,8 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
             setClusterOrder(sk, currentOrder.filter(c => c !== clusterToDissolve));
           }
           if (useBrowserStore.getState().clusterFocus[sk]?.has(clusterToDissolve)) {
-            setClusterFocus(sk, null);
+            // Part of the dissolve's one undo step (finish records it).
+            setClusterFocus(sk, null, { record: false });
           }
           useBrowserStore.getState().pruneClusterSelection(sk, [clusterToDissolve]);
         }
@@ -794,6 +837,7 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
           clusterFeatureRules,
           view.genome,
           { strategy: settings.strategy, threshold: settings.threshold },
+          { metricCohort: useBrowserStore.getState().clusterMetricCohort },
         );
         if (!mountedRef.current) return;
         if (!chartRoundStillCurrent(round, view, useBrowserStore.getState())) { stale = true; continue; }
@@ -811,7 +855,8 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
           if (currentOrder) {
             setClusterOrder(sk, currentOrder.filter(c => !dissolvedIds.has(c)));
           }
-          setClusterFocus(sk, null);
+          // Part of the merge's one undo step (finish records it).
+          setClusterFocus(sk, null, { record: false });
           useBrowserStore.getState().pruneClusterSelection(sk, dissolvedIds);
         }
       }
@@ -986,6 +1031,52 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
   // metaprofile layer, using the canonical layer colors. MUST be declared before
   // any early return — React requires the same hook calls in the same order
   // on every render.
+  // Cluster views: the metaprofile channels on show (default: the layers enabled in Tracks) and, on demand, each
+  // cluster's regularity along the region, merged into the per-cluster profiles the tabs draw.
+  const profileChannelOptions = useMemo(() => {
+    const ids = new Set(datasetIds.map(sk => stateKeyToDs[sk] || sk));
+    const shown = datasets.filter(d => ids.has(d.id));
+    return clusterProfileChannelOptions(shown.length ? shown : datasets);
+  }, [datasets, datasetIds, stateKeyToDs, layerColorVersion]);
+  const customChannels = clusterViewSettings.profileChannels;
+  const shownProfileKeys = useMemo(() => resolveProfileChannels(customChannels, defaultProfileToggles), [customChannels, defaultProfileToggles]);
+  // The tabs filter profiles by an enabled map: the default passes the default metaprofile's map unchanged.
+  const shownProfileToggles = useMemo<Record<string, boolean>>(() => (customChannels
+    ? Object.fromEntries(shownProfileKeys.map(k => [k, true])) : defaultProfileToggles), [customChannels, shownProfileKeys, defaultProfileToggles]);
+  const profilesOnShow = activeTab === 'profiles' || (activeTab === 'overview' && overviewShown !== 'map');
+  const mapColorBy = clusterViewSettings.mapColorBy;
+  const wantsRegularity = (profilesOnShow && shownProfileKeys.some(isRegularityChannel))
+    || (mapVisible && isRegularityColor(mapColorBy));
+  // Per molecule too (one request serves the profiles and the map's regularity colours).
+  const regularity = useClusterRegularity(wantsRegularity, datasetIds, true);
+  // Patches (share per cluster, geometry per molecule): the nucleosome panel's geometry endpoint, on demand.
+  const wantsGeometry = (profilesOnShow && shownProfileKeys.some(isPatchChannel))
+    || (mapVisible && isGeometryColor(mapColorBy));
+  const geometries = useClusterGeometries(wantsGeometry, datasetIds);
+  const onDemandBusy = (x: { status: string }) => x.status === 'loading' || x.status === 'analysing' || x.status === 'error' || x.status === 'needs-analyse';
+  // The picker's status line: whichever on-demand channel is working (or failed).
+  const onDemandStatus = wantsGeometry && onDemandBusy(geometries) ? geometries : wantsRegularity ? regularity : null;
+  const profilesWithChannels = useMemo(() => {
+    const extras = [regularity.profiles, geometries.profiles].filter(e => Object.keys(e).length);
+    if (!extras.length) return clusterProfiles;
+    const out: typeof clusterProfiles = { ...clusterProfiles };
+    for (const [sk, byCluster] of extras.flatMap(e => Object.entries(e))) {
+      const merged: Record<number, Record<string, number[]>> = { ...(out[sk] ?? {}) };
+      for (const [cluster, channels] of Object.entries(byCluster)) {
+        merged[Number(cluster)] = { ...(merged[Number(cluster)] ?? {}), ...channels };
+      }
+      out[sk] = merged;
+    }
+    return out;
+  }, [clusterProfiles, regularity.profiles, geometries.profiles]);
+  const missingChannels = useMemo(() => {
+    if (!customChannels) return [];
+    return customChannels.filter(key => !datasetIds.some(sk => Object.values(profilesWithChannels[sk] ?? {}).some(p => (p[key]?.length ?? 0) > 0)))
+      .filter(key => !(isRegularityChannel(key) && (regularity.status === 'loading' || regularity.status === 'analysing')))
+      .filter(key => !(isPatchChannel(key) && (geometries.status === 'loading' || geometries.status === 'analysing')))
+      .map(channelLabel);
+  }, [customChannels, datasetIds, profilesWithChannels, regularity.status, geometries.status]);
+
   const combinedProfiles = useMemo(() => {
     const result: Record<number, Record<string, number[]>> = {};
     for (const cd of clusterData) {
@@ -994,26 +1085,149 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
       // average the profile across datasets per layer.
       const layerKeys = new Set<string>();
       for (const dsId of datasetIds) {
-        const perCluster = clusterProfiles[dsId]?.[cd.cluster];
+        const perCluster = profilesWithChannels[dsId]?.[cd.cluster];
         if (perCluster) for (const k of Object.keys(perCluster)) layerKeys.add(k);
       }
       for (const layerKey of layerKeys) {
         const profiles = datasetIds
-          .map(dsId => clusterProfiles[dsId]?.[cd.cluster]?.[layerKey])
+          .map(dsId => profilesWithChannels[dsId]?.[cd.cluster]?.[layerKey])
           .filter((p): p is number[] => !!p);
         if (profiles.length === 0) continue;
+        // Mean over the datasets measured at each bin (an on-demand channel's missing bins are NaN: a gap stays a
+        // gap, and one dataset's gap never pulls the others' mean down).
         const len = profiles[0].length;
         const combined = new Array(len).fill(0);
+        const counts = new Array(len).fill(0);
         for (const p of profiles) {
-          for (let i = 0; i < len; i++) combined[i] += p[i];
+          for (let i = 0; i < len; i++) if (Number.isFinite(p[i])) { combined[i] += p[i]; counts[i] += 1; }
         }
-        for (let i = 0; i < len; i++) combined[i] /= profiles.length;
+        for (let i = 0; i < len; i++) combined[i] = counts[i] ? combined[i] / counts[i] : NaN;
         byLayer[layerKey] = combined;
       }
       if (Object.keys(byLayer).length > 0) result[cd.cluster] = byLayer;
     }
     return result;
-  }, [clusterData, clusterProfiles, datasetIds]);
+  }, [clusterData, profilesWithChannels, datasetIds]);
+
+  // The map's colours come from endpoints, never the read panels (hidden in full view, and loaded for other reasons):
+  // regularity from /api/nuc/regularity (above), m6A per kb, span, layer shares and the layer at a position from
+  // /api/cluster_molecules. That one is asked only while the map is coloured by one of them, once per projection
+  // (and position, for the layer at a position), and cached; colour "cluster" or "dataset" asks nothing.
+  const mapColorPos = clusterViewSettings.mapColorPos ?? Math.floor((start + end) / 2);
+  const wantsMolecules = mapColorBy === 'm6a' || mapColorBy === 'span' || mapColorBy === 'state' || mapColorBy.startsWith('frac:');
+  const moleculesBaseKey = projectionFullKey.split('|features:')[0];
+  const moleculesKey = mapVisible && projectionData && wantsMolecules
+    ? `${moleculesBaseKey}|${mapColorBy === 'state' ? mapColorPos : ''}` : null;
+  const moleculesCacheRef = useRef(new Map<string, ClusterMoleculesResponse>());
+  const [moleculesFetched, setMoleculesFetched] = useState<{ key: string; data: ClusterMoleculesResponse | null; error?: string } | null>(null);
+  useEffect(() => {
+    if (!moleculesKey) return;
+    const hit = moleculesCacheRef.current.get(moleculesKey);
+    if (hit) { setMoleculesFetched({ key: moleculesKey, data: hit }); return; }
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      fetchClusterMolecules(chrom, start, end, projectionDatasetIds, spanningOnly, {
+        clusterAssignments: projectionRound?.assignments ?? {},
+        sampleSeed: analysisSampleSeed,
+        position: mapColorBy === 'state' ? mapColorPos : null,
+        panelGenome: viewGenome,
+        signal: controller.signal,
+      }).then(data => {
+        const cache = moleculesCacheRef.current;
+        cache.set(moleculesKey, data);
+        while (cache.size > 8) cache.delete(cache.keys().next().value!);
+        if (!controller.signal.aborted) setMoleculesFetched({ key: moleculesKey, data });
+      }).catch((err: any) => {
+        if (controller.signal.aborted || err?.name === 'AbortError') return;
+        setMoleculesFetched({ key: moleculesKey, data: null, error: err?.message || 'Molecule summaries failed' });
+      });
+    }, 150);
+    return () => { clearTimeout(timer); controller.abort(); };
+    // The key names everything the request depends on.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [moleculesKey]);
+  const moleculesState = !moleculesKey ? null : moleculesFetched?.key === moleculesKey ? moleculesFetched : { key: moleculesKey, data: null };
+  const moleculesData = moleculesState?.data ?? null;
+  // Layer-share options: the projected datasets' call layers, and any the summaries found.
+  const mapFracLayers = useMemo(() => {
+    const ids = new Set(projectionDatasetIds);
+    const out = new Set<string>();
+    for (const d of datasets) {
+      if (!ids.has(d.id)) continue;
+      for (const [name, on] of Object.entries(d.available_layers ?? {})) {
+        if (on && !MAP_NON_CALL_LAYERS.has(name)) out.add(profileKeyOf(name));
+      }
+    }
+    for (const k of moleculesData?.layers ?? []) out.add(k);
+    return [...out].sort();
+  }, [datasets, projectionDatasetIds, moleculesData]);
+  const regMolecules = regularity.molecules;
+  const moleculeOf = useCallback((ds: string, rid: string) => {
+    const byRead = moleculesData?.molecules[ds];
+    return byRead ? (byRead[rid] ?? byRead[qnameOfId(rid)]) : undefined;
+  }, [moleculesData]);
+  const mapSummary = useCallback((ds: string, rid: string) => {
+    if (isRegularityColor(mapColorBy)) {
+      const sk = projectionRound?.keyByDataset[ds];
+      const m = sk ? regMolecules[sk] : undefined;
+      const v = m?.get(rid) ?? m?.get(qnameOfId(rid));
+      return v ? { span: 0, m6aPerKb: null, frac: {}, regMedian: v[0], regMax: v[1] } : undefined;
+    }
+    const m = moleculeOf(ds, rid);
+    return m ? { span: m.span, m6aPerKb: m.m6a_per_kb, frac: m.frac, regMedian: null, regMax: null } : undefined;
+  }, [mapColorBy, projectionRound, regMolecules, moleculeOf]);
+  // A molecule's geometry group (by QNAME; null: not among the patch analysis's molecules).
+  const geoGroups = mapColorBy === MAP_COLOR_GEOMETRY_LOW ? geometries.groupsLow : geometries.groups;
+  const geometryOf = useCallback((ds: string, rid: string): number | null => {
+    const m = geoGroups[ds];
+    return m ? (m.get(rid) ?? m.get(qnameOfId(rid)) ?? null) : null;
+  }, [geoGroups]);
+  const mapColoring = useMemo(() => {
+    if (!projectionData || mapColorBy === MAP_COLOR_CLUSTER) return { colors: null, legend: { kind: 'none' as const } };
+    return mapPointColors(mapColorBy, {
+      readIds: projectionData.read_ids,
+      datasetIds: projectionData.dataset_ids,
+      summaries: (ds, rid) => mapSummary(ds, rid),
+      states: (ds, rid) => moleculeOf(ds, rid)?.state ?? null,
+      geometries: (ds, rid) => geometryOf(ds, rid),
+      datasetColor: ds => datasets.find(d => d.id === ds)?.color,
+      datasetLabel: ds => datasets.find(d => d.id === ds)?.label ?? ds,
+    });
+  }, [projectionData, mapColorBy, mapSummary, moleculeOf, geometryOf, datasets, layerColorVersion]);
+  const mapColorValue = useCallback((index: number): string | null => {
+    if (!projectionData || mapColorBy === MAP_COLOR_CLUSTER || mapColorBy === 'dataset') return null;
+    const ds = projectionData.dataset_ids[index], rid = projectionData.read_ids[index];
+    if (isGeometryColor(mapColorBy)) {
+      const g = geometryOf(ds, rid), low = mapColorBy === MAP_COLOR_GEOMETRY_LOW;
+      return g == null ? null : g > 0 ? `Carries ${low ? 'low' : 'high'}-regularity geometry ${low ? 'L' : 'G'}${g}` : `Carries no ${low ? 'low' : 'high'}-regularity geometry`;
+    }
+    if (mapColorBy === 'state') {
+      const st = moleculeOf(ds, rid)?.state;
+      return st ? `At ${(mapColorPos + 1).toLocaleString()}: ${st === 'linker' ? 'no call' : channelLabel(st)}` : null;
+    }
+    const v = numericValue(mapColorBy, mapSummary(ds, rid));
+    if (v == null) return null;
+    const label = mapColorBy.startsWith('frac:') ? `${channelLabel(mapColorBy.slice(5))} share` : mapColorBy === 'm6a' ? 'm6A per kb'
+      : mapColorBy === 'span' ? 'Span' : mapColorBy === 'reg.max' ? 'Regularity (max)' : 'Regularity (median)';
+    const shown = mapColorBy.startsWith('frac:') ? `${(v * 100).toFixed(0)}%` : mapColorBy === 'span' ? `${Math.round(v).toLocaleString()} bp` : v.toFixed(2);
+    return `${label}: ${shown}`;
+  }, [projectionData, mapColorBy, mapSummary, moleculeOf, geometryOf, mapColorPos]);
+  const mapFeatureOptions = useMemo(() => {
+    const ids = new Set(projectionDatasetIds);
+    const shown = datasets.filter(d => ids.has(d.id));
+    const list = shown.length ? shown : datasets;
+    return [...deriveModeOptions(list), ...nucClusterModeOptions(list)].map(o => ({ id: String(o.id), label: o.label }));
+  }, [datasets, projectionDatasetIds]);
+  const mapColorNote = mapColorBy !== MAP_COLOR_CLUSTER && mapColorBy !== 'dataset' && projectionData && mapColoring.legend.kind !== 'none'
+    && 'missing' in mapColoring.legend && mapColoring.legend.missing === projectionData.n_reads
+    ? (isGeometryColor(mapColorBy)
+      ? (geometries.status === 'ready' ? 'No regularity patches for these molecules.' : geometries.message)
+      : isRegularityColor(mapColorBy)
+      ? (regularity.status === 'loading' || regularity.status === 'analysing' ? regularity.message
+        : regularity.status === 'error' ? regularity.message : 'No regularity tiles for these molecules.')
+      : moleculesState?.error ? moleculesState.error
+        : moleculesState && !moleculesState.data ? 'Summarising the clustered molecules…' : 'No values for these molecules.')
+    : null;
 
   useEffect(() => {
     if (!hasClusterAssignments) return;
@@ -1210,10 +1424,19 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
               label={visibleClusterIds ? `Showing ${visibleClusterIds.size}/${clusterData.length}` : undefined}
             />
             {!mapVisible && <MergeToggleChip />}
+            <button type="button" data-testid="cluster-detail-plot-clusters"
+              className="rounded border border-cyan-200 bg-white px-1.5 py-0.5 text-[11px] font-medium text-cyan-800 hover:bg-cyan-50 dark:border-cyan-900/60 dark:bg-transparent dark:text-cyan-200 dark:hover:bg-cyan-950/40"
+              title="Plot these clusters: open Plots with Group by = cluster, pinned to this locus (one size enrichment plot per cluster, on a shared scale)."
+              onClick={() => openPlots({ type: 'size-enrichment', where: 'view', groupBy: 'cluster', pinned: { chrom, start: Math.round(start), end: Math.round(end), genome: viewGenome ?? null } })}>
+              Plot these clusters
+            </button>
           </div>
         ) : undefined}
       >
 
+      {clusterWindowPeaks?.scope === 'whole-view' && (
+        <div className="px-2 py-1 text-[11px] text-ink-secondary" data-testid="cluster-detail-scope">{WHOLE_VIEW_LABEL}</div>
+      )}
       {(runResult || matchedRun?.details) && (
         <div className={`px-2 py-1 text-[11px] ${runResult?.tone === 'error' ? 'text-red-700 dark:text-red-300'
           : runResult?.tone === 'note' ? 'text-amber-700 dark:text-amber-300' : 'text-ink-secondary'}`} data-testid="cluster-detail-run-note">
@@ -1273,7 +1496,8 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
             clearClusterSelection={clearClusterSelection}
             mergeSelectedClusters={mergeSelectedClusters}
             combinedProfiles={combinedProfiles}
-            enabledMetaProfiles={defaultProfileToggles}
+            enabledMetaProfiles={shownProfileToggles}
+            stackedChannels={customChannels && customChannels.length > 1 ? customChannels : null}
             proportions={proportions}
             chartWidth={Math.max(200, listWidth - 12)}
             containerWidth={listWidth + 8}
@@ -1314,6 +1538,32 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
             onFocusCluster={focusFromMap}
             onClearFocus={clearMapFocus}
             onShowRead={showReadInPanels}
+            pointColors={mapColoring.colors}
+            colorValue={mapColorValue}
+            featureOverride={!!mapFeatureMode}
+            colorControls={(
+              <MapColorControls
+                fracLayers={mapFracLayers}
+                colorBy={mapColorBy}
+                onColorBy={id => setClusterViewSettings({ mapColorBy: id })}
+                position={mapColorPos}
+                onPosition={pos => setClusterViewSettings({ mapColorPos: pos })}
+                featureOptions={mapFeatureOptions}
+                featureMode={mapFeatureMode}
+                onFeatureMode={mode => setClusterViewSettings({ mapFeatureMode: mode })}
+                legend={mapColoring.legend}
+                note={mapColorNote}
+              />
+            )}
+          />
+        );
+        const picker = (
+          <ProfileChannelPicker
+            options={profileChannelOptions}
+            value={customChannels}
+            onChange={next => setClusterViewSettings({ profileChannels: next })}
+            regularity={onDemandStatus}
+            missing={missingChannels}
           />
         );
         return (
@@ -1337,11 +1587,11 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
                 <span className="text-[11px] text-ink-secondary">Clicking a cluster on the map focuses it everywhere</span>
               )}
             </div>
-            {shown === 'profiles' && overview}
+            {shown === 'profiles' && <>{picker}{overview}</>}
             {shown === 'map' && map}
             {shown === 'both' && (
               <div className="flex items-start gap-3" data-testid="cluster-overview-both">
-                <div className="shrink-0 space-y-2" style={{ width: listWidth }}>{overview}</div>
+                <div className="shrink-0 space-y-2" style={{ width: listWidth }}>{picker}{overview}</div>
                 <div className="min-w-0 flex-1">{map}</div>
               </div>
             )}
@@ -1352,13 +1602,32 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
       {/* === Profiles tab === */}
       {/* One chart per actively-displayed metaprofile layer, nested under
           each dataset. Metaprofile layers are managed with the track settings. */}
+      {activeTab === 'profiles' && hasClusterAssignments && (
+        <ProfileChannelPicker
+          options={profileChannelOptions}
+          value={customChannels}
+          onChange={next => setClusterViewSettings({ profileChannels: next })}
+          regularity={onDemandStatus}
+          missing={missingChannels}
+        />
+      )}
+      {(activeTab === 'profiles' || activeTab === 'overview') && hasClusterAssignments && (
+        <div className="flex justify-end px-2">
+          <button type="button" data-testid="cluster-profiles-open-in-plots"
+            className="rounded border border-cyan-200 px-1.5 py-0.5 text-[11px] text-cyan-800 hover:bg-cyan-50 dark:border-cyan-900/60 dark:text-cyan-200 dark:hover:bg-cyan-950/40"
+            title="Open in Plots: a metaprofile per cluster (any source, smoothing, normalisation, Compare, export, the Gallery), pinned to this locus."
+            onClick={() => openPlots({ type: 'metaprofile', where: 'view', groupBy: 'cluster', pinned: { chrom, start: Math.round(start), end: Math.round(end), genome: viewGenome ?? null } })}>
+            Open in Plots
+          </button>
+        </div>
+      )}
       {activeTab === 'profiles' && (
         <ProfilesTabContent
           datasetIds={datasetIds}
           multiDs={multiDs}
           visibleClusterData={visibleClusterData}
-          clusterProfiles={clusterProfiles}
-          enabledMetaProfiles={defaultProfileToggles}
+          clusterProfiles={profilesWithChannels}
+          enabledMetaProfiles={shownProfileToggles}
           chartWidth={chartWidth}
           isFullView={isFullView}
           isReversed={isReversed}

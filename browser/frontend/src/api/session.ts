@@ -1,3 +1,11 @@
+import { metaLocusSessionPayload, restoreMetaLocusSession } from '../features/metaLocus/metaLocusStore';
+import { isMetaChrom } from '../features/metaLocus/metaChrom';
+import { migratePeakSnapshot } from '../features/hub/peakMigration';
+import { adoptLegacyRuns, resetLegacyRuns } from '../features/hub/legacyRuns';
+import { resetGraphHub } from '../features/graphPanel/hubProvider';
+import { dualWriteFrontend, migrateHubSession, restoreHubOnly } from '../features/hub/migration';
+import { normalizeSvConflictOptions } from '../utils/svConflicts';
+import { duringSessionRestore } from '../utils/sessionRestore';
 import { validateMatchedState } from '../utils/matchedRegions';
 import { normalizeFeatureRefs } from '../stores/featureStore';
 import { useSplitPanelStore } from '../stores/splitPanelStore';
@@ -10,7 +18,9 @@ import { applyExcludedReads, useReadActionsStore } from '../stores/readActionsSt
 import { useBrowserStore } from '../stores/browserStore';
 import { DEFAULT_MIN_FOOTPRINTS } from '../stores/uiSlice';
 import { restoredMergeSettings, serializeState } from '../stores/historySlice';
+import { normalizeClusterViewSettings } from '../utils/clusterViewSettings';
 import { normalizeFootprintSizeSettings } from '../utils/footprintSizeSettings';
+import { galleryForSave, restoreGallery } from '../features/plots/gallery';
 import { normalizeMergeLog } from '../stores/clusterMergeLog';
 import type { SerializedDataset, Snapshot } from '../stores/historySlice';
 import { deserializeSets } from '../stores/hydration';
@@ -31,11 +41,13 @@ import { getTracks, type TrackListEntry } from './tracks';
 import { emitTutorialEvent } from '../utils/tutorialEvents';
 import { useRegionCatalogStore } from '../stores/regionCatalogStore';
 import { normalizeHighlights } from '../stores/highlightSlice';
-import { normalizeClusterGroupLabels, normalizeSvSplits } from '../stores/svSlice';
+import { normalizeSvCarrierEvidence, normalizeClusterGroupLabels, normalizeSvSplits } from '../stores/svSlice';
 import { clampMinSvLen, SV_MIN_LEN_DEFAULT, clampMinSvSupport, SV_MIN_SUPPORT_DEFAULT } from '../components/tracks/read-track/svDrawing';
 import { DEFAULT_CLASS_REGION_MODE, isClassRegionMode } from '../utils/classRegion';
 import { CLASS_REGION_RESET_EVENT } from '../utils/analysisCommands';
 import { normalizeSignalFilters } from '../utils/signalFilters';
+import { restoreDifferencesSession, restoreHistoricalMembership, legacySplitDefinitions } from '../features/differences/session';
+import { markReferenceChosen } from '../stores/referenceNoticeStore';
 
 export { deserializeSets } from '../stores/hydration';
 
@@ -44,10 +56,10 @@ const API_BASE = '/api';
 export const SESSION_PRE_VIEWPORT_KEYS = [
   'viewMode', 'sortMode', 'sortSelection', 'filterMode', 'spanningOnly', 'downsampleCount', 'readDisplayMode', 'allReadsDisplayCap', 'backgroundReadCap', 'clusterPreparationCount', 'clusterPreparationSamples', 'analysisSampleCount', 'analysisSampleSeed', 'classRegionMode',
   'clusterK', 'clusterResolution', 'clusterMethod', 'clusterPeakMode', 'clusterFeatureRules', 'analysisSortRules', 'analysisFilterRules', 'subnucleosomalThreshold', 'accessibilityThreshold',
-  'mergeMinFraction', 'mergeMaxSimilarity', 'mergeStrategy', 'mergeThresholds', 'footprintSizeSettings',
+  'mergeMinFraction', 'mergeMaxSimilarity', 'mergeStrategy', 'mergeThresholds', 'clusterViewSettings', 'footprintSizeSettings',
   'enabledModTypes', 'cachedLayerTypes', 'legacyLayerInference', 'legacyNucMinSize', 'clickTargetLayer', 'footprintAnalysisLayer',
   'fillSmallGaps', 'fillGapSize', 'hideTerminalGaps', 'terminalGapThreshold', 'hideShortEndFootprints', 'minFpQuality', 'minFootprints', 'minFootprintsAuto', 'minFootprintsBeforeAllReads', 'showDuplicateReads', 'showQcFailReads', 'signalFilters',
-  'enabledCigarTypes', 'svDisplayEnabled', 'svMinLen', 'svMinSupport', 'isReversed', 'darkMode', 'peakSettings', 'activeColormap', 'fillReadHeight', 'showHiddenTrackStrip',
+  'enabledCigarTypes', 'svDisplayEnabled', 'svMinLen', 'svMinSupport', 'svConflictOptions', 'isReversed', 'darkMode', 'peakSettings', 'activeColormap', 'fillReadHeight', 'showHiddenTrackStrip',
   'readSeparatorMode', 'readSeparatorMinHeight', 'readSeparatorWidth',
   'showReadTooltip', 'showCoverageHistogram', 'maxRegionForReads', 'motifThreshold', 'readRowHeight',
   'readScrollOffsets', 'showGenomeOverview', 'publicMode',
@@ -64,7 +76,7 @@ export const SESSION_PRE_VIEWPORT_KEYS = [
 
 export const SESSION_POST_VIEWPORT_KEYS = [
   'clusterAssignments', 'clusterOrder', 'clusterPatterns', 'clusterCentroids',
-  'clusterPeakWidths', 'clusterPeakRegions', 'clusterWindowPeaks', 'clusterMatchedRun',
+  'clusterPeakWidths', 'clusterMetricCohort', 'clusterPeakRegions', 'clusterWindowPeaks', 'clusterMatchedRun',
   'clusterTreeNodes', 'clusterTreeRootIds', 'activeClusterTreeNodeId',
   'dynamicClustering', 'dynamicOverlapMode', 'readSortOrder', 'readStateDetails',
   'peaksByRule', 'selectedPeaks', 'peakModes', 'peaksLocked',
@@ -77,7 +89,7 @@ export const SESSION_POST_VIEWPORT_KEYS = [
   // The merges since the last clustering (Unmerge / Merge again).
   'clusterMergeLog',
   // SV allele splits (the groups' definition) and their group names.
-  'svSplits', 'clusterGroupLabels',
+  'svSplits', 'clusterGroupLabels', 'svCarrierEvidence', 'differencesSession',
   // Selected features (Cluster / Sort / Filter on features).
   'selectedFeatures',
 ] as const;
@@ -85,11 +97,11 @@ export const SESSION_POST_VIEWPORT_KEYS = [
 /** Analysis state that belongs to a session: reset on import before the session's own is applied. */
 const SESSION_OWNED_ANALYSIS_KEYS = [
   'clusterAssignments', 'clusterOrder', 'clusterPatterns', 'clusterCentroids',
-  'clusterPeakWidths', 'clusterPeakRegions', 'clusterWindowPeaks', 'clusterMatchedRun',
+  'clusterPeakWidths', 'clusterMetricCohort', 'clusterPeakRegions', 'clusterWindowPeaks', 'clusterMatchedRun',
   'clusterTreeNodes', 'clusterTreeRootIds', 'activeClusterTreeNodeId',
   'dynamicClustering', 'readSortOrder', 'readStateDetails',
   'clusterFocus', 'selectedClusters', 'filteredReadIds', 'readFilterSources', 'selectedReadIds',
-  'readProjection', 'clusterMergeLog', 'svSplits', 'clusterGroupLabels', 'selectedFeatures',
+  'readProjection', 'clusterMergeLog', 'svSplits', 'clusterGroupLabels', 'svCarrierEvidence', 'differencesSession', 'selectedFeatures',
   'correspondenceScans',
 ] as const;
 
@@ -127,6 +139,11 @@ export function collectFrontendState(): Record<string, unknown> {
   };
   // The Regions panel's catalogs (not in undo snapshots: stores/regionCatalogStore.ts).
   frontendState.regionCatalogs = useRegionCatalogStore.getState().sessionPayload();
+  // The Plots Gallery: every plot made, with its data, thumbnail and browser state (features/plots/gallery.ts; not in
+  // undo snapshots, which it holds copies of).
+  frontendState.plotsGallery = galleryForSave();
+  // The meta-locus (features/metaLocus): the pool's spec, seed, working-set size and refilled reads (null: none).
+  frontendState.metaLocus = metaLocusSessionPayload();
   // Split panels carry their membership rule (panels[].readSubset); their read names too, used only when a rule's run
   // is gone when the session reopens (utils/splitPanels.ts).
   frontendState.splitPanelReads = splitSessionReads();
@@ -138,7 +155,7 @@ export function collectFrontendState(): Record<string, unknown> {
   // (Only while it is still the map of these inputs: the import signs it again.)
   const projection = projectionForSave(s);
   if (projection) frontendState.readProjection = projection;
-  return frontendState;
+  return dualWriteFrontend(frontendState);
 }
 
 /**
@@ -161,7 +178,7 @@ export async function exportSession(): Promise<Blob> {
   const frontendState = collectFrontendState();
   // Embed full history in frontend_state so it persists through backend passthrough
   if (historyStack.length > 0) {
-    frontendState.historySnapshots = historyStack;
+    frontendState.historySnapshots = historyStack.map(snapshot => ({ ...snapshot, state: dualWriteFrontend(snapshot.state as unknown as Record<string, unknown>) }));
     frontendState.historyPointer = s._historyPointer;
   }
 
@@ -270,6 +287,15 @@ export async function importSession(
   sessionJson: Record<string, unknown>,
   pathMapping?: Record<string, string>,
 ): Promise<Record<string, unknown>> {
+  // A session the user opens carries its own reference: the user's choice.
+  markReferenceChosen();
+  return duringSessionRestore(() => importSessionNow(sessionJson, pathMapping));
+}
+
+async function importSessionNow(
+  sessionJson: Record<string, unknown>,
+  pathMapping?: Record<string, string>,
+): Promise<Record<string, unknown>> {
   const response = await fetchApiResponse(`${API_BASE}/session/import`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -331,12 +357,13 @@ export async function importSession(
   const serverMissing = ((result.results ?? {}) as { missing_packs?: unknown }).missing_packs;
   const note = missingPacksNote([...missing, ...(Array.isArray(serverMissing) ? serverMissing.map(String) : [])]);
   if (note) result.pack_note = note;
-  // The imported session is a step at once (before anything is awaited): the
-  // view-moved effect would otherwise find an empty history and record the
-  // previous session's view as "Before navigation". Its echo of the move
-  // isn't a step either.
-  useBrowserStore.getState().pushSnapshot('Import session');
-  useBrowserStore.setState({ _lastRestoreTime: Date.now() } as any);
+  // Keep the imported timeline and its redo branch. Only a session without
+  // history needs an initial baseline; importing is never an extra undo step.
+  // Seed it before awaiting tracks so the navigation effect cannot record
+  // the previous session's view as "Before navigation".
+  if (useBrowserStore.getState()._historyStack.length === 0) {
+    useBrowserStore.getState().pushSnapshot('Import session');
+  }
   // The imported tracks carry their own name filters on the server; mirror
   // them (the batch fetch sends these and they override the server's).
   try {
@@ -361,6 +388,10 @@ export function trackFiltersFromList(tracks: TrackListEntry[]): Record<number, s
 }
 
 export function applyImportedState(result: Record<string, unknown>): void {
+  // Effects and synchronous subscribers must see every migration as a restore,
+  // including before the imported history replaces the old session's history.
+  useBrowserStore.setState({ _lastRestoreTime: Date.now() } as any);
+  if (result.frontend && typeof result.frontend === 'object') result = { ...result, frontend: restoreHubOnly(result.frontend as Record<string, unknown>) };
   const store = useBrowserStore;
   // Highlights, pins and exclusions belong to the session being left.
   useReadActionsStore.getState().reset();
@@ -447,12 +478,15 @@ export function applyImportedState(result: Record<string, unknown>): void {
     // SV display (fb-n9-sv): a session saved before it gets its defaults, not the open session's.
     if (!('svDisplayEnabled' in batch)) batch.svDisplayEnabled = true;
     batch.svMinLen = clampMinSvLen(batch.svMinLen ?? SV_MIN_LEN_DEFAULT);
+    batch.svConflictOptions = normalizeSvConflictOptions(batch.svConflictOptions);
     batch.svMinSupport = clampMinSvSupport(batch.svMinSupport ?? SV_MIN_SUPPORT_DEFAULT);
     if ('clusterFeatureRules' in batch) {
       batch.clusterFeatureRules = normalizeClusterFeatureRules(batch.clusterFeatureRules);
     }
     for (const key of ['mergeMinFraction', 'mergeMaxSimilarity', 'mergeStrategy', 'mergeThresholds'] as const) delete batch[key];
     Object.assign(batch, restoredMergeSettings(frontend));
+    // Cluster views (metaprofile channels, map colour / features): the session's, else the defaults.
+    batch.clusterViewSettings = normalizeClusterViewSettings(frontend.clusterViewSettings);
     // Footprint size plots: the session's settings, else the defaults (sessions before them have none).
     batch.footprintSizeSettings = normalizeFootprintSizeSettings(frontend.footprintSizeSettings);
     if ('analysisSortRules' in batch) {
@@ -599,6 +633,12 @@ export function applyImportedState(result: Record<string, unknown>): void {
 
   // 6. Navigate to viewport (triggers data fetching — also clears cluster state)
   const viewport = result.viewport as { chrom?: string; start?: number; end?: number } | undefined;
+  // A meta-locus: re-open its pool (the server's cache makes it ready at once) and set the saved working set; the
+  // view below already sits on its contig, whose reads come once the pool answers.
+  {
+    const savedMeta = frontend && typeof frontend === 'object' ? (frontend as Record<string, unknown>).metaLocus : undefined;
+    void restoreMetaLocusSession(savedMeta, isMetaChrom(viewport?.chrom));
+  }
   if (viewport && viewport.chrom != null && viewport.start != null && viewport.end != null) {
     // The restored panels already sit at their saved sites: moving the main
     // view there must not move locked ones along with it.
@@ -617,6 +657,8 @@ export function applyImportedState(result: Record<string, unknown>): void {
     if (frontend && typeof frontend === 'object' && frontend.pinnedMotifs) reset.pinnedMotifs = normalizePinnedMotifs(frontend.pinnedMotifs);
     // Plugin packs' session state: the session's own, or their reset for a session without it.
     for (const ext of storeExtensions()) Object.assign(reset, ext.importSession?.(frontend && typeof frontend === 'object' ? frontend : undefined, store.getState()) ?? {});
+    // The session's Plots Gallery, or none for a session without one.
+    restoreGallery(frontend && typeof frontend === 'object' ? frontend.plotsGallery : undefined);
     store.setState(reset as any);
   }
   if (frontend && typeof frontend === 'object') {
@@ -633,7 +675,16 @@ export function applyImportedState(result: Record<string, unknown>): void {
       postBatch.transcriptionStateFilters = normalizeTranscriptionStateFilters(postBatch.transcriptionStateFilters);
     }
     if ('clusterMergeLog' in postBatch) postBatch.clusterMergeLog = normalizeMergeLog(postBatch.clusterMergeLog);
-    if ('svSplits' in postBatch) postBatch.svSplits = normalizeSvSplits(postBatch.svSplits);
+    postBatch.svCarrierEvidence = normalizeSvCarrierEvidence(postBatch.svCarrierEvidence);
+    postBatch.svSplits = normalizeSvSplits(legacySplitDefinitions(frontend));
+    const differences = restoreDifferencesSession(frontend);
+    postBatch.differencesSession = differences;
+    Object.assign(postBatch, restoreHistoricalMembership({ ...postBatch, datasets: store.getState().datasets, panels: store.getState().panels }, differences));
+    if (postBatch.svSplits) {
+      for (const [key, def] of Object.entries(postBatch.svSplits as Record<string, { frozenImport?: boolean }>)) {
+        if (!frontend.differencesSession || differences.targets[key]?.frozen) def.frozenImport = true;
+      }
+    }
     if ('clusterGroupLabels' in postBatch) postBatch.clusterGroupLabels = normalizeClusterGroupLabels(postBatch.clusterGroupLabels);
     if ('selectedFeatures' in postBatch) postBatch.selectedFeatures = normalizeFeatureRefs(postBatch.selectedFeatures);
     // Navigation also reset the dismissed analysis panels restored above.
@@ -761,6 +812,10 @@ export function applyImportedState(result: Record<string, unknown>): void {
       }
     }
   }
+  store.setState(migrateHubSession(store.getState()));
+  resetLegacyRuns();
+  resetGraphHub();
+  adoptLegacyRuns((result.results as { hub_legacy?: unknown } | undefined)?.hub_legacy);
   // Restored geometry is not the current viewport's geometry. Refresh even
   // when chromosome/coordinates did not change, and discard stale Fit scroll.
   store.setState(state => ({
@@ -788,7 +843,7 @@ function normalizeImportedHistorySnapshots(value: unknown): Snapshot[] {
     .map((snapshot, index) => ({
       label: typeof snapshot.label === 'string' ? snapshot.label : `Imported snapshot ${index + 1}`,
       timestamp: typeof snapshot.timestamp === 'number' ? snapshot.timestamp : Date.now(),
-      state: snapshot.state as Snapshot['state'],
+      state: migratePeakSnapshot(snapshot.state as Record<string, unknown>) as unknown as Snapshot['state'],
       kind: snapshot.kind as Snapshot['kind'],
       coalesceKey: typeof snapshot.coalesceKey === 'string' ? snapshot.coalesceKey : undefined,
       // A step that closed datasets keeps where they came from, so Undo can reopen them.

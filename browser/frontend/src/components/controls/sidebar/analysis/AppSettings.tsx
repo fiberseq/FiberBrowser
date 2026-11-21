@@ -1,7 +1,7 @@
 import { FiberhmmUpdates } from '../../../appUpdate/FiberhmmUpdates';
 import { useCallback, useEffect, useState } from 'react';
 import {
-  getAppInfo, removeGithubToken, saveGithubToken, setFiberhmmChoice, setUpdateSettings, type AppInfo,
+  getAppInfo, removeGithubToken, saveGithubToken, setDownloadSettings, setFiberhmmChoice, setUpdateSettings, type AppInfo,
 } from '../../../../api/appUpdate';
 import { openUpdateDialog, updatesAvailableHere } from '../../../appUpdate/appUpdateStore';
 import { SidebarSubSection } from '../../SidebarSubSection';
@@ -36,6 +36,14 @@ export const APP_SETTINGS = defineSettings({
     id: 'app.update-manifest',
     label: 'Update manifest',
     keywords: ['update url', 'update channel', 'lab builds', 'shared drive', 'dropbox', 'FIBERBROWSER_UPDATE_URL'],
+    location: inSidebar('analysis.app'),
+    hiddenReason: ownComputerOnly,
+  },
+  downloadWarning: {
+    id: 'app.download-warning',
+    label: 'Download warning size',
+    keywords: ['download size', 'large download', 'genome download', 'size limit', 'confirm download',
+      'FIBERBROWSER_DOWNLOAD_WARN_BYTES'],
     location: inSidebar('analysis.app'),
     hiddenReason: ownComputerOnly,
   },
@@ -91,12 +99,14 @@ function AppSettingsBody() {
   const [mode, setMode] = useState<'bundled' | 'custom'>('bundled');
   const [manifest, setManifest] = useState('');
   const [token, setToken] = useState('');
+  const [warnGb, setWarnGb] = useState('');
 
   const apply = useCallback((next: AppInfo) => {
     setInfo(next);
     setMode(next.fiberhmm.app_choice?.source === 'custom' ? 'custom' : 'bundled');
     setCustomPath(next.fiberhmm.app_choice?.custom_path ?? '');
     setManifest(next.updates.manifest_url ?? '');
+    setWarnGb(next.downloads ? String(next.downloads.warn_bytes / 1e9) : '');
   }, []);
 
   useEffect(() => {
@@ -273,6 +283,32 @@ function AppSettingsBody() {
                 <SidebarSettingNote>{info.auth.keychain.reason}</SidebarSettingNote>
               )}
             </>
+          )}
+          {info.downloads && (
+            <SidebarSettingRow
+              setting={APP_SETTINGS.downloadWarning}
+              helpText={`Downloads (genome FASTA, annotations) larger than this ask first, showing their size; one whose size the server doesn't say warns once it passes it and goes on. There is no size limit. 0 turns the warning off; empty restores the default (${info.downloads.default / 1e9} GB).`
+                + (info.downloads.env ? ' FIBERBROWSER_DOWNLOAD_WARN_BYTES sets it for this run.' : '')}
+            >
+              <input
+                type="number"
+                min={0}
+                step="any"
+                value={warnGb}
+                onChange={e => setWarnGb(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                onBlur={() => {
+                  const text = warnGb.trim();
+                  const value = text === '' ? null : Number(text);
+                  if (value !== null && (!Number.isFinite(value) || value < 0)) { setError('Enter a size in GB (0: no warning).'); return; }
+                  const bytes = value === null ? null : Math.round(value * 1e9);
+                  if (bytes !== (info.downloads?.saved ?? null)) void run(() => setDownloadSettings({ warn_bytes: bytes }), 'Saved.');
+                }}
+                className="input-tool w-24 text-xs"
+                data-testid="app-download-warning-gb"
+              />
+              <span className="text-[11px] text-ink-secondary">GB</span>
+            </SidebarSettingRow>
           )}
           {info.updates.disabled && <SidebarSettingNote>{info.updates.disabled}</SidebarSettingNote>}
           <SidebarSettingNote tone="slate">

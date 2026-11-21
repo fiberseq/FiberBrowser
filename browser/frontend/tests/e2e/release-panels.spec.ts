@@ -95,7 +95,6 @@ test('analysis strip opens and closes core release panels', async ({ server, pag
     // FIBERHMM-CHEMISTRY @CO line). A bare getByText would also match the hidden
     // Compare-strands note ('Find footprint classes above first…').
     { id: 'footprint-analysis', marker: /Find footprint classes|Set up datasets to continue/i, role: 'button' as const },
-    { id: 'co-accessibility', marker: /Co-accessibility/i },
     { id: 'transcription-state', marker: /Select a gene/i },
     { id: 'cluster-detail', marker: /No clusters computed/i },
     { id: 'primer-design', marker: /Select peaks to define the target/i },
@@ -156,21 +155,40 @@ test('peak scan, lock, and rules controls stay wired through the toolbar', async
   await expect(rules.getByRole('button', { name: 'Add rule', exact: true })).toBeVisible();
 });
 
-test('co-accessibility refresh renders metadata and clears loading status', async ({ server, page, request }) => {
+test('co-accessibility moved into Plots: the old panel and ⌘K open a Plots co-accessibility plot; Refresh recomputes it', async ({ server, page, request }, info) => {
+  test.setTimeout(180_000);
   const region = await findReadRegion(request, server);
+  await page.addInitScript(() => { (window as any).__FIBERBROWSER_E2E_EXPOSE_STORE = true; });
   await gotoFreshRegion(page, server, region);
+  // No Co-accessibility panel tile any more.
+  await expect(panelButton(page, 'read-stats')).toHaveCount(1);
+  await expect(panelButton(page, 'co-accessibility')).toHaveCount(0);
 
-  await panelButton(page, 'co-accessibility').click();
-  await expect(page.getByTestId('coacc-matrix-canvas')).toBeVisible({ timeout: 15_000 });
-  await expect(page.getByTestId('coacc-metadata')).toContainText(/reads/, { timeout: 45_000 });
+  // The old entry point (links, scripts, the track menu, Footprints → Co-occupancy open the 'co-accessibility' panel).
+  const asked = page.waitForResponse(r => r.url().includes('/api/coacc/matrix/data') && r.ok(), { timeout: 45_000 });
+  await page.evaluate(() => (window as any).__FIBERBROWSER_STORE__.getState().openAnalysisPanel('co-accessibility'));
+  const ws = page.getByTestId('plots-workspace');
+  await expect(ws).toBeVisible();
+  await expect(page.locator('[data-panel-content-type="co-accessibility"]')).toHaveCount(0);
+  await asked;
+  const plot = ws.getByTestId('plots-coacc-plot');
+  await expect(plot).toHaveAttribute('data-state', 'current', { timeout: 45_000 });
+  await expect(ws.getByTestId('plots-coacc-summary')).toContainText(/reads .*bins/);
+  const again = page.waitForResponse(r => r.url().includes('/api/coacc/matrix/data') && r.ok(), { timeout: 45_000 });
+  await ws.getByTestId('plots-coacc-refresh').click();
+  await again;
+  await expect(plot).toHaveAttribute('data-state', 'current', { timeout: 45_000 });
+  // The guide's picture (docs/images/guide/38_co_accessibility.png comes from here).
+  await page.setViewportSize({ width: 1440, height: 1500 });
+  await expect(plot).toHaveAttribute('data-state', 'current', { timeout: 45_000 });
+  await ws.getByTestId('plots-card').screenshot({ path: info.outputPath('38_co_accessibility.png') });
 
-  const metadataResponsePromise = page.waitForResponse(
-    response => response.url().includes('/api/coacc/metadata') && response.ok(),
-    { timeout: 45_000 },
-  );
-  await page.getByTestId('coacc-refresh-button').click();
-  await metadataResponsePromise;
-  await expect(page.getByTestId('coacc-status')).toContainText(/Matrix refreshed/i, { timeout: 45_000 });
-  await expect(page.getByTestId('coacc-metadata')).toContainText(/bins/);
-  await expect(page.getByText('Computing matrix...')).toHaveCount(0);
+  // ⌘K: "Co-accessibility" opens the same.
+  await page.keyboard.press('Escape');
+  await expect(ws).toHaveCount(0);
+  await page.keyboard.press('ControlOrMeta+k');
+  await page.getByTestId('command-palette-input').fill('Co-accessibility');
+  await page.getByTestId('command-palette').getByText('Co-accessibility', { exact: true }).first().click();
+  await expect(ws).toBeVisible();
+  await expect(ws.getByTestId('plots-type-co-accessibility')).toHaveAttribute('aria-pressed', 'true');
 });

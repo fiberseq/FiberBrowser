@@ -19,6 +19,8 @@ export interface Props {
   overrideFilteredIds?: Set<string>;
   /** DAF-seq panel shown for one strand only (CT or GA). */
   readStrand?: 'CT' | 'GA' | null;
+  /** Live lift: this panel's haplotype ('MAT'/'PAT'), filtered on the server. */
+  liftHap?: string | null;
   panelLabel?: string;  // Label for the panel (e.g., "Locus X", "Locus Y")
   disableSpanning?: boolean;  // Force spanning off (for split view)
   // Linked session props for DAF-C paired reads
@@ -47,10 +49,14 @@ export interface Props {
 }
 
 export interface CigarEvent {
-  type: 'M' | 'I' | 'D';  // Mismatch, Insertion, Deletion
+  type: 'M' | 'X' | 'I' | 'D';  // Native M, lifted X mismatch, insertion, deletion
   pos: number;           // Position relative to region start
   len: number;           // Length in bp
   seq?: string;          // Sequence (for mismatches and insertions)
+  base?: string;
+  ref?: string;
+  source?: 'assembly' | 'reads';
+  allele?: 'grch38';
 }
 
 /**
@@ -58,16 +64,36 @@ export interface CigarEvent {
  * services/sv_events.py). Absolute 0-based reference coordinates; `q` is a
  * query position in the BAM SEQ frame.
  */
-export type SvEvent =
+export interface SvAlleleMetadata {
+  source?: 'assembly' | 'reads'; method?: 'assembly_projection' | 'display_projection'; display_only?: boolean; difference_id?: string;
+  ref_end?: number; ref_len?: number; alt_len?: number; q_end?: number;
+  raw_ref?: number; raw_ref_end?: number; uncertainty?: [number, number];
+  inserted_len?: number; deleted_len?: number; net_len?: number;
+  alt_seq?: string; ref_seq?: string; normalized?: boolean;
+  raw_pieces?: Array<{ t: 'I' | 'D' | 'M' | '=' | 'X'; ref: number; len: number; q: number }>;
+}
+
+export type SvEvent = (
   | { t: 'D'; ref: number; len: number; q: number }
   | { t: 'I'; ref: number; len: number; q: number; seq?: string }
-  | { t: 'S'; side: 'L' | 'R'; ref: number; len: number; q: number; h?: 1 }
+  | { t: 'S'; side: 'L' | 'R'; ref: number; len: number; q: number; h?: 1;
+      anchor?: Omit<SvSegment, 't' | 'mapq' | 'query_blocks'> }
   | { t: 'SA'; chrom: string; pos: number; strand: '+' | '-'; mapq: number; nm: number; cigar_ref_len: number; supp: boolean;
       /** The segment aligns on the read's own strand (a deletion's split read; an inversion's does not). */
-      same_strand?: boolean };
+      same_strand?: boolean }) & SvAlleleMetadata;
+
+export type SvEvidenceLevel = 'confirmed' | 'putative' | 'conflicting' | 'ambiguous';
+export interface SvSegment {
+  t?: 'SA';
+  chrom: string; pos: number; cigar_ref_len: number; strand: '+' | '-'; mapq: number;
+  q_start: number; q_end: number; query_length: number;
+  /** Full-query M/=/X intervals; internal insertions do not align elsewhere. */
+  query_blocks?: [number, number][];
+}
 
 /** One SV cluster across the reads in view. */
 export interface SvCluster {
+  ref_len?: number; alt_len?: number; raw_ref?: number; uncertainty?: [number, number];
   id: string;
   t: 'D' | 'I';
   ref: number;
@@ -76,6 +102,10 @@ export interface SvCluster {
   end: number;
   /** Carrier reads. */
   support: number;
+  confirmed?: number;
+  putative?: number;
+  conflicting?: number;
+  ambiguous?: number;
   /** Carriers plus reads spanning [ref - margin, end + margin] without it. */
   informative: number;
   /** Carriers whose evidence is a clip with an SA segment (deletions). */
@@ -85,6 +115,8 @@ export interface SvCluster {
 }
 
 export interface SvSummary {
+  conflict_options?: import('../../../utils/svConflicts').SvConflictOptions;
+  evidence_targets?: Pick<SvCluster, 't' | 'ref' | 'len' | 'uncertainty'>[];
   min_len: number;
   margin: number;
   /** 'loaded': a working-read cap truncated the reads in view. */
@@ -117,11 +149,80 @@ export interface AnnotationLayer {
   source_layer?: 'tf' | 'tf_sr' | string;
 }
 
+/** A live-lift row's map geometry and provenance (services/lift/compose.py; view-relative like `intervals`). */
+export interface LiveLiftRow {
+  /** Absolute map spans plus view-relative pos; display observations, never sv_evidence. */
+  gap_observations?: Array<{
+    id: string; hap: string; hap_label: string; kind: 'insertion' | 'deletion' | 'replacement'; reason: string;
+    source: 'assembly'; t_start: number; t_end: number; ref_bp: number; alt_bp: number; chain: number; strand: '+' | '-';
+    src: { contig: string; start: number; end: number }; pos: number;
+    method: 'assembly_projection'; display_only: true; sequence_status: 'unresolved'; read_deviations: 'unassessed';
+    coverage: { source: [number, number]; aligned_bp: number; mol_bp: number; left_flank: boolean; right_flank: boolean; full: boolean };
+  }>;
+  /** Canonical insertion IDs parallel to badges, retained while collapsed (null for small/unresolved spans). */
+  badge_ids?: Array<string | null>;
+  /** Insertion-local annotations fetched for expanded IDs; usually empty on collapsed rows. */
+  insertions?: Record<string, LiveLiftInsertion | { length: number; too_large: true }>;
+  v: number;
+  key?: string;
+  hap?: string;
+  /** 'MAT' / 'PAT' (or the map's haplotype key). */
+  hap_label?: string;
+  /** 'primary': the molecule's haplotype and strand come from its primary record; 'record': this record's own. */
+  hap_source?: 'primary' | 'record';
+  alt?: boolean;
+  /** Supplementary whose known primary has no placement in this genome. */
+  orphan?: boolean;
+  placement?: string;
+  molecule?: string;
+  record?: string;
+  row_index?: number;
+  row_count?: number;
+  source?: { contig: string; start: number; end: number; orientation?: string; supplementary?: boolean;
+    sa?: Array<Record<string, unknown>> | null };
+  /** [t0, t1, chain, strand, primary]: one per chain run. */
+  segments: Array<[number, number, number, '+' | '-', boolean]>;
+  /** Target-only gaps of the map (dashed; not deletions of the molecule). */
+  connectors?: Array<[number, number]>;
+  /** Where the body breaks: the deleted bases of map gaps that cut the row's calls (absent: every connector). */
+  holes?: Array<[number, number]>;
+  /** [pos, reason, molecular bp, source bp, side, target locus?]. */
+  badges?: Array<[number, string, number, number, string, [string, number, number]?]>;
+  calls?: Record<string, Array<string | null>>;
+  call_parts?: Record<string, Array<[number, number] | null>>;
+  dropped?: { points?: number; events?: number };
+}
+
+export interface LiveLiftInsertion {
+  observed_ref_start?: number; observed_ref_end?: number;
+  kind?: 'insertion' | 'replacement'; t_start?: number; t_end?: number; ref_bp?: number; alt_bp?: number;
+  pos: number; hap_label: string; src: [string, number, number]; length: number; mol_bp: number;
+  orientation: '+' | '-'; covered: [number, number]; intervals: [number, number, number][];
+  layers?: Record<string, AnnotationLayer>; qualities?: number[]; fire?: [number, number, number][];
+  methyl_m6a?: number[]; methyl_m5c?: number[]; deam?: [number, number][];
+  possible_deam_ct?: number[]; possible_deam_ga?: number[];
+}
+
 export interface CompactRead {
+  /** Observed alternate-local annotations; independent of map metadata/coverage. */
+  alternate_blocks?: Record<string, LiveLiftInsertion>;
+  record_sha256?: string;
   signal?: import('../../../utils/signalFilters').SignalEvidence;
   id: string;
+  analysis_id?: string;
   /** BAM 0x400 / FiberHMM BigBed isDuplicate annotation. */
   duplicate?: boolean;
+  /** DAF strand from the record's st:Z tag (FiberHMM's rule); '.' = st present but neither CT nor GA (no strand). */
+  strand?: 'CT' | 'GA' | '.';
+  /** st:Z and the SEQ's R/Y deamination marks name different strands (e.g. st not swapped by a graph lift). */
+  strand_conflict?: boolean;
+  /** A fiberhmm-lift record's provenance: source locus (Yp:Z, contig:POS:strand) and source MAPQ (Yq:i). */
+  lift?: { from: string; mapq?: number };
+  /** A meta-locus read (features/metaLocus): its site and its real place; the read itself is on the virtual contig. */
+  meta?: import('../../../features/metaLocus/types').MetaReadProvenance;
+  /** A live-lift row (DESIGN_LIVE_LIFT.md): drawn from its segments, not its interval hull. */
+  live_lift?: LiveLiftRow;
+  /** SAM QC-fail (0x200); FiberHMM 3.0.3+ flags DAF strand-swap chimeras this way (xc:Z:strand_swap). */
   qcfail?: boolean;
   chimera?: 'strand_swap';
   intervals: [number, number, number][]; // [start, end, size] - size negative for gaps (primary layer, backward compat)
@@ -144,6 +245,13 @@ export interface CompactRead {
   cigar?: CigarEvent[]; // CIGAR events for visualization
   /** SV events of at least the request's min_sv_len overlapping the view (absent when none). */
   sv?: SvEvent[];
+  /** Full allele evidence when display size/view filtering removed events from sv. */
+  sv_evidence?: SvEvent[];
+  sv_segments?: SvSegment[];
+  aligned_blocks?: [number, number][];
+  sequence_span?: [number, number];
+  supplementary?: boolean;
+  sv_alignments?: Omit<CompactRead, 'intervals' | 'sv_alignments'>[];
   fire?: [number, number, number][]; // FIRE intervals [start, end, quality] from as/al/aq tags
   /** Named annotation layers from v3 caller (nuc, tf, msp, custom). */
   layers?: Record<string, AnnotationLayer>;
@@ -169,8 +277,22 @@ export interface WorkingSampling {
   loaded_spanning?: number;
 }
 
+/** A cold deep view's first response (services/first_paint.py): the reads drawn are the final ones; the rest of the
+ * view is still loading, so counts are estimates and what is computed over every read (SV band) is not sent yet. */
+export interface FirstPaintInfo {
+  partial: true;
+  /** Reads drawn (the same reads the full set draws). */
+  shown: number;
+  /** Molecules with an alignment in view, before the read filters (the full set's count can be lower). */
+  total_estimate: number;
+  decoded?: number;
+  rounds?: number;
+}
+
 export interface ReadsResponse {
   count: number;
+  /** Present on a partial first response only. */
+  first_paint?: FirstPaintInfo;
   display_count?: number;
   total: number;
   total_in_scope?: number;  // Reads matching the current span/filter request scope before display sampling

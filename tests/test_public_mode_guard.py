@@ -9,6 +9,61 @@ import pytest
 # (browser/services/public_mode_guard.py); test_every_route_is_classified
 # fails until it is.
 PUBLIC_DENIED = {
+    # Meta-locus pools read a host BED path and the host's BAMs, run background builds and write a cache.
+    ("POST", "/api/meta_locus/pools"), ("GET", "/api/meta_locus/pools"), ("POST", "/api/meta_locus/pools/probe"), ("GET", "/api/meta_locus/pools/{pool_id}"),
+    ("POST", "/api/meta_locus/pools/{pool_id}/cancel"), ("DELETE", "/api/meta_locus/pools/{pool_id}"),
+    ("POST", "/api/meta_locus/pools/{pool_id}/reads"), ("GET", "/api/meta_locus/pools/{pool_id}/view"),
+    ("POST", "/api/meta_locus/pools/{pool_id}/view"), ("POST", "/api/meta_locus/pools/{pool_id}/refill"),
+    ("POST", "/api/meta_locus/pools/{pool_id}/find_more"),
+    # fiberhmm-scan: opening scan directories and running live scans read the host's files and run compute.
+    ("GET", "/api/scan/available"), ("POST", "/api/scan/open"), ("GET", "/api/scan/list"), ("DELETE", "/api/scan/{scan_id}"),
+    ("GET", "/api/scan/{scan_id}/hits"), ("GET", "/api/scan/{scan_id}/units"), ("POST", "/api/scan/plan"),
+    ("POST", "/api/scan/jobs"), ("GET", "/api/scan/jobs"), ("GET", "/api/scan/jobs/{job_id}"),
+    ("DELETE", "/api/scan/jobs/{job_id}"),
+    # The nucleosome panel: live jobs read the host's BAMs, write the calibration cache and run compute.
+    ("GET", "/api/nuc/available"), ("POST", "/api/nuc/status"), ("POST", "/api/nuc/jobs"), ("GET", "/api/nuc/jobs"),
+    ("GET", "/api/nuc/jobs/{job_id}"), ("DELETE", "/api/nuc/jobs/{job_id}"), ("POST", "/api/nuc/records"),
+    ("POST", "/api/nuc/summary"), ("GET", "/api/nuc/metrics"), ("POST", "/api/nuc/patches"), ("POST", "/api/nuc/regularity"), ("POST", "/api/nuc/geometries"),
+    ("POST", "/api/nuc/patch_labels"),
+    # The feature hub's analyses: association runs and overlays read scans and BAMs and run compute.
+    ("GET", "/api/hub/assoc/modes"), ("POST", "/api/hub/assoc/jobs"), ("GET", "/api/hub/assoc/jobs"),
+    ("GET", "/api/hub/assoc/jobs/{job_id}"), ("DELETE", "/api/hub/assoc/jobs/{job_id}"), ("POST", "/api/hub/overlay"),
+    # Legacy facades return local artifact paths and read/write scan files on the host.
+    ("GET", "/api/hub/legacy"),
+    # Graph columns for browser-provider hits use the host's registered graph packages.
+    ("POST", "/api/hub/columns"),
+    # Paged queries accept a scope.bed host path and read its intervals.
+    ("POST", "/api/hub/hits/query"),
+    # Live lift: opening a dataset from the host's files, reading a map from them, and its settings (the flag
+    # itself is harmless but is a host feature too).
+    ("GET", "/api/lift/enabled"), ("GET", "/api/lift/inspect"), ("POST", "/api/lift/datasets"), ("GET", "/api/lift/datasets"),
+    ("POST", "/api/lift/datasets/{dataset_id}/settings"),
+    ("GET", "/api/lift/differences"), ("GET", "/api/lift/difference_reads"),
+    ("GET", "/api/lift/difference_sequence"), ("POST", "/api/lift/provenance/{dataset_id}"),
+    ("POST", "/api/lift/analysis/summary"), ("POST", "/api/lift/analysis/split"),
+    # a BAM of a lifted dataset's chosen reads on the source assembly (host files written to a temp file)
+    ("POST", "/api/lift/export_bam"),
+    # map suggestions search the host's folders near a BAM path; the navigation tables (summary, outline, tiles,
+    # ribbon pieces) read a live-lift dataset's map from the host, like its differences
+    ("GET", "/api/lift/maps"), ("GET", "/api/lift/summary"), ("GET", "/api/lift/outline"),
+    ("GET", "/api/lift/tiles"), ("GET", "/api/lift/pieces"),
+    ("POST", "/api/differences/inspect"), ("POST", "/api/differences/alternate-blocks"),
+    ("POST", "/api/differences/sequence"), ("POST", "/api/differences/lens"),
+    ("POST", "/api/differences/observations"), ("POST", "/api/differences/compare"),
+    # Graph panel: helper status, host graph packages and their queries (routers/graph_panel.py)
+    ("GET", "/api/graph/status"), ("GET", "/api/graph/registrations"), ("POST", "/api/graph/registrations"),
+    ("DELETE", "/api/graph/registrations/{registration_id}"),
+    ("GET", "/api/graph/registrations/{registration_id}/paths"), ("POST", "/api/graph/subgraph"),
+    ("DELETE", "/api/graph/requests/{request_id}"),
+    # its reads: host BAMs of loaded datasets on the host package's paths
+    ("GET", "/api/graph/read_bindings"), ("POST", "/api/graph/reads"),
+    # its inspection: host package sequence and host live-lift maps (canonical differences)
+    ("POST", "/api/graph/sequence"), ("POST", "/api/graph/differences"),
+    # its clustering on graph columns, and dynamic assignment with a run's model (local workspace operations)
+    ("POST", "/api/graph/cluster"), ("POST", "/api/graph/cluster/assign"), ("POST", "/api/graph/scan_peaks"),
+    # Site sorting returns ordering of loaded reads, but tile/helper failures
+    # propagate host diagnostics (including paths), so it remains host-only.
+    ("POST", "/api/graph/sort_site"),
     # Cross-region correspondence analyses are local workspace operations.
     ("POST", "/api/cluster-regions"), ("POST", "/api/scan-correspondence"),
     ("GET", "/api/app/performance"), ("POST", "/api/app/performance"),
@@ -16,10 +71,14 @@ PUBLIC_DENIED = {
     ("GET", "/api/app/fiberhmm/update"), ("POST", "/api/app/fiberhmm/install"),
     ("POST", "/api/app/fiberhmm/revert"), ("POST", "/api/app/fiberhmm/restart"),
     ("GET", "/api/app/info"), ("POST", "/api/app/fiberhmm"), ("GET", "/api/app/update"),
-    ("POST", "/api/app/update/settings"), ("POST", "/api/app/update/token"), ("DELETE", "/api/app/update/token"),
+    ("POST", "/api/app/update/settings"), ("POST", "/api/app/downloads"), ("POST", "/api/app/update/token"), ("DELETE", "/api/app/update/token"),
     ("POST", "/api/app/update/download"), ("GET", "/api/app/update/download"),
     ("POST", "/api/app/update/download/cancel"), ("POST", "/api/app/update/open"),
     ("POST", "/api/app/update/install"), ("POST", "/api/app/update/restart"),
+    # finding a pasted sequence in the genome: a scan of the whole reference, BLAST and its database build
+    ("GET", "/api/sequence_search/status"), ("POST", "/api/sequence_search"),
+    ("GET", "/api/sequence_search/jobs/{job_id}"), ("DELETE", "/api/sequence_search/jobs/{job_id}"),
+    ("POST", "/api/sequence_search/jobs/{job_id}/track"),
     # identifying an insertion: host processes (BLAST/minimap2), library downloads, Dfam
     ("GET", "/api/insertions/te_library"), ("POST", "/api/insertions/te_library/download"),
     ("POST", "/api/insertions/identify"), ("GET", "/api/insertions/identify/jobs/{job_id}"),
@@ -33,8 +92,15 @@ PUBLIC_DENIED = {
     ("GET", "/api/demo"), ("POST", "/api/demo/load"),
     # a dataset's own reference (loads a genome or a host FASTA)
     ("POST", "/api/panel_genomes/attach"), ("POST", "/api/panel_genomes/detach"),
+    # the main reference's default annotation, in place of the loaded one (may download it)
+    ("POST", "/api/genome/reset_annotation"),
+    # the assembly of a host FASTA (reads its index), for a page restoring a remembered reference
+    ("GET", "/api/genome/fasta_assembly"),
+    # recent and pinned genomes: the host's files and its settings file
+    ("GET", "/api/recent_genomes"), ("POST", "/api/recent_genomes/remove"), ("POST", "/api/recent_genomes/clear"),
+    ("POST", "/api/recent_genomes/pin"), ("POST", "/api/recent_genomes/reorder"), ("POST", "/api/recent_genomes/open"),
     ("POST", "/api/annotations/add"), ("GET", "/api/annotations/browse"), ("GET", "/api/diagnose_bam"),
-    ("GET", "/api/files/list"), ("POST", "/api/files/upload"), ("POST", "/api/load_folder"),
+    ("GET", "/api/files/list"), ("POST", "/api/files/upload"), ("POST", "/api/load_folder"), ("POST", "/api/plots/bed_regions"), ("POST", "/api/plots/region_reads"), ("POST", "/api/plots/differential"), ("POST", "/api/plots/random_reads"), ("POST", "/api/plots/bed_sizes"),
     ("POST", "/api/overlays/add"), ("POST", "/api/tracks/add_motif_file"),
     ("POST", "/api/footprint/consensus/import"), ("POST", "/api/footprint/consensus/jobs/{job_id}/bam-export"),
     # the user's analysis preferences file on the host (~/.fiberhmm/analysis_preferences.json)
@@ -101,9 +167,11 @@ PUBLIC_DENIED = {
     # New DAF-seq run: host processes on host files (routers/pipeline.py)
     ("GET", "/api/pipeline/status"), ("POST", "/api/pipeline/scan"), ("POST", "/api/pipeline/validate"),
     ("GET", "/api/pipeline/genome_download"), ("POST", "/api/pipeline/genome_download"),
+    ("GET", "/api/pipeline/genome_download/size"),
     ("POST", "/api/pipeline/genome_download/cancel"),
     ("POST", "/api/pipeline/jobs"), ("GET", "/api/pipeline/jobs"), ("GET", "/api/pipeline/jobs/{job_id}"),
     ("GET", "/api/pipeline/jobs/{job_id}/log"), ("POST", "/api/pipeline/jobs/{job_id}/cancel"),
+    ("POST", "/api/pipeline/jobs/{job_id}/opened"),
     ("POST", "/api/pipeline/jobs/{job_id}/retry"), ("DELETE", "/api/pipeline/jobs/{job_id}"),
     ("GET", "/api/pipeline/jobs/{job_id}/qc"), ("GET", "/api/pipeline/jobs/{job_id}/files/{name}"),
     ("POST", "/api/qc/dataset"), ("GET", "/api/qc/files/{cache_key}/{name}"),
@@ -219,6 +287,26 @@ def test_allowlist_has_no_stale_entries(standalone_app):
     ("GET", "/openapi.json"),
     ("GET", "/docs"),
     ("GET", "/api/no_such_route"),
+    ("GET", "/api/hub/legacy"),
+    ("POST", "/api/hub/hits/query"),
+    ("GET", "/api/lift/difference_sequence?dataset_id=missing&chrom=chrT&item_id=test&pos=0"),
+    ("POST", "/api/lift/provenance/missing"),
+    ("POST", "/api/lift/analysis/summary"), ("POST", "/api/lift/analysis/split"),
+    ("POST", "/api/differences/inspect"), ("POST", "/api/differences/alternate-blocks"),
+    ("POST", "/api/differences/sequence"), ("POST", "/api/differences/lens"),
+    ("POST", "/api/differences/observations"), ("POST", "/api/differences/compare"),
+    # Graph panel: helper status, host graph packages and their queries (routers/graph_panel.py)
+    ("GET", "/api/graph/status"), ("GET", "/api/graph/registrations"), ("POST", "/api/graph/registrations"),
+    ("DELETE", "/api/graph/registrations/greg"), ("GET", "/api/lift/datasets?dataset_id=missing"),
+    ("GET", "/api/graph/registrations/{registration_id}/paths"), ("POST", "/api/graph/subgraph"),
+    ("DELETE", "/api/graph/requests/{request_id}"),
+    # its reads: host BAMs of loaded datasets on the host package's paths
+    ("GET", "/api/graph/read_bindings"), ("POST", "/api/graph/reads"),
+    # its inspection: host package sequence and host live-lift maps (canonical differences)
+    ("POST", "/api/graph/sequence"), ("POST", "/api/graph/differences"),
+    # its clustering on graph columns, and dynamic assignment with a run's model (local workspace operations)
+    ("POST", "/api/graph/cluster"), ("POST", "/api/graph/cluster/assign"), ("POST", "/api/graph/scan_peaks"),
+    ("POST", "/api/graph/sort_site"),
     ("POST", "/api/plugins/anything/run"),
 ])
 def test_public_mode_denies(client, public, method, path):

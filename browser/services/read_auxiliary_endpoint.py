@@ -6,6 +6,7 @@ import io
 import os
 import threading
 import time
+import zlib
 from collections.abc import Sequence
 from typing import Dict, Optional
 
@@ -211,7 +212,14 @@ def get_meta_payload(
     read_ids_token = _read_ids_cache_token(read_ids)
     from services.signal_evidence import signal_filter_key
     from services.background_work import dataset_identity
-    cache_key = (dataset_id, chrom, start, end, read_ids_token)
+    from services.signal_evidence import read_policy_key, request_hide_uncalled
+    # The dense reads follow Min footprints' uncalled-read rule (Dataset.get_reads): one entry per setting.
+    cache_key = (dataset_id, chrom, start, end, read_ids_token, request_hide_uncalled())
+    if str(chrom).startswith("meta:"):
+        from services.meta_locus_jobs import meta_load_token
+        cache_key += meta_load_token(chrom)  # the view changes under the same contig
+    if read_policy_key():   # the duplicate / QC-fail toggles (default: hidden, the key unchanged)
+        cache_key += (read_policy_key(),)
     sources = dataset_identity(state, [dataset_id])
     if any(signal_filter_key(state)) or any(source[2] for source in sources):
         cache_key += (signal_filter_key(state), sources)
@@ -292,6 +300,24 @@ def get_meta_all_payload(state, *, chrom: str, start: int, end: int, spanning: b
     return {"profiles": results}
 
 
+def genes_etag(state, chrom: str | None = None) -> str:
+    """The loaded annotation's identity, as the gene responses' ETag: the browser revalidates every gene request
+    (Cache-Control: no-cache) and gets 304 while the annotation is the same one. A max-age kept the previous
+    annotation's genes for five minutes after another was loaded (yeast genes after switching to dm6's). With
+    ``chrom``, the contig's topology too (circular or not, at which length): a circular contig's genes across the
+    origin are drawn wrapped, so marking it circular changes the response."""
+    gtf = getattr(state, "gtf_data", None)
+    path = str(getattr(state, "gtf_path", None) or "")
+    topology = ""
+    if chrom is not None:
+        from services.circular_genome import circular_topology_token
+        try:
+            topology = repr(circular_topology_token(state, chrom))
+        except Exception:
+            topology = "?"
+    return f'W/"genes-{id(gtf):x}-{zlib.crc32(path.encode()):x}-{zlib.crc32(topology.encode()):x}"'
+
+
 def get_genes_payload(state, *, chrom: str, start: int, end: int) -> dict:
     from services.circular_genome import circular_chrom_size, circular_region_wraps, circular_view_segments
 
@@ -308,7 +334,7 @@ def get_genes_payload(state, *, chrom: str, start: int, end: int) -> dict:
     ex_df = exon_table(gtf_data.get("exons"))
 
     if tx_df.empty:
-        return {"content": {"genes": []}, "headers": {"Cache-Control": "max-age=300"}}
+        return {"content": {"genes": []}, "headers": {"Cache-Control": "no-cache"}}
 
     genes = []
 
@@ -363,7 +389,7 @@ def get_genes_payload(state, *, chrom: str, start: int, end: int) -> dict:
                     for lo, hi in exons
                 ],
             })
-    return {"content": {"genes": genes}, "headers": {"Cache-Control": "max-age=300"}}
+    return {"content": {"genes": genes}, "headers": {"Cache-Control": "no-cache"}}
 
 
 _FIRE_CACHE_TTL = 60
@@ -400,7 +426,8 @@ def _source_identity(dataset) -> tuple:
             identity.append((str(path), stat.st_mtime_ns, stat.st_size))
         except (OSError, TypeError, ValueError):
             identity.append((str(path),))
-    return (getattr(dataset, "id", None), getattr(dataset, "data_type", None), tuple(identity))
+    from services.lift.reads import lift_identity
+    return (getattr(dataset, "id", None), getattr(dataset, "data_type", None), tuple(identity), *lift_identity(dataset))
 
 
 def get_fire_payload(state, *, chrom: str, start: int, end: int) -> dict:
@@ -477,12 +504,19 @@ def get_coverage_payload(
     bins: int = 1000,
     dataset_id: Optional[str] = None,
     include_duplicates: bool = False,
+    lift_hap: Optional[str] = None,
+    lift_correspondence_only: bool = False,
     include_qcfail: bool = False,
     hide_uncalled: Optional[bool] = None,
 ) -> dict:
     from services.analysis_query import _resolve_hide_uncalled
     hide_uncalled = _resolve_hide_uncalled(hide_uncalled)
     original_chrom = chrom
+    if str(chrom).startswith("meta:"):
+        # A meta-locus contig: the depth of its view's reads (services/meta_locus_jobs), per bin.
+        from services.meta_locus_jobs import meta_coverage
+        return meta_coverage(state, chrom, int(start), int(end), min(bins, 4000), dataset_id,
+                             include_duplicates=bool(include_duplicates))
     chrom = state.translate_chrom(chrom)
     bins = min(bins, 4000)
     from services.circular_genome import (
@@ -520,7 +554,8 @@ def get_coverage_payload(
     # Topology too: an interior window has the same (no) query segments either
     # way, but a circular contig's coverage counts wrapped tails.
     from services.signal_evidence import signal_filter_key
-    cache_key = (signal_filter_key(state), tuple(_source_identity(d) for d in datasets_to_query), chrom, start, end, bins,
+    cache_key = (signal_filter_key(state), tuple(_source_identity(d) for d in datasets_to_query), lift_hap,
+                 chrom, start, end, bins, bool(lift_correspondence_only),
                  tuple(query_segments or ()), circular_topology_token(state, chrom), bool(include_duplicates), bool(include_qcfail),
                  bool(hide_uncalled),
                  tuple((d_id, tuple(sorted(l.items()))) for d_id, l in links.items() if l))
@@ -533,6 +568,37 @@ def get_coverage_payload(
             log_coverage_diagnostic(f"  [Coverage] Cache hit (age={now - cached_time:.0f}s)")
             return cached_result
 
+    from services.lift.capability import is_lifted
+    lifted = [d for d in datasets_to_query if is_lifted(d)]
+    native = [d for d in datasets_to_query if not is_lifted(d)]
+    if lifted:
+        # Live-lift datasets: counted from their lifted rows, with correspondence for hatching
+        # (services/lift/reads.lifted_coverage); native datasets in the same request add as reads.
+        from services.lift.reads import lifted_coverage
+        parts = []
+        for dataset in lifted:
+            rows, broad_key = (None, None) if lift_correspondence_only or include_duplicates or include_qcfail else _cached_lift_rows(
+                state, dataset, chrom, start, end, now)
+            parts.append(lifted_coverage(dataset, chrom, start, end, bins, lift_hap=lift_hap,
+                                         include_duplicates=bool(include_duplicates), include_qcfail=bool(include_qcfail),
+                                         hide_uncalled=bool(hide_uncalled), correspondence_only=bool(lift_correspondence_only), rows=rows,
+                                         rows_start=broad_key[2] if broad_key else None))
+        if lift_correspondence_only:
+            result = {"coverage": None, "max": 0,
+                      "live_lift": parts[0]["live_lift"] if len(parts) == 1 else {"datasets": [p["live_lift"] for p in parts]}}
+            _coverage_cache[cache_key] = (result, now)
+            return result
+        result = (compute_binned_read_coverage(native, chrom, start, end, bins, bam_handle_getter=get_bam_handle,
+                                               bigbed_handle_getter=get_bigbed_handle, query_segments=query_segments,
+                                               circular=is_circular_chrom(state, chrom), contig_links=links,
+                                               include_duplicates=bool(include_duplicates), include_qcfail=bool(include_qcfail),
+                                               hide_uncalled=hide_uncalled)
+                  if native else {"coverage": [0] * bins, "max": 0})
+        total = [a + sum(p["coverage"][i] for p in parts) for i, a in enumerate(result["coverage"])]
+        result = {**result, "coverage": total, "max": max(total) if total else 0,
+                  "live_lift": parts[0]["live_lift"] if len(parts) == 1 else {"datasets": [p["live_lift"] for p in parts]}}
+        _coverage_cache[cache_key] = (result, now)
+        return result
     result = compute_binned_read_coverage(
         datasets_to_query,
         chrom,
@@ -558,6 +624,39 @@ def get_coverage_payload(
             break
 
     return result
+
+
+def _cached_lift_rows(state, dataset, chrom, start, end, now, *, annotations=False):
+    """Reuse display geometry, regardless of its requested annotation groups.
+    Match its load token to today's sources/lift key; a sampled display entry
+    is usable too. Coverage needs bodies only. With annotations=True,
+    inspection requires marks, all layers and default inference; its caller
+    must still decode any records omitted by a sampled cache."""
+    from services.working_sets import (find_broad_cache_entry, read_load_token, broad_cache_topology,
+                                       broad_cache_legacy_layer_settings, broad_cache_min_footprints,
+                                       _broad_cache_sync, effective_hide_uncalled)
+    token = read_load_token(state, chrom)
+    # Only entries loaded under this request's uncalled-read rule (Min footprints' "All reads" choice or not).
+    hide_uncalled = effective_hide_uncalled(dataset, None)
+    lock, _inflight = _broad_cache_sync(state)
+    with lock:
+        keys = list(getattr(state, "_broad_cache", {}))
+    for key in reversed(keys):
+        if key[:2] != (dataset.id, chrom):
+            continue
+        topology = broad_cache_topology(key)
+        if topology[:len(token)] != token:
+            continue
+        infer, nuc_min = broad_cache_legacy_layer_settings(key)
+        if annotations and (not infer or nuc_min != 90 or broad_cache_min_footprints(key)):
+            continue
+        rows, found = find_broad_cache_entry(state, dataset.id, chrom, start, end, annotations, None if annotations else (), now,
+                                            include_layer_qualities=False, infer_legacy_layers=infer,
+                                            legacy_nuc_min_size=nuc_min, min_footprints=broad_cache_min_footprints(key),
+                                            load_token=topology, hide_uncalled=hide_uncalled)
+        if rows is not None:
+            return rows, found
+    return None, None
 
 
 def compile_regions_payload(state, req) -> dict:

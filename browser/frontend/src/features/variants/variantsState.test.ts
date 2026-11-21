@@ -18,7 +18,7 @@ describe('Variants panel state', () => {
   it('fills defaults and drops what a session file got wrong', () => {
     const s = normalizeVariantsState({ tab: 'nope', params: { min_maf: 3, min_depth: 'x', mode: 'daf' }, selected: ['a', 1], combo: { source: 'hp', minFraction: -1 } });
     expect(s.tab).toBe('snps');
-    expect(s.params).toEqual({ min_maf: 0.5, min_depth: 20, both_strands: true, min_bq: 20, min_mapq: 20, mode: 'daf' });
+    expect(s.params).toEqual({ min_maf: 0.5, min_depth: 20, both_strands: true, min_bq: 20, min_mapq: 0, mode: 'daf' });
     expect(s.selected).toEqual(['a']);
     expect(s.combo).toEqual({ source: 'hp', partial: false, minFraction: 0, autoPhase: true });
     expect(s.autoScan).toBe(true);

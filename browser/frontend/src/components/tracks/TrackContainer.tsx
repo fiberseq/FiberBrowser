@@ -1,7 +1,8 @@
 import { useShallow } from 'zustand/react/shallow';
-import { PanelDisplayContext, panelReversed, usePanelDisplayStore } from '../../hooks/usePanelDisplayStore';
+import { PanelActiveContext, PanelDisplayContext, panelReversed, usePanelDisplayStore } from '../../hooks/usePanelDisplayStore';
 import { logicalOffset } from '../../utils/scaledCoordinates';
 import React, { Suspense, useRef, useEffect, useLayoutEffect, useState, useCallback, useMemo } from 'react';
+import { crosshairSegments, excludedRects, overlapsExcluded, type CrosshairSegment } from '../../utils/crosshairSegments';
 import { useBrowserStore } from '../../stores/browserStore';
 import { useEphemeralStore } from '../../stores/ephemeralStore';
 import type { PanelConfig } from '../../types';
@@ -9,6 +10,7 @@ import { MainViewBar, PanelSiteBar, PANEL_SITE_BAR_HEIGHT } from './PanelSiteBar
 import { minimizedTrayShown } from './minimizedTray';
 import { usePanelLauncherStore } from '../../stores/panelLauncherStore';
 import { PanelHeader, PANEL_HEADER_HEIGHT } from './PanelHeader';
+import { DatasetPanelLayout } from './DatasetPanelLayout';
 import { TrackContextMenuHost } from './TrackContextMenuHost';
 import { getAnalysisPanel, getAnalysisPanelLabel } from '../../plugins/registry';
 // DAF-C imports
@@ -44,6 +46,8 @@ import { runAppCommand } from '../../utils/appCommands';
 import { launchOfferHidesWelcome, useLaunchUiStore } from '../../utils/launchSession';
 import { useOpeningStore } from '../../stores/openingStore';
 import { OpeningPanels } from './OpeningPanels';
+import { datasetBodyFor } from './datasetBodyExtensions';
+import { stackHeights, usePanelContentHeightStore } from '../../stores/panelContentHeightStore';
 import { PanelIcon } from '../ui/panelIcons';
 import { panelFrameStyle, panelGap, roundedPanels } from '../../theme/uiTheme';
 
@@ -308,7 +312,6 @@ function computeResizeHandleX(widths: number[], colIdx: number): number {
 }
 
 const HIDDEN_SUBTRACK_STRIP_HEIGHT = 24;
-const MIN_READ_TRACK_HEIGHT = 120;
 /** Room a header bar needs for its name and controls (Clean view, ⋯) beside the drawer. */
 const HEADER_CONTROLS_MIN_WIDTH = 160;
 
@@ -365,12 +368,17 @@ interface Props {
   scanning?: boolean;
 }
 
+const isRenderModeNow = () => typeof window !== 'undefined' && !!window.__FIBERBROWSER_RENDER_MODE;
+const ROW_COLLAPSE_BAR_HEIGHT = 20;
+const MINIMIZED_BAR_HEIGHT = 34;
+
 export function TrackContainer({ onScanPeaks, scanning }: Props) {
   const matchedPanelIds = useBrowserStore(useShallow(s => s.peakRules.filter(r => r.matchGroup?.origin === 'sv')
     .flatMap(r => (s.peaksByRule[r.id] ?? []).flatMap(p => p.match?.panelId ? [p.match.panelId] : []))));
   const containerRef = useRef<HTMLDivElement>(null);
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
   const datasets = useBrowserStore(s => s.datasets);
+  const contentHeights = usePanelContentHeightStore(s => s.heights);
   // Not while the launch offer is being decided or a session is being restored (no flash over a dataset).
   const launchOfferUp = useLaunchUiStore(launchOfferHidesWelcome);
   // A dataset being opened shows its placeholder panel, not the Welcome card over it.
@@ -445,6 +453,23 @@ export function TrackContainer({ onScanPeaks, scanning }: Props) {
     const below = ruler ? ruler.getBoundingClientRect().bottom : panel.getBoundingClientRect().top + (PANEL_HEADER_HEIGHT + AXIS_HEIGHT) * zoom;
     setCrosshairLabelTop((below - box.top) / zoom + c.scrollTop + 2);
   }, [crosshairLabelShown]);
+  // The crosshair is cut around panels with coordinates of their own (utils/crosshairSegments.ts); null: none here.
+  const stripHeightRef = useRef(0);
+  const [crosshairCuts, setCrosshairCuts] = useState<{ segments: CrosshairSegment[]; labelHidden: boolean } | null>(null);
+  const crosshairShown = crosshairX !== null;
+  useLayoutEffect(() => {
+    const c = containerRef.current;
+    if (!crosshairShown || !c) { setCrosshairCuts(null); return; }
+    const excluded = excludedRects(c);
+    if (!excluded.length) { setCrosshairCuts(null); return; }
+    const top = stripHeightRef.current;
+    const bottom = crosshairBottom ?? c.scrollHeight;
+    const segments = crosshairSegments(crosshairX!, top, bottom, excluded);
+    const labelTop = crosshairLabelTop ?? top;
+    const labelLeft = Math.min(crosshairX! + 8, c.offsetWidth - 120);
+    const labelHidden = overlapsExcluded({ left: labelLeft, right: labelLeft + 120, top: labelTop, bottom: labelTop + 20 }, excluded);
+    setCrosshairCuts({ segments, labelHidden });
+  }, [crosshairShown, crosshairX, crosshairBottom, crosshairLabelTop]);
   const panels = useBrowserStore(s => s.panels);
   const fullViewPanelId = useBrowserStore(s => s.fullViewPanelId);
   const showHiddenTrackStrip = useBrowserStore(s => s.showHiddenTrackStrip);
@@ -499,11 +524,20 @@ export function TrackContainer({ onScanPeaks, scanning }: Props) {
   const railMode = usePanelLauncherStore(s => s.mode) === 'rail';
 
   // Separate panels into visible set, then group by layoutRow
+  // Full view keeps every panel mounted where it is (no remount, no refetch when it ends, nor when an export starts or
+  // ends): the panels are laid out as without it, the others hidden in place with the sizes they had (inactive, out of
+  // the figure: utils/figureExport.figureDrawables), and the maximised one covers the area. Figure renders (render
+  // mode) lay out the maximised panel alone.
+  const fullViewInPlace = Boolean(fullViewPanelId)
+    && !(typeof window !== 'undefined' && window.__FIBERBROWSER_RENDER_MODE)
+    && panels.some(p => p.id === fullViewPanelId);
+  // Above the maximised panel (z 40) in full view in place: the crosshair and the opening placeholders stay visible.
+  const crosshairZ = fullViewInPlace ? 'z-[45]' : 'z-20';
   const visiblePanels = useMemo(() =>
-    fullViewPanelId
+    fullViewPanelId && !fullViewInPlace
       ? panels.filter(p => p.id === fullViewPanelId)
-      : panels.filter(p => !p.collapsed),
-    [panels, fullViewPanelId]
+      : panels.filter(p => !p.collapsed || p.id === fullViewPanelId),
+    [panels, fullViewPanelId, fullViewInPlace]
   );
 
   const rowGroups = useMemo(() => {
@@ -728,6 +762,14 @@ export function TrackContainer({ onScanPeaks, scanning }: Props) {
   useEffect(() => { if (pinnedPanelIds) setOverlayTucked(false); }, [pinnedPanelIds]);
 
   // Render a single panel column
+  // Where full view in place puts the maximised panel, and its size: what full view laid out alone gave it (one row,
+  // one column), so its rows are the ones it had in full view before.
+  const fullViewTop = (isRenderModeNow() || railMode ? 0 : analysisStripCollapsed ? ANALYSIS_STRIP_COLLAPSED_HEIGHT : ANALYSIS_STRIP_HEIGHT) + gap;
+  const fullViewSize = {
+    width: Math.max(0, dimensions.width - 2 * gap),
+    height: Math.max(0, dimensions.height - fullViewTop - ROW_COLLAPSE_BAR_HEIGHT
+      - (!railMode && minimizedTrayShown(panels, analysisStripCollapsed) ? MINIMIZED_BAR_HEIGHT : 0) - gap),
+  };
   const renderPanel = useCallback((
     panel: PanelConfig,
     panelIndex: number,
@@ -740,6 +782,22 @@ export function TrackContainer({ onScanPeaks, scanning }: Props) {
     drawer: DrawerDock | null = null,
   ) => {
     const isDragging = dragPanelIdx === panelIndex;
+    // Hidden by full view in place: mounted but inactive (its tracks and analyses suspend their work until shown).
+    const panelActive = !(fullViewInPlace && panel.id !== fullViewPanelId);
+    // Full view in place: the maximised panel covers the panel area with the size full view gives it; the others keep
+    // their sizes (no new read requests) and are hidden and inert.
+    const inPlace = fullViewInPlace
+      ? panel.id === fullViewPanelId
+        ? { style: { position: 'absolute' as const, left: gap, top: fullViewTop, zIndex: 40, visibility: 'visible' as const }, attrs: {} }
+        : { style: { visibility: 'hidden' as const, pointerEvents: 'none' as const },
+            attrs: { inert: '' as unknown as boolean, 'aria-hidden': true, 'data-full-view-hidden': 'true' } }
+      : { style: {}, attrs: {} };
+    if (fullViewInPlace && panel.id === fullViewPanelId) {
+      panelWidth = fullViewSize.width;
+      panelHeight = fullViewSize.height;
+      drawerCover = 0;
+      drawer = null;
+    }
     // A header bar beside the side-panel drawer (a lower stacked panel): its controls move
     // left of the drawer; with too little left of it, the bar goes over the drawer instead.
     const headerOverDrawer = drawerCover > 0 && panelWidth - drawerCover < HEADER_CONTROLS_MIN_WIDTH;
@@ -761,11 +819,14 @@ export function TrackContainer({ onScanPeaks, scanning }: Props) {
           className="flex flex-col"
           data-panel-content-type={panel.contentType}
           data-analysis-panel-id={panel.id}
+          {...(plugin?.bodyLayout === 'fill' ? { 'data-crosshair-exclude': 'true' } : {})}
+          {...inPlace.attrs}
           style={{
             width: panelWidth,
             height: panelHeight,
             opacity: isDragging ? 0.5 : 1,
             ...(rounded ? panelFrameStyle(headerColor) : { borderRight: '1px solid #e5e7eb' }),
+            ...inPlace.style,
           }}
         >
           <div data-panel-header style={headerOverDrawer ? { position: 'relative', zIndex: 31 } : headerInset > 0 ? { paddingRight: headerInset } : undefined}>
@@ -783,7 +844,7 @@ export function TrackContainer({ onScanPeaks, scanning }: Props) {
             onClose={() => useBrowserStore.getState().closeAnalysisPanel(panel.id)}
           />
           </div>
-          <div style={{ height: panelHeight - PANEL_HEADER_HEIGHT, overflow: 'auto' }} className="bg-white dark:bg-dark-bg">
+          <div style={{ height: panelHeight - PANEL_HEADER_HEIGHT, overflow: plugin?.bodyLayout === 'fill' ? 'hidden' : 'auto', minHeight: 0 }} className="bg-white dark:bg-dark-bg">
             {tooNarrow && (
               <div data-testid="panel-too-narrow" className="flex h-full flex-col items-center justify-center gap-2 p-2 text-center text-[11px] text-gray-500 dark:text-gray-400">
                 <span className="font-medium text-gray-700 dark:text-gray-200">{label}</span>
@@ -804,9 +865,12 @@ export function TrackContainer({ onScanPeaks, scanning }: Props) {
               if (!plugin) return null;
               const PanelComponent = plugin.component;
               return (
-                <Suspense fallback={<div className="p-4 text-sm text-gray-400">Loading...</div>}>
-                  <PanelComponent isFullView={isFullView} />
-                </Suspense>
+                <PanelDisplayContext.Provider value={panel.id}><PanelActiveContext.Provider value={panelActive}>
+                  <Suspense fallback={<div className="p-4 text-sm text-gray-400">Loading...</div>}>
+                    <PanelComponent isFullView={isFullView} panelId={panel.id} width={panelWidth}
+                      height={Math.max(0, panelHeight - PANEL_HEADER_HEIGHT)} />
+                  </Suspense>
+                </PanelActiveContext.Provider></PanelDisplayContext.Provider>
               );
             })()}
             </div>
@@ -817,33 +881,31 @@ export function TrackContainer({ onScanPeaks, scanning }: Props) {
 
     // Dataset panel
     const datasetColor = datasets.find(d => d.id === panel.datasetId)?.color ?? '#4b5563';
+    // A body of another kind in place of the sub-tracks (graph mode: DESIGN_GRAPH_PRIMARY §1.1).
+    const OtherBody = datasetBodyFor(panel)?.component ?? null;
     const hasHiddenSubTracks = !exportInProgress && showHiddenTrackStrip && panels.some(p => !p.collapsed && p.subTracks.some(track => !track.visible && !track.removed));
-    const fixedH = calcFixedHeight(panel, trackLayout) + (hasHiddenSubTracks ? HIDDEN_SUBTRACK_STRIP_HEIGHT : 0)
+    const fixedTracksHeight = calcFixedHeight(panel, trackLayout) - PANEL_HEADER_HEIGHT;
+    const chromeHeight = PANEL_HEADER_HEIGHT + (hasHiddenSubTracks ? HIDDEN_SUBTRACK_STRIP_HEIGHT : 0)
       + (panel.viewportOverride || alignLocusBar ? PANEL_SITE_BAR_HEIGHT : 0);
-    // Keep reads usable when fixed tracks outgrow a short panel; the panel
-    // scrolls instead of collapsing the read track to zero height.
-    const readHeight = Math.max(MIN_READ_TRACK_HEIGHT, panelHeight - fixedH);
     // (the site bar of a panel with its own view is part of the fixed height)
 
     return (
-      <div
+      <DatasetPanelLayout
         key={panel.id}
-        data-panel-id={panel.id}
+        panelId={panel.id}
         onMouseEnter={() => { if (panel.regionPanelGroup) useEphemeralStore.setState({ hoveredMatchGroup: null, hoveredPanelRegion: { groupId: panel.regionPanelGroup.id, label: panel.regionPanelGroup.regionLabel } }); }}
         onMouseLeave={() => { if (panel.regionPanelGroup) useEphemeralStore.setState({ hoveredMatchGroup: null, hoveredPanelRegion: null }); }}
         style={{
           width: panelWidth,
           height: panelHeight,
           ...(rounded ? panelFrameStyle(datasetColor) : { borderRight: '1px solid #e5e7eb' }),
-          overflowY: 'auto',
-          overflowX: 'hidden',
           opacity: isDragging ? 0.5 : 1,
+          ...inPlace.style,
         }}
-        // The read canvas stays light in dark mode: so does the panel behind its tracks,
-        // or the page shows through as dark bands between light rows (audit M29).
-        className="flex flex-col bg-white"
-      >
-        <PanelDisplayContext.Provider value={panel.id}>
+        attrs={inPlace.attrs}
+        initialBodyHeight={panelHeight - chromeHeight}
+        header={<>
+        <PanelDisplayContext.Provider value={panel.id}><PanelActiveContext.Provider value={panelActive}>
         <PanelHeader
           panel={panel}
           panelIndex={panelIndex}
@@ -858,26 +920,36 @@ export function TrackContainer({ onScanPeaks, scanning }: Props) {
         {hasHiddenSubTracks && <HiddenSubTrackStrip panel={panel} />}
         {panel.viewportOverride && <PanelSiteBar panel={panel} />}
         {!panel.viewportOverride && alignLocusBar && <MainViewBar />}
+        </PanelActiveContext.Provider></PanelDisplayContext.Provider>
+        </>}
+      >
+        {bodyHeight => <PanelDisplayContext.Provider value={panel.id}><PanelActiveContext.Provider value={panelActive}>
+        {OtherBody ? (
+          <Suspense fallback={<div className="p-4 text-sm text-gray-400">Loading...</div>}>
+            <OtherBody panel={panel} width={panelWidth}
+              height={bodyHeight} />
+          </Suspense>
+        ) : (
         <TrackLabelsProvider showLabels={Boolean(panel.showTrackLabels)}>
           {panel.subTracks.map((track, trackIdx) =>
-            renderSubTrack(track, trackIdx, panel, panelWidth, readHeight, isFirstPanel, trackLayout)
+            renderSubTrack(track, trackIdx, panel, panelWidth, Math.max(0, bodyHeight - fixedTracksHeight), isFirstPanel, trackLayout)
           )}
         </TrackLabelsProvider>
+        )}
         {/* Fill remaining space with drag-to-pan for panels without a read track */}
         {!panel.datasetId && !panel.viewportOverride && <GenomePanelSpacer />}
         {panel.viewportOverride && !panel.datasetId && <SplitViewSpacer panelId={panel.id} viewport={panel.viewportOverride} />}
-        </PanelDisplayContext.Provider>
-      </div>
+        </PanelActiveContext.Provider></PanelDisplayContext.Provider>}
+      </DatasetPanelLayout>
     );
   }, [calcFixedHeight, dragPanelIdx, selectedDatasets,
       handlePanelDragStart, handlePanelDragEnd, renderSubTrack,
-      fullViewPanelId, exportInProgress, datasets, panels, showHiddenTrackStrip, rounded]);
+      fullViewPanelId, exportInProgress, datasets, panels, showHiddenTrackStrip, rounded,
+      fullViewInPlace, fullViewTop, fullViewSize.width, fullViewSize.height, gap]);
 
   // Calculate layout -- panels grouped by layoutRow
-  const ROW_COLLAPSE_BAR_HEIGHT = 20;
   // A row that scrolls sideways keeps this much under its panels for the scrollbar.
   const ROW_SCROLLBAR_ALLOWANCE = 12;
-  const MINIMIZED_BAR_HEIGHT = 34;
   // Minimized dataset panels are strip buttons; this tray only while the strip is folded.
   // (Rail mode: minimized datasets are tiles in the rail, PanelRail.)
   const hasMinimized = !railMode && minimizedTrayShown(panels, analysisStripCollapsed);
@@ -889,6 +961,7 @@ export function TrackContainer({ onScanPeaks, scanning }: Props) {
   const expandedBarTotal = expandedRowCount * ROW_COLLAPSE_BAR_HEIGHT;
   const isRenderMode = typeof window !== 'undefined' && !!window.__FIBERBROWSER_RENDER_MODE;
   const stripHeight = isRenderMode || railMode ? 0 : analysisStripCollapsed ? ANALYSIS_STRIP_COLLAPSED_HEIGHT : ANALYSIS_STRIP_HEIGHT;
+  stripHeightRef.current = stripHeight;
   const reservedHeight = stripHeight + collapsedBarTotal + expandedBarTotal + (hasMinimized ? MINIMIZED_BAR_HEIGHT : 0) + gap;
   const rowHeight = expandedRowCount > 0
     ? Math.max(200, Math.floor((dimensions.height - reservedHeight) / expandedRowCount))
@@ -989,22 +1062,28 @@ export function TrackContainer({ onScanPeaks, scanning }: Props) {
       {/* Crosshair overlay: the full height of the panels, below the analysis strip (it drew over its chips, audit L5) */}
       {crosshairX !== null && (
         <>
-          <div
-            className="absolute pointer-events-none z-20"
-            data-testid="ruler-crosshair"
-            style={{
-              left: crosshairX,
-              top: stripHeight,
-              // Down to the bottom of the panels under the pointer (audit L8), else the container's.
-              ...(crosshairBottom != null ? { height: Math.max(0, crosshairBottom - stripHeight) } : { bottom: 0 }),
-              width: 1,
-              backgroundColor: 'rgba(100, 100, 100, 0.4)',
-            }}
-          />
-          {crosshairLabel && (
+          {crosshairCuts == null ? (
+            <div
+              className={`absolute pointer-events-none ${crosshairZ}`}
+              data-testid="ruler-crosshair"
+              style={{
+                left: crosshairX,
+                top: stripHeight,
+                // Down to the bottom of the panels under the pointer (audit L8), else the container's.
+                ...(crosshairBottom != null ? { height: Math.max(0, crosshairBottom - stripHeight) } : { bottom: 0 }),
+                width: 1,
+                backgroundColor: 'rgba(100, 100, 100, 0.4)',
+              }}
+            />
+          ) : crosshairCuts.segments.map((seg, i) => (
+            // Cut where it would cross a panel with coordinates of its own (the graph view).
+            <div key={i} className={`absolute pointer-events-none ${crosshairZ}`} data-testid="ruler-crosshair"
+              style={{ left: crosshairX, top: seg.top, height: Math.max(0, seg.bottom - seg.top), width: 1, backgroundColor: 'rgba(100, 100, 100, 0.4)' }} />
+          ))}
+          {crosshairLabel && !crosshairCuts?.labelHidden && (
             <div
               data-testid="ruler-crosshair-label"
-              className="absolute pointer-events-none z-20 bg-gray-800 text-white text-[13px] px-1.5 py-0.5 rounded whitespace-nowrap"
+              className={`absolute pointer-events-none ${crosshairZ} bg-gray-800 text-white text-[13px] px-1.5 py-0.5 rounded whitespace-nowrap`}
               style={{
                 left: Math.min(crosshairX + 8, dimensions.width - 120),
                 // Just under the ruler, beside the pointer (not over the strip, the header or the width label).
@@ -1018,11 +1097,15 @@ export function TrackContainer({ onScanPeaks, scanning }: Props) {
       )}
 
       {/* Datasets being opened: a placeholder panel each, at once (stores/openingStore.ts) */}
-      {!isRenderMode && <OpeningPanels top={stripHeight} gap={gap} />}
+      {!isRenderMode && <OpeningPanels top={stripHeight} gap={gap} above={fullViewInPlace} />}
 
       {/* Row groups */}
       {rowGroups.map((group) => {
-        const isCollapsed = collapsedRows.has(group.rowIndex);
+        // Full view in place: every row stays (hidden); the maximised panel's row is laid out as usual, with its
+        // ancestors left unpositioned so the panel covers the whole panel area.
+        const holdsFullView = fullViewInPlace && group.panels.some(p => p.id === fullViewPanelId);
+        const fullViewHide: React.CSSProperties | undefined = fullViewInPlace ? { visibility: 'hidden' } : undefined;
+        const isCollapsed = collapsedRows.has(group.rowIndex) && !holdsFullView;
         const panelCount = group.panels.length;
         const columns = groupByColumns(group.panels);
         // Side panels keep a usable width; in a window too narrow for that they slide
@@ -1037,7 +1120,9 @@ export function TrackContainer({ onScanPeaks, scanning }: Props) {
         const rowAvailable = dimensions.width - gap * (columns.length + 1);
         // On screen (not figure renders, exports or full view): panels stay where the user put them and a row too
         // narrow for their minimums scrolls sideways (utils/panelRowLayout.ts, the scroll policy).
-        const onScreen = overlayAllowed({ renderMode: !!isRenderMode, exporting: !!exportInProgress, fullView: !!fullViewPanelId });
+        // (An export in full view keeps the on-screen layout: the maximised panel, in a drawer or not, never moves.)
+        const onScreen = overlayAllowed({ renderMode: !!isRenderMode, exporting: !!exportInProgress && !fullViewInPlace,
+          fullView: !!fullViewPanelId && !fullViewInPlace });
         const plan = planRowLayout(rowColumns, rowAvailable, { allowOverlay: onScreen, gap, scroll: onScreen });
         const scrolling = plan.scrollWidth != null;
         // The row's content when it scrolls: the columns in the flow and their gaps.
@@ -1054,10 +1139,12 @@ export function TrackContainer({ onScanPeaks, scanning }: Props) {
         const slotWidths = colWidths.map((w, i) => (isOverlayCol(i) ? 0 : w + gap));
         const overlayPanels = plan.mode === 'overlay' ? columns.filter((_, i) => isOverlayCol(i)).flatMap(c => c.panels) : [];
         const overlayColIdxs = columns.map((_, i) => i).filter(isOverlayCol);
+        const fullInDrawer = holdsFullView && overlayPanels.some(p => p.id === fullViewPanelId);
         // The drawer: under the top header bars, at the row's right (left of side panels pinned beside the reads).
         const drawerTop = gap + PANEL_HEADER_HEIGHT + 4;
-        // A scrolling row's drawer sits outside the scrolling content, under the chip band and the split strips.
-        const drawerOffset = scrolling ? PANEL_ROW_CUE_BAND_HEIGHT + (showStrips ? SPLIT_STRIP_HEIGHT : 0) : 0;
+        // The drawer sits outside the row's panels (scrolling or not, so neither remounts when the row starts or stops
+        // scrolling), under the chip band of a scrolling row and the split strips.
+        const drawerOffset = (scrolling ? PANEL_ROW_CUE_BAND_HEIGHT : 0) + (showStrips ? SPLIT_STRIP_HEIGHT : 0);
         const drawerRight = scrolling ? gap : drawerRightOffset(plan, rowColumns, gap);
         // The user's width (drag its left edge), within what the row leaves beside the drawer.
         const drawerRoom = drawerRoomFor(plan, rowColumns, gap, dimensions.width, drawerRight);
@@ -1089,7 +1176,7 @@ export function TrackContainer({ onScanPeaks, scanning }: Props) {
             <div
               key={`row-${group.rowIndex}`}
               className="flex items-center px-2 gap-1 cursor-pointer select-none border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 hover:bg-gray-100 dark:hover:bg-gray-700/50 transition-colors"
-              style={{ height: ROW_COLLAPSE_BAR_HEIGHT, flexShrink: 0 }}
+              style={{ height: ROW_COLLAPSE_BAR_HEIGHT, flexShrink: 0, ...fullViewHide }}
               data-tour="layout-rows"
               onClick={() => useBrowserStore.getState().toggleRowCollapsed(group.rowIndex)}
               onDragOver={dragPanelIdx !== null ? (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDropTarget({ rowIndex: group.rowIndex, insertBefore: 0 }); } : undefined}
@@ -1105,7 +1192,7 @@ export function TrackContainer({ onScanPeaks, scanning }: Props) {
 
         // Expanded row
         return (
-          <div key={`row-${group.rowIndex}`} style={{ flexShrink: 0 }} {...workedPanelHandlers}>
+          <div key={`row-${group.rowIndex}`} style={{ flexShrink: 0, ...fullViewHide }} {...workedPanelHandlers}>
             {/* Row collapse toggle bar */}
             {rowGroups.length > 1 && (
               <div
@@ -1158,7 +1245,8 @@ export function TrackContainer({ onScanPeaks, scanning }: Props) {
                 };
                 return (
                   <>
-                  <div className="pointer-events-none absolute left-0 z-30 overflow-hidden" style={{ right: rightOffset, top: drawerTop + drawerOffset, height: innerHeight }}>
+                  <div className="pointer-events-none absolute left-0 z-30 overflow-hidden" style={{ right: rightOffset, top: drawerTop + drawerOffset, height: innerHeight,
+                    ...(fullInDrawer ? { position: 'static', overflow: 'visible' } : {}) }}>
                   <div
                     data-testid="analysis-overlay"
                     data-tucked={overlayTucked ? 'true' : 'false'}
@@ -1167,6 +1255,8 @@ export function TrackContainer({ onScanPeaks, scanning }: Props) {
                       width: drawerWidth, height: innerHeight,
                       filter: 'drop-shadow(0 10px 24px rgb(15 23 42 / 0.20))',
                       transform: overlayTucked ? `translateX(${drawerWidth + gap}px)` : undefined,
+                      // the maximised panel is in this drawer: nothing here may be its containing block
+                      ...(fullInDrawer ? { position: 'static', filter: 'none', transform: 'none' } : {}),
                     }}
                     // Dropping over the side panels targets them, not the reads underneath:
                     // the bottom stacks under the last side panel, the rest adds a side column.
@@ -1252,9 +1342,10 @@ export function TrackContainer({ onScanPeaks, scanning }: Props) {
                       </div>
                     )}
                     {overlayPanels.map(panel => (
-                      <div key={panel.id} className={panel.id === activeId ? 'contents' : 'hidden'} data-drawer-hidden={panel.id === activeId ? undefined : 'true'}
+                      <div key={panel.id} className={panel.id === activeId || panel.id === fullViewPanelId && fullInDrawer ? 'contents' : 'hidden'}
+                        data-drawer-hidden={panel.id === activeId ? undefined : 'true'}
                         // Hidden for real (not only by class): its menus and dialogs must not count as open (Escape, shortcuts).
-                        hidden={panel.id !== activeId}>
+                        hidden={panel.id !== activeId && !(panel.id === fullViewPanelId && fullInDrawer)}>
                         {renderPanel(panel, panels.indexOf(panel), drawerWidth, panelH, false, false, undefined, 0, drawerDock)}
                       </div>
                     ))}
@@ -1287,7 +1378,7 @@ export function TrackContainer({ onScanPeaks, scanning }: Props) {
             <div
               className="group/layout-row flex flex-row"
               data-testid={scrolling ? 'panel-row-content' : undefined}
-              style={{ height: bodyHeight, position: 'relative', columnGap: gap, padding: gap ? `${gap}px ${gap}px 0` : undefined,
+              style={{ height: bodyHeight, position: holdsFullView ? 'static' : 'relative', columnGap: gap, padding: gap ? `${gap}px ${gap}px 0` : undefined,
                 ...(scrolling ? { width: rowContentWidth, boxSizing: 'border-box' as const } : {}) }}
               onDragOver={dragPanelIdx !== null ? (e) => handleRowDragOver(e, group.rowIndex, slotWidths) : undefined}
               onDrop={dragPanelIdx !== null ? handleUnifiedDrop : undefined}
@@ -1297,18 +1388,25 @@ export function TrackContainer({ onScanPeaks, scanning }: Props) {
                 const cw = colWidths[colIdx] ?? Math.floor(dimensions.width / columns.length);
                 const stackCount = col.panels.length;
                 const panelH = Math.floor((bodyHeight - gap * stackCount) / stackCount);
+                // A size-to-content panel (the graph view) takes its natural height; the others share the rest.
+                const stackH = stackCount > 1 && col.panels.some(p => p.contentType !== 'dataset' && getAnalysisPanel(p.contentType)?.sizeToContent)
+                  ? stackHeights(bodyHeight - gap * stackCount, col.panels.map(p => (p.contentType !== 'dataset' && getAnalysisPanel(p.contentType)?.sizeToContent
+                    ? contentHeights[p.id] ?? null : null)), PANEL_HEADER_HEIGHT)
+                  : null;
                 // Beside a panel with its own locus bar, show the main view's
                 // location in a bar of the same height so the tracks line up.
                 const rowHasLocusBar = columns.length > 1
                   && group.panels.some(p => p.contentType === 'dataset' && p.viewportOverride);
                 return (
                   <React.Fragment key={`col-${col.column}`}>
-                    <div className="flex flex-col relative" style={{ width: cw, rowGap: gap }}>
+                    <div className={`flex flex-col ${holdsFullView && col.panels.some(p => p.id === fullViewPanelId) ? '' : 'relative'}`} style={{ width: cw, rowGap: gap }}>
                       {col.panels.map((panel, stackIdx) => {
                         const globalIdx = panels.indexOf(panel);
                         const isFirst = colIdx === 0 && stackIdx === 0 && group.rowIndex === rowGroups[0]?.rowIndex;
-                        const trackLayout = { hideAxis: rulerRepeatsAbove(col.panels, stackIdx, regionOfPanel, p => panelReversed(reversedState, p.id)) };
-                        return renderPanel(panel, globalIdx, cw, panelH, isFirst, rowHasLocusBar && panel.contentType === 'dataset', trackLayout,
+                        // The maximised panel always has its ruler: the panel above it (whose ruler it repeats) is hidden.
+                        const trackLayout = { hideAxis: !(fullViewInPlace && panel.id === fullViewPanelId)
+                          && rulerRepeatsAbove(col.panels, stackIdx, regionOfPanel, p => panelReversed(reversedState, p.id)) };
+                        return renderPanel(panel, globalIdx, cw, stackH?.[stackIdx] ?? panelH, isFirst, rowHasLocusBar && panel.contentType === 'dataset', trackLayout,
                           stackIdx > 0 ? headerInsets[colIdx] : 0);
                       })}
                       {/* Stack indicator: horizontal line at bottom of this column */}
@@ -1356,23 +1454,24 @@ export function TrackContainer({ onScanPeaks, scanning }: Props) {
                       />
                     : null
               )}
-              {!scrolling && drawerNode}
             </div>
             );
             // The pinned drawer stays over the visible row (outside the scrolling content).
             const strips = showStrips ? <SplitGroupStrip segments={stripSegments} width={rowContentWidth} /> : null;
             // The cues at the edges with panels past them (N4) sit left of a pinned drawer over the row.
             const drawerCovers = overlayPanels.length > 0 && !overlayTucked ? drawerRight + drawerWidth : 0;
-            return scrolling ? (
-              <div style={{ position: 'relative', height: rowHeight }}>
-                <PanelRowScroller height={rowHeight} rightInset={drawerCovers} bottomInset={ROW_SCROLLBAR_ALLOWANCE}
+            // One element tree whether or not the row scrolls or has split strips: a panel opening or closing that
+            // makes the row start or stop scrolling must not remount the panels (their reads, scroll and state).
+            return (
+              <div style={{ position: holdsFullView ? 'static' : 'relative', height: rowHeight }} data-panel-row-scrolling={scrolling ? 'true' : 'false'}>
+                <PanelRowScroller scroll={scrolling} height={rowHeight} rightInset={scrolling ? drawerCovers : 0} bottomInset={ROW_SCROLLBAR_ALLOWANCE}
                   layoutKey={`${group.panels.map(p => p.id).join(',')}|${colWidths.join(',')}|${dimensions.width}`} panelName={panelShortName}>
                   {strips}
                   {rowBody}
                 </PanelRowScroller>
                 {drawerNode}
               </div>
-            ) : strips ? <>{strips}{rowBody}</> : rowBody; })()}
+            ); })()}
           </div>
         );
       })}

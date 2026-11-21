@@ -244,7 +244,8 @@ elif name in ('xattr', 'osascript') and failure == name:
 
 def test_source_cannot_install_or_restart(monkeypatch):
     monkeypatch.setattr(app_build, "is_packaged", lambda: False)
-    assert '"fiberhmm[consensus]>=3.0.3,<4"' in app_update.PIP_COMMAND
+    from services.fiberhmm_runtime import FIBERHMM_REQUIREMENT
+    assert f'"{FIBERHMM_REQUIREMENT}"' in app_update.PIP_COMMAND  # the floor the build requires
     with pytest.raises(app_update.UpdateError, match="pip install"):
         app_update.start_install()
     with pytest.raises(app_update.UpdateError, match="pip install"):

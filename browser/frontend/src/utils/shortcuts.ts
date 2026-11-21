@@ -1,3 +1,4 @@
+import { hubWorkspaceEnabled } from '../features/plots/hubWorkspaceFlag';
 import type { AppCommandName } from './appCommands';
 
 const isMac = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform);
@@ -31,6 +32,8 @@ export interface KeyboardShortcut {
   category: 'Navigation' | 'Analysis' | 'View' | 'History' | 'App';
   /** The app commands (utils/appCommands) these keys run, each with its own keys: the command palette shows them. */
   commands?: Partial<Record<AppCommandName, string>>;
+  /** False: not bound on this page now (an experimental flag is off); the shortcuts list leaves it out. */
+  available?: () => boolean;
 }
 
 export const KEYBOARD_SHORTCUTS: KeyboardShortcut[] = [
@@ -39,7 +42,7 @@ export const KEYBOARD_SHORTCUTS: KeyboardShortcut[] = [
   { key: '\u2191 / \u2193 or +/-', description: 'Zoom in / out', category: 'Navigation', commands: { 'zoom-in': '\u2191 or +', 'zoom-out': '\u2193 or \u2212' } },
   { key: 'Alt+\u2190 / Alt+\u2192', description: 'Go back / forward in navigation history', category: 'Navigation', commands: { back: 'Alt+\u2190', forward: 'Alt+\u2192' } },
   { key: 'R', description: 'Reset view: clear clustering, filters and selections', category: 'Navigation', commands: { 'reset-view': 'R' } },
-  { key: 'N / P', description: 'Next / previous saved region of the current category (Regions panel)', category: 'Navigation', commands: { 'next-region': 'N', 'previous-region': 'P' } },
+  { key: 'N / Shift+N', description: 'Next / previous saved region of the current category (Regions panel)', category: 'Navigation', commands: { 'next-region': 'N', 'previous-region': 'Shift+N' } },
   { key: 'Shift+drag ruler', description: 'Highlight a region (the toolbar\u2019s Highlight turns plain drags into highlights too)', category: 'Navigation' },
   { key: `${MOD}+B`, description: 'Show / hide the settings sidebar', category: 'Navigation', commands: { 'toggle-sidebar': `${MOD}+B` } },
   { key: 'Read name in the locus box', description: 'Paste a read name (or several, comma separated) and press Enter: go to the read and highlight it', category: 'Navigation' },
@@ -54,10 +57,15 @@ export const KEYBOARD_SHORTCUTS: KeyboardShortcut[] = [
   { key: 'S', description: 'Scan for accessibility peaks', category: 'Analysis', commands: { 'scan-peaks': 'S' } },
 
   // View
-  { key: `${MOD}+scroll reads`, description: 'Zoom read row height', category: 'View' },
+  { key: `${MOD}+scroll`, description: 'Zoom the genomic region around the pointer in linear and graph panels (linked panels follow; one undo step per burst)', category: 'Navigation' },
+  { key: 'Shift+scroll', description: 'Smoothly size read rows in all panels together', category: 'View' },
+  { key: 'Scroll reads', description: 'Scroll read rows vertically', category: 'View' },
   { key: '[ / ]', description: 'Decrease / increase read row height', category: 'View' },
   { key: 'G', description: 'Toggle genome overview', category: 'View', commands: { 'toggle-genome-map': 'G' } },
   { key: '?', description: 'Show keyboard shortcuts', category: 'View', commands: { 'keyboard-shortcuts': '?' } },
+  { key: 'P', description: 'Plots workspace: open it, or go back to the browser', category: 'View', commands: { 'open-plots': 'P' } },
+  { key: 'H', description: 'Feature hub, full window: open it, or go back to the browser', category: 'View', commands: { 'toggle-feature-hub': 'H' }, available: () => hubWorkspaceEnabled() },
+  { key: 'Esc (in Plots or the hub)', description: 'Back to the browser (reads keep their scroll, filters and clusters)', category: 'View', commands: { 'back-to-browser': 'Esc' } },
   { key: `${MOD}+K`, description: 'Search commands and settings', category: 'View', commands: { 'command-palette': `${MOD}+K` } },
 
   // History

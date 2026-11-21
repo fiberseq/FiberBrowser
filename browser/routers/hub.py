@@ -1,0 +1,147 @@
+"""The feature hub's analyses (services/hub): association runs (A2) and the overlaid patch view (V1)."""
+from __future__ import annotations
+
+import asyncio
+
+from fastapi import APIRouter, Depends, HTTPException
+
+from state.dependencies import get_state
+
+router = APIRouter(tags=["hub"])
+
+
+@router.post('/api/hub/hits/query')
+async def hub_hits_query(request: dict, state=Depends(get_state)):
+    """Server-side scopes, filters, global sorting and bounded pages."""
+    _not_on_lab_requests()
+    _confine_paths(request)
+    from services.hub.paging import query_hits
+    try:
+        result = await asyncio.to_thread(query_hits, state, request)
+    except (ValueError, TypeError, KeyError) as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    # Only page-sized graph enrichment, grouped by contig. Existing native graph columns win.
+    from services.scan.graph_hits import add_graph_aliases
+    from collections import defaultdict
+    by_chrom = defaultdict(list)
+    for row in result['rows']:
+        hit = row['hit']
+        # Lifted scan hits keep their source contig in chrom. Packages are
+        # registered on the target genome, including insertion junctions.
+        by_chrom[(hit.get('target') or hit)['chrom']].append(hit)
+    for chrom, hits in by_chrom.items():
+        await add_graph_aliases(state, hits, chrom)
+    return result
+
+
+@router.post('/api/hub/columns')
+async def provider_columns(request: dict, state=Depends(get_state)):
+    """Graph columns for browser-provider hits, through the scan hits' fixed-tile path."""
+    _not_on_lab_requests()
+    from services.scan.graph_hits import add_graph_aliases
+    hits = request.get('hits')
+    chrom = request.get('chrom')
+    if not isinstance(chrom, str) or not isinstance(hits, list) or len(hits) > 20_000:
+        raise HTTPException(status_code=422, detail='Give a chromosome and at most 20,000 hits')
+    for h in hits:
+        if not isinstance(h, dict) or not isinstance(h.get('start'), int) or not isinstance(h.get('end'), int):
+            raise HTTPException(status_code=422, detail='Each hit needs integer start and end coordinates')
+    note = await add_graph_aliases(state, hits, chrom)
+    return dict(hits=hits, note=note)
+
+
+def _not_on_lab_requests() -> None:
+    """Association and overlays read scan directories and BAMs that a lab server's read roots don't describe."""
+    from services.lab.paths import enforcing
+    if enforcing():
+        raise HTTPException(status_code=403, detail="Hub analyses aren't available in a lab server's member sessions yet")
+
+
+def _confine_paths(request: dict) -> None:
+    from services.lab.paths import PathDenied, confine
+    paths = []
+    scope = request.get('scope') if isinstance(request.get('scope'), dict) else {}
+    if scope.get('bed'):
+        paths.append(str(scope['bed']))
+    options = request.get('options') if isinstance(request.get('options'), dict) else {}
+    for key in ('strataBed', 'anchorBed'):
+        if options.get(key):
+            paths.append(str(options[key]))
+    for p in paths:
+        try:
+            confine(p)
+        except PathDenied as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
+
+
+@router.get('/api/hub/assoc/modes')
+async def assoc_modes():
+    _not_on_lab_requests()
+    from services.hub.assoc import describe
+    return describe()
+
+
+@router.post('/api/hub/assoc/jobs')
+async def assoc_submit(request: dict, state=Depends(get_state)):
+    """Start an association run (fiberhmm.assoc over hub sets) on the scan job manager."""
+    _not_on_lab_requests()
+    from services.hub.assoc import submit
+    from services.hub.assoc_inputs import AssocInputError
+    if not isinstance(request, dict):
+        raise HTTPException(status_code=422, detail='Request must be an object')
+    _confine_paths(request)
+    try:
+        return await asyncio.to_thread(submit, state, request)
+    except AssocInputError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@router.get('/api/hub/assoc/jobs')
+async def assoc_jobs(state=Depends(get_state)):
+    _not_on_lab_requests()
+    from services.hub.assoc import list_jobs
+    return dict(jobs=list_jobs(state))
+
+
+@router.get('/api/hub/assoc/jobs/{job_id}')
+async def assoc_job(job_id: str, state=Depends(get_state)):
+    _not_on_lab_requests()
+    from services.hub.assoc import get_job
+    try:
+        return get_job(state, job_id)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail='No such association run') from error
+
+
+@router.delete('/api/hub/assoc/jobs/{job_id}')
+async def assoc_cancel(job_id: str, state=Depends(get_state)):
+    _not_on_lab_requests()
+    from services.hub.assoc import cancel
+    try:
+        return cancel(state, job_id)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail='No such association run') from error
+
+
+@router.post('/api/hub/overlay')
+async def hub_overlay(request: dict, state=Depends(get_state)):
+    """The overlaid patch view (V1): an aligned metaprofile of a mark layer over loci, per observation, with
+    denominators (molecules measured at each position) and a pile sample."""
+    _not_on_lab_requests()
+    from services.hub.overlay import OverlayError, overlay
+    if not isinstance(request, dict):
+        raise HTTPException(status_code=422, detail='Request must be an object')
+    try:
+        from services.hub.graph_overlay import prepare_graph_loci
+        prepared = await prepare_graph_loci(state, request)
+        return await asyncio.to_thread(overlay, state, prepared)
+    except OverlayError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@router.get('/api/hub/legacy')
+async def legacy_jobs(state=Depends(get_state)):
+    # Converting a run writes a hit snapshot beside its artifacts and returns host paths.
+    _not_on_lab_requests()
+    from services.hub.migration import legacy_runs
+    return await asyncio.to_thread(legacy_runs, state)

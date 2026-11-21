@@ -8,7 +8,9 @@ import { compactReadsQueryKey } from '../api/readOperations';
 import { applyImportedState, collectFrontendState } from '../api/session';
 
 describe('alignment signal filters', () => {
-  beforeEach(() => { useBrowserStore.setState({ signalFilters: { ...DEFAULT_SIGNAL_FILTERS } }); });
+  // A loaded dataset carries signal tags: the filters apply (utils/signalFilters datasetsCarrySignal).
+  beforeEach(() => { useBrowserStore.setState({ signalFilters: { ...DEFAULT_SIGNAL_FILTERS },
+    datasets: [{ id: 'tagged', label: 'Tagged', path: '/tmp/tagged.bam', color: '#000', data_type: 'bam', signal_tags: true }] as any }); });
 
   it('hides only background by default and keeps negative enums distinct', () => {
     for (const status of ['background', 'detectable', 'unclassified', 'unscored', 'unknown'] as const) {
@@ -60,7 +62,7 @@ describe('alignment signal filters', () => {
 
   it('restores saved settings and source identity and resets old sessions', () => {
     useBrowserStore.setState({ datasets: [{ id: 'one', label: 'Input', data_type: 'bam',
-      paths: ['/tmp/input.bam'], source_identity: 'original' }] as any });
+      paths: ['/tmp/input.bam'], source_identity: 'original', signal_tags: true }] as any });
     useBrowserStore.getState().setSignalFilters({ hideBackground: true, requireStructure: true });
     const saved = collectFrontendState();
     expect((saved.datasets as any[])[0].source_identity).toBe('original');

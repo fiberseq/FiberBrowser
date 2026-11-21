@@ -1,20 +1,15 @@
 """Dynamic cluster assignment helpers."""
 from __future__ import annotations
+from services.read_selection import read_body_spans, body_overlap
+from services.read_metrics import read_covers_regions
 
 import numpy as np
 
-from services.clustering_features import extract_features_from_compact, extract_features_grouped
+from services.clustering_features import (
+    class_aware_pattern_slices, extract_features_from_compact, extract_features_grouped,
+)
 
 UNASSIGNED_CLUSTER_ID = -1
-
-
-def _peak_column_ranges(peak_widths: list[int]) -> list[tuple[int, int]]:
-    ranges = []
-    offset = 0
-    for width in peak_widths:
-        ranges.append((offset, offset + int(width)))
-        offset += int(width)
-    return ranges
 
 
 def compute_cluster_centroids_from_compact(
@@ -89,22 +84,29 @@ def assign_reads_to_centroids(
     overlap_mode: str = "conservative",
     cluster_feature_rules: list[dict] | None = None,
     cluster_rule_context: dict | None = None,
+    metric_cohort: dict | None = None,
 ) -> dict:
     """Assign reads to the nearest cluster centroid (kmeans-style redistribution).
+
+    ``metric_cohort``: the fit's molecule metric cohort (clustering_features ``fitted_metric_cohort``), so a metric
+    column ranks these reads against the reads the centroids were fitted on, not against each other (None: a model
+    saved without one, ranked against these reads as before).
 
     ``overlap_mode``:
       - ``"conservative"``: a read must overlap EVERY clustering peak, otherwise
         it goes to the Unassigned (-1) bucket.
       - ``"aggressive"``: a read overlapping at least one peak is assigned using
-        only the feature dimensions of the peaks it actually overlaps.
+        only feature dimensions at observed body positions. Holes within a
+        peak are missing in both modes, rather than closed signal.
     """
     if not reads or not centroids or not peaks:
         return {"assignments": {}, "cluster_counts": {}, "filtered_read_ids": []}
 
-    centroid_ids = [int(c) for c in centroids.keys()]
-    centroid_matrix = np.array([centroids[c] for c in centroids], dtype=np.float32)
+    centroid_keys = sorted(centroids, key=int)
+    centroid_ids = [int(c) for c in centroid_keys]
+    centroid_matrix = np.array([centroids[c] for c in centroid_keys], dtype=np.float32)
 
-    features, read_ids, feat_peak_widths, _ = extract_features_from_compact(
+    features, read_ids, feat_peak_widths, feat_modes = extract_features_from_compact(
         reads,
         peaks,
         region_start,
@@ -113,15 +115,16 @@ def assign_reads_to_centroids(
         peak_modes=peak_modes,
         cluster_feature_rules=cluster_feature_rules,
         cluster_rule_context=cluster_rule_context,
+        metric_cohort=metric_cohort or None,
     )
     if features.size == 0:
         return {"assignments": {}, "cluster_counts": {}, "filtered_read_ids": []}
 
     widths = [int(w) for w in (peak_widths or feat_peak_widths)]
     # Centroid layout must match the current feature extraction or masking breaks.
-    if centroid_matrix.shape[1] != features.shape[1] or sum(widths) != features.shape[1]:
+    if centroid_matrix.shape[1] != features.shape[1] or widths != list(feat_peak_widths):
         return {"assignments": {}, "cluster_counts": {}, "filtered_read_ids": []}
-    col_ranges = _peak_column_ranges(widths)
+    slices = class_aware_pattern_slices(widths, feat_modes, cluster_feature_rules)
     n_peaks = len(peaks)
     aggressive = overlap_mode == "aggressive"
 
@@ -142,19 +145,24 @@ def assign_reads_to_centroids(
             _mark_unassigned(read_id)
             continue
 
-        if len(overlapping_peaks) == n_peaks:
-            vec = features[idx]
-            cmat = centroid_matrix
-        else:
-            cols: list[int] = []
-            for peak_idx in overlapping_peaks:
-                lo, hi = col_ranges[peak_idx]
-                cols.extend(range(lo, hi))
-            if not cols:
-                _mark_unassigned(read_id)
+        spans = read_body_spans(reads[idx])
+        cols: list[int] = []
+        for peak_idx, offset, width, is_class in slices:
+            if not overlaps[peak_idx]:
                 continue
-            vec = features[idx, cols]
-            cmat = centroid_matrix[:, cols]
+            if is_class:
+                # Class bits summarize the observed part of the entire peak;
+                # they are not positions on the spatial sampling grid.
+                cols.extend(range(offset, offset + width))
+            else:
+                left = int(peaks[peak_idx][0])
+                cols.extend(offset + j for j in range(width)
+                            if any(a <= left + j * 10 < b for a, b in spans))
+        if not cols:
+            _mark_unassigned(read_id)
+            continue
+        vec = features[idx, cols]
+        cmat = centroid_matrix[:, cols]
 
         distances = np.linalg.norm(cmat - vec[None, :], axis=1)
         cluster = centroid_ids[int(np.argmin(distances))]
@@ -182,13 +190,9 @@ def read_peak_overlap_weights(read: dict, peaks: list[list[int]]) -> tuple[int, 
     if not intervals:
         return tuple(0 for _ in peaks)
 
-    read_start_rel = min(int(iv[0]) for iv in intervals if len(iv) >= 2)
-    read_end_rel = max(int(iv[1]) for iv in intervals if len(iv) >= 2)
     weights = []
     for peak_start, peak_end in peaks:
-        overlap_start = max(int(peak_start), read_start_rel)
-        overlap_end = min(int(peak_end), read_end_rel)
-        weights.append(max(0, overlap_end - overlap_start))
+        weights.append(body_overlap(read, int(peak_start), int(peak_end)))
     return tuple(weights)
 
 
@@ -204,8 +208,6 @@ def read_accessibility_pattern(
     if not intervals:
         return tuple(0 for _ in peaks)
 
-    read_start_rel = intervals[0][0]
-    read_end_rel = intervals[-1][1]
     pattern_bits = []
 
     for peak_start, peak_end in peaks:
@@ -214,7 +216,7 @@ def read_accessibility_pattern(
             pattern_bits.append(0)
             continue
 
-        if not (read_start_rel <= peak_start and read_end_rel >= peak_end):
+        if not read_covers_regions(read, [[peak_start, peak_end]]):
             pattern_bits.append(0)
             continue
 
@@ -254,7 +256,7 @@ def read_accessibility_pattern_by_overlap(
     for peak_start, peak_end in peaks:
         overlap_start = max(int(peak_start), read_start_rel)
         overlap_end = min(int(peak_end), read_end_rel)
-        overlap_width = max(0, overlap_end - overlap_start)
+        overlap_width = body_overlap(read, int(peak_start), int(peak_end))
         overlap_weights.append(overlap_width)
         if overlap_width <= 0:
             pattern_bits.append(0)
@@ -323,6 +325,7 @@ def assign_reads_to_cluster_patterns(
     overlap_mode: str = "aggressive",
     cluster_feature_rules: list[dict] | None = None,
     cluster_rule_context: dict | None = None,
+    metric_cohort: dict | None = None,
 ) -> dict:
     """Assign reads to existing cluster patterns for dynamic clustering.
 
@@ -333,7 +336,8 @@ def assign_reads_to_cluster_patterns(
 
     ``overlap_mode`` as for centroids: ``"conservative"`` sends a read that
     misses any clustering peak to Unassigned; ``"aggressive"`` assigns every
-    read overlapping at least one peak.
+    read overlapping at least one peak. ``metric_cohort`` as for centroids: a
+    molecule metric bit is the read's rank among the fitted reads.
     """
     from services.clustering_features import class_aware_pattern_slices
 
@@ -352,6 +356,7 @@ def assign_reads_to_cluster_patterns(
         peak_modes=peak_modes,
         cluster_feature_rules=cluster_feature_rules,
         cluster_rule_context=cluster_rule_context,
+        metric_cohort=metric_cohort or None,
     )
     if features.size == 0:
         return {"assignments": {}, "cluster_counts": {}, "filtered_read_ids": []}
@@ -367,8 +372,6 @@ def assign_reads_to_cluster_patterns(
             cluster_counts[UNASSIGNED_CLUSTER_ID] = cluster_counts.get(UNASSIGNED_CLUSTER_ID, 0) + 1
             continue
         spans = [iv for iv in read.get("intervals", []) if len(iv) >= 2]
-        read_lo = min(int(iv[0]) for iv in spans) if spans else 0
-        read_hi = max(int(iv[1]) for iv in spans) if spans else 0
         pattern_bits = []
         for peak_idx, offset, width, is_class in pattern_slices:
             if width <= 0:
@@ -378,7 +381,7 @@ def assign_reads_to_cluster_patterns(
             if not is_class:
                 # Sample j of a peak is at its left edge + j*step: keep the covered ones.
                 sample_pos = int(peaks[peak_idx][0]) + step * np.arange(width)
-                values = values[(sample_pos >= read_lo) & (sample_pos < read_hi)]
+                values = values[np.asarray([any(a <= p < b for a, b in read_body_spans(read)) for p in sample_pos])]
             threshold = 0.5 if is_class else accessibility_threshold
             pattern_bits.append(1 if values.size and values.mean() > threshold else 0)
         class_overlap_weights = [overlap_weights[i] for i, _, _, _ in pattern_slices]

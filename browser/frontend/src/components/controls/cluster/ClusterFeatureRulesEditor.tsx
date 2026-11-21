@@ -9,6 +9,7 @@ import {
 } from '../../../utils/analysisRules';
 import { AnalysisButton } from '../shared';
 import { QualityGateEditor } from '../labeling/QualityGateEditor';
+import { MoleculeMetricSelect, moleculeMetricTerm } from '../analysis-rules/RuleTermSources';
 
 interface LayerOption {
   value: string;
@@ -432,6 +433,9 @@ export function ClusterFeatureRulesEditor({
                             applyFootprintGroup(rule, term, footprintGroups[0].id);
                           } else if (source === 'footprint_class' && footprintGroups.some(g=>g.consensusStateId)) {
                             applyFootprintGroup(rule, term, footprintGroups.find(g=>g.consensusStateId)!.id);
+                          } else if (source === 'molecule_metric') {
+                            // One scalar column per molecule metric term.
+                            updateRuleTerm(rule, term.id, moleculeMetricTerm(term));
                           } else {
                             updateRuleTerm(rule, term.id, {
                               source: 'layer',
@@ -451,7 +455,18 @@ export function ClusterFeatureRulesEditor({
                         <option value="footprint_class" disabled={!footprintGroups.some(g=>g.consensusStateId)}>
                           Footprint class{!footprintGroups.some(g=>g.consensusStateId) ? ' (add classes to Cart)' : ''}
                         </option>
+                        <option value="molecule_metric">Molecule metric</option>
                       </select>
+
+                      {term.source === 'molecule_metric' && (
+                        <>
+                          <MoleculeMetricSelect
+                            value={term.moleculeMetric}
+                            onChange={metric => updateRuleTerm(rule, term.id, { moleculeMetric: metric })}
+                          />
+                          <span className="text-[11px] text-gray-500">one scalar column per molecule</span>
+                        </>
+                      )}
 
                       {term.source === 'layer' && (
                         <>

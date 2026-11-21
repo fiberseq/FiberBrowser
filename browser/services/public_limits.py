@@ -215,7 +215,7 @@ SPAN_LIMITED_ROUTES: frozenset[str] = frozenset({
     "/api/coacc/arcs", "/api/coacc/matrix/data", "/api/coacc/matrix/image", "/api/coacc/metadata",
     "/api/coacc/slice", "/api/coacc/strip",
     "/api/scan_peaks", "/api/detect_peaks", "/api/cluster", "/api/cluster_all", "/api/cluster_expand",
-    "/api/cluster_projection", "/api/cluster/vplot", "/api/assign_to_clusters", "/api/dissolve_cluster",
+    "/api/cluster_projection", "/api/cluster_molecules", "/api/cluster/vplot", "/api/assign_to_clusters", "/api/dissolve_cluster",
     "/api/auto_cull_clusters", "/api/filter", "/api/filter_by_analysis_rule",
     "/api/filter_by_transcription_state", "/api/sort_reads", "/api/pol2_com", "/api/autozoom",
     "/api/quality/impact", "/api/footprint/analyze",

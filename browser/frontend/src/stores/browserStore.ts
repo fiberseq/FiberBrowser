@@ -1,4 +1,5 @@
-import { setHideUncalledSource, setSignalFilterSource } from '../utils/signalFilters';
+import { foldedInShownGraph } from './graphMembership';
+import { effectiveSignalFilters, setHideUncalledSource, setSignalFilterSource } from '../utils/signalFilters';
 import { setAccessibilityLabelSource, setLayerColorSource } from '../utils/layerColors';
 import { clearLoadedReadRegions } from '../api/loadedReadRegion';
 import { useRunResultStore } from './runResultStore';
@@ -105,7 +106,8 @@ export function getTargetDatasetIds(
   const selectedDsIds = new Set<string>();
   const selectedLinkGroups = new Set<string>();
   for (const p of datasetPanels) {
-    if (selectedDatasets.has(p.id)) {
+    // A member folded into a selected graph host is selected with it (its band is in the host's graph).
+    if (selectedDatasets.has(p.id) || selectedWithHost(p, panels, selectedDatasets)) {
       selectedDsIds.add(p.datasetId);
       if (p.linkGroup) selectedLinkGroups.add(p.linkGroup);
     }
@@ -118,6 +120,13 @@ export function getTargetDatasetIds(
     }
   }
   return orderedAll.filter(id => selectedDsIds.has(id));
+}
+
+/** A member folded into a shown graph whose host is selected (graph features: the host and its folded members are
+ * one comparison, as Cluster targets them). */
+function selectedWithHost(p: PanelConfig, panels: readonly PanelConfig[], selected: Set<string>): boolean {
+  const host = p.collapsed ? foldedInShownGraph(p, panels) : null;
+  return Boolean(host && selected.has(host.id));
 }
 
 /** Map datasetId → stateKeys for the targeted panels. Used to store operation results per-panel. */
@@ -138,7 +147,8 @@ export function getStateKeyMap(
     datasetPanels.filter(p => selectedDatasets.has(p.id) && p.linkGroup).map(p => p.linkGroup as string),
   );
   const targeted = (p: PanelConfig) =>
-    selectedDatasets.size === 0 || selectedDatasets.has(p.id) || (p.linkGroup != null && selectedLinkGroups.has(p.linkGroup));
+    selectedDatasets.size === 0 || selectedDatasets.has(p.id) || (p.linkGroup != null && selectedLinkGroups.has(p.linkGroup))
+    || selectedWithHost(p, panels, selectedDatasets);
   const map: Record<string, string[]> = {};
   for (const p of datasetPanels) {
     if (!targetDsSet.has(p.datasetId)) continue;
@@ -224,7 +234,8 @@ useBrowserStore.subscribe((state, previous) => {
   }
 });
 
-setSignalFilterSource(() => useBrowserStore.getState().signalFilters);
+// Signal filters apply only while a loaded dataset carries bg/me/db signal tags (utils/signalFilters).
+setSignalFilterSource(() => effectiveSignalFilters(useBrowserStore.getState()));
 // Min footprints' "All reads, including uncalled" choice: requests say so (hide_uncalled=false).
 setHideUncalledSource(() => useBrowserStore.getState().minFootprints !== -1);
 // The accessibility layer is named "FIRE" when the loaded files carry FIRE scores
@@ -246,7 +257,8 @@ function readSourceKey(dataset: Dataset): string {
   ]);
 }
 useBrowserStore.subscribe((state, previous) => {
-  if (state.signalFilters !== previous.signalFilters) {
+  if (state.signalFilters !== previous.signalFilters
+      || effectiveSignalFilters(state) !== effectiveSignalFilters(previous)) {
     clearLoadedReadRegions();
     return;
   }

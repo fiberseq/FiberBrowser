@@ -7,6 +7,7 @@ length, so the BAM fits an hg38 reference if one is loaded (the e2e tests may lo
 from __future__ import annotations
 
 import sys
+from array import array
 
 import pysam
 
@@ -30,6 +31,10 @@ def write(path: str, per_region: int = 11_000) -> str:
                 a.cigartuples = [(0, READ_LEN)]
                 a.query_sequence = seq
                 a.mapping_quality = 60
+                # Footprint calls (an array pair), so the reads count as called: Regions lists only
+                # regions holding reads the read panel shows, and it hides uncalled reads by default.
+                a.set_tag("ns", array("I", [500, 1500]))
+                a.set_tag("nl", array("I", [147, 147]))
                 out.write(a)
                 n += 1
     pysam.index(path)

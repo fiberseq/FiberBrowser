@@ -11,6 +11,10 @@ import pytest
 
 from test_find_reads_no_match import _bam
 
+# These synthetic reads carry no footprint calls: the tests ask for all reads ("All reads, including uncalled").
+pytestmark = pytest.mark.usefixtures("all_reads_including_uncalled")
+
+
 DEMO_BAM = Path(__file__).resolve().parents[1] / "browser" / "data" / "demo" / "napa_ddda.bam"
 
 

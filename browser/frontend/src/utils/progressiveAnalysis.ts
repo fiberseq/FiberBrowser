@@ -1,3 +1,4 @@
+import { idSetHas, qnameOfId, recordKey } from './recordKeys';
 import { create } from 'zustand';
 import { useBrowserStore, type BrowserState } from '../stores/browserStore';
 import { captureRunViews, runViewsStillCurrent } from './panelRunScope';
@@ -29,13 +30,36 @@ export function stoppedText(kind: Kind, refining: boolean, reason?: 'locus' | 'c
 /** Intersect the display with an optional full scope; an empty display stays empty. */
 export function displayedScope(ids: string[] | undefined, full?: string[]): string[] {
   const allowed = full === undefined ? null : new Set(full);
-  return [...new Set(ids ?? [])].filter(id => !allowed || allowed.has(id));
+  // By identity: a graph row's shown id names its record, which a scope may hold as a record key (a graph run's
+  // labels) or a QNAME (graph features review).
+  return [...new Set(ids ?? [])].filter(id => !allowed || idSetHas(allowed, [id, qnameOfId(id)], recordKey(id)));
 }
 
 /** Wait for every target's display; skip a duplicate fit when its full scope is already drawn. */
 export function needsDisplayPreview(windows: Array<{ shown: string[]; full?: string[] }>): boolean {
   return windows.length > 0 && windows.every(view => view.shown.length > 0)
     && windows.some(view => view.full === undefined || new Set(view.full).size > new Set(view.shown).size);
+}
+
+/** Fields of a dataset the server refreshes as its outputs change (nucleosome layers, regularity tiles, patches, the
+ * patch lane's geometry labels): a display refetch or relabel, not a change of intent. */
+export const REFRESHED_DATASET_FIELDS = new Set(['source_identity', 'regularity_identity', 'patch_labels_identity',
+  'available_layers', 'derived_layers']);
+
+/** The same datasets with the same settings, whatever outputs the server added meanwhile. */
+export function sameDatasetIntent(a: BrowserState['datasets'], b: BrowserState['datasets']): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  return a.every((x, i) => {
+    const y = b[i];
+    if (x === y) return true;
+    const keys = new Set([...Object.keys(x), ...Object.keys(y)]);
+    for (const k of keys) {
+      if (REFRESHED_DATASET_FIELDS.has(k)) continue;
+      if ((x as unknown as Record<string, unknown>)[k] !== (y as unknown as Record<string, unknown>)[k]) return false;
+    }
+    return true;
+  });
 }
 
 /** One preview/refinement owns its original scope until user intent changes.
@@ -52,12 +76,12 @@ export function beginProgressiveAnalysis(kind: Kind, keys: string[]) {
   const globals: Array<keyof BrowserState> = ['activeClusterTreeNodeId', 'spanningOnly',
     'minFootprints', 'analysisSampleCount', 'analysisSampleSeed', 'clusterK', 'clusterMethod',
     'clusterResolution', 'clusterFeatureRules', 'subnucleosomalThreshold', 'accessibilityThreshold',
-    'selectedPeaks', 'peakModes', 'peaksByRule', 'selectedGenes', 'selectedDatasets', 'datasets',
+    'selectedPeaks', 'peakModes', 'peaksByRule', 'selectedGenes', 'selectedFeatures', 'clusterPeakMode', 'selectedDatasets', 'datasets',
     'clusterGroupLabels', 'clusterTreeNodes', 'clusterPreparationCount'];
   // One run over all its views: any of them moving stops it (3.0.0 audit MED-1).
   const viewsCurrent = (now: BrowserState) => runViewsStillCurrent(views, now);
   const matches = (now: BrowserState) => viewsCurrent(now)
-    && globals.every(key => expected[key] === now[key])
+    && globals.every(key => (key === 'datasets' ? sameDatasetIntent(expected.datasets, now.datasets) : expected[key] === now[key]))
     && expected.activeColormap.qualityFilters === now.activeColormap.qualityFilters
     && keys.every(key => sortStateStillCurrent(expected, now, key));
   let unsubscribe = () => {};

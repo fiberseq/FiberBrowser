@@ -438,13 +438,19 @@ def test_decode_setup_failure_releases_queue_and_admission_lock(monkeypatch, fai
         if failure == 'queue':
             unavailable()
         return SimpleNamespace(close=lambda: closed.append(1))
-    monkeypatch.setattr(parallel_reads, '_decode_lock', threading.Lock())
+    monkeypatch.setattr(parallel_reads, '_pools', threading.Condition())
+    monkeypatch.setattr(parallel_reads, '_pool_workers', 0)
+    monkeypatch.setattr(parallel_reads, '_exclusive', False)
     monkeypatch.setattr(parallel_reads.multiprocessing, 'get_context',
                         lambda method: SimpleNamespace(Queue=queue, Event=unavailable))
     with pytest.raises(OSError, match='descriptor allocation failed'):
         parallel_reads.parallel_bam_reads('reads.bam', 'chr1', 0, 100, {}, 2)
-    assert not parallel_reads._decode_lock.locked()
+    assert not parallel_reads._exclusive and parallel_reads._pool_workers == 0
     assert closed == ([1] if failure == 'event' else [])
+    # A pool sharing a capacity gives its workers back too.
+    with pytest.raises(OSError, match='descriptor allocation failed'):
+        parallel_reads.parallel_bam_reads('reads.bam', 'chr1', 0, 100, {}, 2, capacity=8)
+    assert not parallel_reads._exclusive and parallel_reads._pool_workers == 0
 
 
 @pytest.mark.parametrize('mode', ['standard', 'high', 'auto'])

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+from contextvars import ContextVar
 from typing import Optional
 
 from services.bam_handles import get_bam_handle
@@ -63,10 +64,21 @@ def _bam_options(state, bam_path, chrom, kwargs):
     # Read-end footprints under the cutoff are dropped for this workspace's
     # display and analyses alike (Edges / terminal gaps settings).
     kwargs.setdefault("short_terminal_footprint_bp", short_terminal_footprint_bp_for(state))
+    from services.sv_alleles import reference_identity
+    kwargs.setdefault('sv_reference', reference_identity(state)[0])
     from services.read_edge_cache import edge_fetch_regions
     if edge_fetch_regions.get() is not None:
         kwargs['fetch_regions'] = edge_fetch_regions.get()
     return kwargs
+
+
+# Set by a view's full set built after its first paint (compact_all ``background=true``): its reads
+# are decoded on this many decode worker processes, whatever the view's depth. The view's datasets
+# share the configured decode workers (0: off).
+full_set_on_workers: ContextVar[int] = ContextVar("full_set_on_workers", default=0)
+# Set by a first paint (services/first_paint.py): its scoped decode of the drawn reads runs on this many
+# decode worker processes per dataset (0: in this process).
+first_paint_on_workers: ContextVar[int] = ContextVar("first_paint_on_workers", default=0)
 
 
 def build_direct_bam_reads(state, bam_path, chrom, start, end, **kwargs):
@@ -79,6 +91,16 @@ def build_direct_bam_reads(state, bam_path, chrom, start, end, **kwargs):
     from services.packed_reads import bounded_analysis
     from services.read_sampling import active_sampler
     from services.cluster_sample import cluster_sample_scope
+    fp_workers = first_paint_on_workers.get()
+    scoped = active_sampler()
+    if (fp_workers > 1 and workers > 1 and scoped is not None and scoped.only_ids is not None and scoped.exact_ids
+            and scoped.max_records is None and os.path.isfile(bam_path) and not kwargs.get('circular')
+            and not bounded_analysis.get() and not _bam_requires_wrap(bam_path, chrom, kwargs)):
+        # A first paint's drawn reads, split by name across worker processes (the same scoped decode in each).
+        from services.parallel_reads import parallel_bam_reads
+        options = {key: value for key, value in kwargs.items() if key != 'bam_handle_getter'}
+        options['_only_ids'] = sorted(scoped.only_ids)
+        return parallel_bam_reads(bam_path, chrom, start, end, options, min(workers, fp_workers), capacity=workers)
     # Sampled first views still decompress every fetched BAM record. htslib's
     # bounded native threads accelerate that work without changing the sample.
     # Keep the reader request-local: pooled files must not leave one idle native
@@ -91,13 +113,18 @@ def build_direct_bam_reads(state, bam_path, chrom, start, end, **kwargs):
         with transient_bam_handle(bam_path, threads=config['bam_threads']) as bam:
             kwargs['bam_handle_getter'] = lambda path: bam if path == bam_path else get_bam_handle(path)
             return build_compact_reads_from_bam(bam_path, chrom, start, end, **kwargs)
-    if workers > 1 and not bounded_analysis.get() and not is_interactive_read() and not is_prefetch() and not kwargs.get('circular'):
+    on_workers = full_set_on_workers.get()
+    if (workers > 1 and not bounded_analysis.get() and (on_workers or not is_interactive_read())
+            and not is_prefetch() and not kwargs.get('circular')):
         from services.read_sampling import active_sampler, estimate_reads
         if (os.path.isfile(bam_path) and active_sampler() is None
-                and (estimate_reads(bam_path, chrom, start, end, chrom_map=kwargs.get('chrom_map')) or 0) >= 20000
+                and (on_workers or (estimate_reads(bam_path, chrom, start, end, chrom_map=kwargs.get('chrom_map')) or 0) >= 20000)
                 and not _bam_requires_wrap(bam_path, chrom, kwargs)):
             from services.parallel_reads import parallel_bam_reads
             options = {key: value for key, value in kwargs.items() if key != 'bam_handle_getter'}
+            if on_workers:
+                return parallel_bam_reads(bam_path, chrom, start, end, options, min(workers, on_workers),
+                                          capacity=workers)
             return parallel_bam_reads(bam_path, chrom, start, end, options, workers)
     return build_compact_reads_from_bam(bam_path, chrom, start, end, **kwargs)
 

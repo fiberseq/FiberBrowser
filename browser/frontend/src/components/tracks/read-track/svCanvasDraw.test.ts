@@ -13,6 +13,7 @@ import type { CompactRead, SvSummary } from './types';
 function recordingContext() {
   const fills: Array<{ x0: number; x1: number; y: number; h: number; fill: string }> = [];
   const lines: Array<{ x0: number; x1: number; y: number; stroke: string }> = [];
+  const dashes: number[][] = [];
   const texts: Array<{ text: string; x: number; y: number }> = [];
   type Clip = Array<[number, number]>;
   let clip: Clip = [[-Infinity, Infinity]];
@@ -45,12 +46,13 @@ function recordingContext() {
     measureText: (text: string) => ({ width: String(text).length * 5 }),
     createLinearGradient: () => ({ addColorStop: () => undefined }),
     getLineDash: () => [],
+    setLineDash: (values: number[]) => { dashes.push(values); },
   };
   const ctx = new Proxy(state, {
     get: (target, prop: string) => (prop in methods ? methods[prop] : prop in target ? target[prop] : () => undefined),
     set: (target, prop: string, value) => { target[prop] = value; return true; },
   });
-  return { ctx, fills, lines, texts };
+  return { ctx, fills, lines, texts, dashes };
 }
 
 const fakeCanvas = (ctx: unknown) => ({ getContext: () => ctx, style: {}, width: 0, height: 0 }) as unknown as HTMLCanvasElement;
@@ -136,7 +138,7 @@ describe('SV display on the read canvas', () => {
     const withSummary = draw([REF], { svSummary: SUMMARY });
     const firstRowY = (fills: typeof plain.fills) => Math.min(...fills.filter(f => f.fill === readBg).map(f => f.y));
     expect(firstRowY(withSummary.fills)).toBe(firstRowY(plain.fills));
-    expect(withSummary.texts.some(t => t.text.startsWith('SV'))).toBe(false);
+    expect(withSummary.texts.some(t => t.text.startsWith('Differences'))).toBe(false);
   });
 
   it('the SV track draws to the height it is given (glyphs and labels scale)', () => {
@@ -149,7 +151,7 @@ describe('SV display on the read canvas', () => {
       top: 0, height: 160, width: 1000, sidebarWidth: 0, viewStart: START, toX: rel => rel, isReversed: false, backgroundColor: '#fff',
     });
     expect(small.texts.some(t => t.text.includes('1/2'))).toBe(true);
-    expect(tall.texts.some(t => t.text.startsWith('SV'))).toBe(true);
+    expect(tall.texts.some(t => t.text.startsWith('Differences'))).toBe(true);
     // The deletion's label sits near the arc's apex: high up in the tall track, not at a fixed 36 px band.
     const labelY = (texts: typeof small.texts) => texts.find(t => t.text.includes('1/2'))!.y;
     expect(labelY(tall.texts)).toBeLessThan(40);
@@ -185,4 +187,37 @@ describe('zoomed out past the read limit', () => {
     expect(inkOn('#111827').dark).toBe(true);
     expect(inkOn('#ffffff').dark).toBe(false);
   });
+});
+
+it('distinguishes putative carrier highlights with pale dashed evidence markers', () => {
+  const confirmed = draw([REF], { readHighlightIds: new Set(['r']) });
+  const putative = draw([REF], { readHighlightIds: new Set(['r']), uncertainSvIds: new Set(['r']) });
+  expect(confirmed.fills.some(f => f.fill === '#ca8a04')).toBe(true);
+  expect(putative.fills.some(f => f.fill === 'rgba(202, 138, 4, 0.5)')).toBe(true);
+  expect(putative.dashes).toContainEqual([3, 3]);
+  expect(putative.dashes).toContainEqual([2, 2]);
+});
+
+it('supports legacy names and explicit row identities with scoped matching',()=>{
+  const row={...REF,analysis_id:'qualified-row'};
+  expect(draw([row],{readHighlightIds:new Set(['r'])}).fills.some(f=>f.fill==='#ca8a04')).toBe(true);
+  expect(draw([row],{readHighlightIds:new Set(['qualified-row']),readHighlightMode:'rows'}).fills.some(f=>f.fill==='#ca8a04')).toBe(true);
+  expect(draw([row],{readHighlightIds:new Set(['r']),readHighlightMode:'rows'}).fills.some(f=>f.fill==='#ca8a04')).toBe(false);
+});
+it.each([false,true])('connects replacement breakpoints to their corresponding column edges (reverse=%s)',async isReversed=>{
+  const {makeAxis}=await import('../../../features/differences/axis');
+  const expansion={chrom:'chrSV',pos:START+504,ref_start:START+500,t_end:START+504,length:100,ins_id:'alternate',label:'',hap_label:''};
+  const axis=makeAxis(START,START+1000,1100,isReversed,[expansion]);
+  const row={...REF,alternate_blocks:{alternate:{pos:START+504,length:100,mol_bp:100,covered:[0,100],intervals:[],hap_label:'',orientation:'+',src:['source',0,100],
+    observed_ref_start:START+498,observed_ref_end:START+508}}} as CompactRead;
+  const out=draw([row],{axis,width:1100,isReversed});
+  const endpoints=(a:number,b:number)=>[Math.min(a,b),Math.max(a,b)];
+  const left=endpoints(axis.toX(START+498),axis.toX(0,{ins_id:'alternate',offset:0}));
+  const right=endpoints(axis.toX(START+508),axis.toX(0,{ins_id:'alternate',offset:100}));
+  expect(out.lines.some(l=>l.x0===left[0]&&l.x1===left[1]&&l.stroke==='#94a3b8')).toBe(true);
+  expect(out.lines.some(l=>l.x0===right[0]&&l.x1===right[1]&&l.stroke==='#94a3b8')).toBe(true);
+  // The four reference bases of a small replacement are absent from its body.
+  const rowFills=out.fills.filter(f=>f.fill===readBg&&f.y>=24&&f.h<=20);
+  const hole=endpoints(axis.toX(START+499),axis.toX(START+503));
+  expect(rowFills.some(f=>f.x0<hole[1]&&f.x1>hole[0])).toBe(false);
 });

@@ -23,7 +23,7 @@ from email.parser import BytesParser
 from importlib import metadata
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlparse
-from urllib.request import urlopen
+from urllib.request import HTTPRedirectHandler, build_opener
 
 from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name, parse_wheel_filename
@@ -47,7 +47,9 @@ class UpdateError(ValueError):
 
 
 def minimum_version() -> str:
-    return str((app_build.build_info() or {}).get("fiberhmm_min_version") or "3.0.3")
+    # A packaged build records its floor (packaging/write_build_info.py); otherwise this source's requirement.
+    floor = re.search(r">=([0-9.]+)", runtime.FIBERHMM_REQUIREMENT)
+    return str((app_build.build_info() or {}).get("fiberhmm_min_version") or (floor.group(1) if floor else "3.2.0"))
 
 
 def pip_command() -> str:
@@ -76,6 +78,24 @@ def _url_ok(url: str) -> bool:
     parsed = urlparse(url)
     # Loopback HTTP is for offline tests; release downloads must use TLS.
     return parsed.scheme == "https" or (parsed.scheme == "http" and parsed.hostname in ("127.0.0.1", "localhost", "::1"))
+
+
+class _CheckedRedirect(HTTPRedirectHandler):
+    """Validates every redirect hop before it is followed, not only the first and final URLs: a plaintext hop in
+    the middle of a chain would let an attacker substitute the release index (wheel URLs and their hashes)."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not _url_ok(newurl):
+            raise UpdateError("Unsafe FiberHMM download redirect.")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _opener(*handlers):
+    return build_opener(_CheckedRedirect, *handlers)
+
+
+def urlopen(url: str, timeout: float):
+    return _opener().open(url, timeout=timeout)
 
 
 def _read_url(url: str, limit: int) -> bytes:

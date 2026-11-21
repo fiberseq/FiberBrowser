@@ -16,6 +16,17 @@ interface SignalProfileChartProps {
   viewStart?: number;
   /** Viewport end (genomic coords) */
   viewEnd?: number;
+  /** A fixed top of the y range (a range shared across a set of plots); default: the signal's own (at least the thresholds). */
+  yMax?: number;
+}
+
+/** The top of the y range a signal plot draws on its own: its maximum, at least 1.1 × the highest threshold. */
+export function signalProfileTop(signal: readonly number[], thresholds: readonly number[]): number {
+  let maxVal = 0;
+  for (const v of signal) if (v > maxVal) maxVal = v;
+  if (maxVal === 0) maxVal = 1;
+  const maxThreshold = Math.max(...thresholds);
+  return maxVal < maxThreshold * 1.1 ? maxThreshold * 1.1 : maxVal;
 }
 
 const DEFAULT_THRESHOLD_LABELS = ['Strong', 'Medium', 'Weak', 'Rare'];
@@ -30,6 +41,7 @@ function drawSignalProfile(
   color: string,
   viewStart: number,
   viewEnd: number | undefined,
+  yMax?: number,
 ) {
   ctx.clearRect(0, 0, width, height);
 
@@ -48,13 +60,7 @@ function drawSignalProfile(
   const plotW = width - padL - padR;
   const plotH = height - padT - padB;
 
-  let maxVal = 0;
-  for (const v of signal) {
-    if (v > maxVal) maxVal = v;
-  }
-  if (maxVal === 0) maxVal = 1;
-  const maxThreshold = Math.max(...thresholds);
-  if (maxVal < maxThreshold * 1.1) maxVal = maxThreshold * 1.1;
+  const maxVal = yMax != null && Number.isFinite(yMax) && yMax > 0 ? yMax : signalProfileTop(signal, thresholds);
 
   const scaleX = plotW / signal.length;
   const scaleY = plotH / maxVal;
@@ -135,12 +141,13 @@ export function SignalProfileChart({
   filename = 'signal_profile',
   viewStart = 0,
   viewEnd,
+  yMax,
 }: SignalProfileChartProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   const drawFn = useCallback((ctx: CanvasRenderingContext2D, w: number, h: number) => {
-    drawSignalProfile(ctx, w, h, signal, thresholds, peaks, color, viewStart, viewEnd);
-  }, [signal, thresholds, peaks, color, viewStart, viewEnd]);
+    drawSignalProfile(ctx, w, h, signal, thresholds, peaks, color, viewStart, viewEnd, yMax);
+  }, [signal, thresholds, peaks, color, viewStart, viewEnd, yMax]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -156,7 +163,7 @@ export function SignalProfileChart({
   }, [drawFn, width, height]);
 
   return (
-    <div className="relative group">
+    <div className="relative group" data-y-max={(yMax ?? signalProfileTop(signal ?? [], thresholds)).toFixed(3)} data-y-fixed={yMax != null ? 'true' : 'false'}>
       <canvas
         ref={canvasRef}
         style={{ width, height }}

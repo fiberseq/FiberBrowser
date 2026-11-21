@@ -21,6 +21,11 @@ From `browser/frontend`, run `npm run build`, `npm run test:run` and
 `npm run test:e2e:release`. From the repository root, run
 `python -m pytest tests -m "not integration" -q -p no:cacheprovider`.
 
+Before a release, run every e2e spec with
+`FIBERBROWSER_TEST_FASTA=/path/to/hg38.fa npm run e2e:full` (an indexed hg38,
+two test ports, a scratch HOME and its own build; see
+`browser/frontend/tests/e2e/README.md`).
+
 The old public-tree exporter and held-back-word check are retired. Build directly
 from this checkout. Both packaging smoke checks require the NFR and Synchronise
 modules. Use a fresh output folder for each app build.

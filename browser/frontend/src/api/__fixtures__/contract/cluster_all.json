@@ -1,0 +1,72 @@
+{
+ "cluster_patterns": {
+  "0": [
+   1,
+   0,
+   0
+  ],
+  "1": [
+   1,
+   0,
+   1
+  ],
+  "2": [
+   1,
+   1,
+   0
+  ]
+ },
+ "cluster_random_state": 42,
+ "peak_regions": [
+  {
+   "end": 47515677,
+   "mode": "accessibility",
+   "start": 47514981
+  },
+  {
+   "end": 47514956,
+   "mode": "accessibility",
+   "start": 47514800
+  },
+  {
+   "end": 47515800,
+   "mode": "accessibility",
+   "start": 47515702
+  }
+ ],
+ "results": {
+  "demo": {
+   "analysis_read_count": 2942,
+   "assignments": {
+    "read-4": 0,
+    "read-5": 0,
+    "read-6": 0
+   },
+   "cluster_counts": {
+    "0": 1957,
+    "1": 553,
+    "2": 308
+   },
+   "eligible_read_count": 3045,
+   "filtered_read_ids": [
+    "read-4",
+    "read-5",
+    "read-6"
+   ],
+   "peak_covering_read_count": 2942,
+   "working_count": 2942
+  }
+ },
+ "sample_seed": "fiberbrowser-analysis",
+ "timings": {
+  "build_jobs": 0.0,
+  "cluster_compact": 0.0982,
+  "compact_prep": 0.0025,
+  "parse_peaks": 0.0,
+  "peak_cover_filter": 0.0109,
+  "response_assembly": 0.0018,
+  "sample_selection": 0.0,
+  "total": 0.1763,
+  "working_set": 0.0581
+ }
+}

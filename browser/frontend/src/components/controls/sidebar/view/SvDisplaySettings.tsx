@@ -3,6 +3,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { useBrowserStore } from '../../../../stores/browserStore';
 import { defineSettings, inSidebar, settingAnchor, settingGroupAnchor, storeToggle, type SettingDef } from '../../../../utils/settingsCatalog';
 import { SV_MIN_LEN_HIGHEST, SV_MIN_LEN_LOWEST } from '../../../tracks/read-track/svDrawing';
+import { DEFAULT_SV_CONFLICT_OPTIONS } from '../../../../utils/svConflicts';
 
 const hasBam = () => useBrowserStore.getState().datasets.some(dataset => dataset.data_type === 'bam');
 const shownWithBam = () => (hasBam() ? null : 'shown with a BAM loaded');
@@ -31,6 +32,11 @@ export const SV_SETTINGS = defineSettings({
     location: inSidebar('view.advanced'),
     hiddenReason: () => shownWithBam() ?? (useBrowserStore.getState().svDisplayEnabled ? null : 'shown when SV display is on'),
   },
+  conflicts: {
+    id: 'view.sv-conflicts', label: 'SV conflicting clip evidence',
+    keywords: ['putative', 'carrier', 'elsewhere', 'SA', 'paralog', 'distance', 'MAPQ', 'overlap'],
+    location: inSidebar('view.advanced'), hiddenReason: shownWithBam,
+  },
 }) satisfies Record<string, SettingDef>;
 // The "SV summary track" switch is retired (fb-n11-tracks): the SV track is a row of each dataset panel,
 // resized, removed and restored like the others (the panel's Tracks button); a saved collapse opens it small.
@@ -49,6 +55,8 @@ export function SvDisplaySettings() {
   })));
   const [local, setLocal] = useState(String(minLen));
   const [support, setSupport] = useState(String(minSupport));
+  const conflictOptions = useBrowserStore(s => s.svConflictOptions);
+  const setConflictOptions = useBrowserStore(s => s.setSvConflictOptions);
   useEffect(() => setLocal(String(minLen)), [minLen]);
   useEffect(() => setSupport(String(minSupport)), [minSupport]);
   if (!datasets.some(dataset => dataset.data_type === 'bam')) return null;
@@ -103,6 +111,25 @@ export function SvDisplaySettings() {
               aria-label="Min SV supporting reads" data-testid="sv-min-support"
               title="Show SV summary calls and clip piles supported by at least this many reads in the loaded cohort. Set to 1 to inspect single-read evidence." />
           </label>
+          <details className="ml-4 text-[11px] text-ink-secondary" {...settingAnchor(SV_SETTINGS.conflicts)}>
+            <summary>Advanced carrier evidence</summary>
+            <p>Conflicting clips align substantially elsewhere. They stay outside default carriers; each action can include them explicitly.</p>
+            <label className="block"><input type="checkbox" checked={conflictOptions.enabled}
+              onChange={e => setConflictOptions({ enabled: e.target.checked })} /> Flag clips explained elsewhere</label>
+            {([
+              ['max_distance', 'Max local distance (bp)', 0, 1_000_000_000, 1000],
+              ['min_mapq', 'Min elsewhere MAPQ', 0, 255, 1],
+              ['min_overlap', 'Min explained clip (bp)', 1, 1_000_000, 10],
+              ['min_clip_fraction', 'Min fraction of clip explained', 0, 1, 0.05],
+            ] as const).map(([key, label, min, max, step]) => <label key={`${key}:${conflictOptions[key]}`} className="block my-1">
+              {label}: <input type="number" aria-label={label} min={min} max={max} step={step}
+                defaultValue={conflictOptions[key]} className="w-20 border rounded px-1 dark:bg-dark-surface"
+                onBlur={e => { if (e.target.value.trim()) setConflictOptions({ [key]: Number(e.target.value) }); }}
+                onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }} />
+            </label>)}
+            <button type="button" className="underline" onClick={() => setConflictOptions(DEFAULT_SV_CONFLICT_OPTIONS)}>Restore evidence defaults</button>
+            <p>Saved splits retain their own evidence settings.</p>
+          </details>
           <div className="ml-4 text-[11px] leading-snug text-gray-500 dark:text-gray-400" data-testid="sv-track-hint">
             The SV track is a row above the reads in each panel: drag its edge to resize it; remove or restore it from the panel's Tracks button.
           </div>

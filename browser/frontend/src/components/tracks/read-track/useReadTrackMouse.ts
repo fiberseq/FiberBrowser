@@ -1,3 +1,6 @@
+import { useDifferenceSelection } from '../../../features/liveLift/inspectionStore';
+import { liveLiftViewKey } from '../../../features/liveLift/persistence';
+import { selectNativeDifference } from '../../../features/differences/selection';
 import { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import { useBrowserStore } from '../../../stores/browserStore';
 import { useConsensusViewStore } from '../../../stores/consensusViewStore';
@@ -10,7 +13,7 @@ import { useReadActionsStore } from '../../../stores/readActionsStore';
 import { copyInsertedSequence } from '../../../utils/svInsertedSequence';
 import { DEBUG } from '../../../stores/utils';
 import { findFootprintHit } from './footprintHitTest';
-import { computeReadTrackLayout, nextReadRowHeight, type ReadSeparatorMode } from './layout';
+import { computeReadTrackLayout, type ReadSeparatorMode } from './layout';
 import { clusterAssignmentForRead } from './readFilter';
 import { tfFamilyDisplayGeometry, tfFamilyMetadata } from '../../../utils/tfFamilies';
 import { findChromInfo } from '../../../utils/chromAliases';
@@ -18,6 +21,12 @@ import { panelGenomeChroms } from '../../../stores/panelGenomeStore';
 import { FOOTPRINT_ANALYSIS_TAB_STORAGE_KEY } from '../../controls/footprint-analysis/constants';
 import { beginPointerDrag, clearDocumentSelection, endPointerDrag } from '../../../utils/pointerDrag';
 import { maybeShowReadActionsHint } from '../../../stores/readActionsStore';
+import { liveLiftHitAt, liveLiftMapEventAt, type LiveLiftBadge } from './liveLiftCanvas';
+import type { LiftAxis } from '../../../features/liveLift/axis';
+import { selectMapGap, selectReadDifference } from '../../../features/liveLift/inspectionStore';
+
+import { useLinearWheelZoom } from '../../../hooks/useLinearWheelZoom';
+import { useReadRowWheel } from '../../../hooks/useReadRowWheel';
 
 const IS_MAC = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform);
 
@@ -34,6 +43,7 @@ export interface ReadContextTarget {
   x: number;
   y: number;
   read: CompactRead | null;
+  liveLiftBadge?: LiveLiftBadge;
   footprint: FootprintHit | null;
   /** Genome position under the pointer. */
   genomePos: number;
@@ -56,6 +66,8 @@ export interface FootprintHit {
 
 
 interface UseReadTrackMouseParams {
+  axis?: LiftAxis;
+  liveLiftBadgeMode?: import('./liveLiftCanvas').LiveLiftBadgeMode;
   displayReads: CompactRead[];
   width: number;
   height: number;
@@ -121,8 +133,12 @@ export function useReadTrackMouse(params: UseReadTrackMouseParams) {
   const selectedReadIds = useBrowserStore(s => s.selectedReadIds[stateKey]);
 
   // Hover tooltip state
-  const [hoveredRead, setHoveredRead] = useState<{read: CompactRead; x: number; y: number} | null>(null);
+  // pos: the genome position under the pointer (the tooltip's per-position lines, e.g. nucleosome marks).
+  const [hoveredRead, setHoveredRead] = useState<{read: CompactRead; x: number; y: number; liveLiftBadge?: LiveLiftBadge; pos?: number} | null>(null);
   const [hoveredSv, setHoveredSv] = useState<SvHover | null>(null);
+  // The read under the pointer whether or not tooltips are on (a live-lift link's shared hover, §5.3).
+  const [pointerRead, setPointerReadState] = useState<CompactRead | null>(null);
+  const setPointerRead = useCallback((read: CompactRead | null) => setPointerReadState(prev => (prev === read ? prev : read)), []);
 
   // Pan drag tracking. The drag belongs to the track it started on: that
   // track's own document listeners (attached on mousedown, removed on mouseup)
@@ -134,7 +150,7 @@ export function useReadTrackMouse(params: UseReadTrackMouseParams) {
   useEffect(() => () => { panDragCleanupRef.current?.(); }, []);
 
   // Shared layout computation — computed once, reused by getReadAtY, getClusterAtY, handleWheel
-  const headerHeight = datasetLabel ? 16 : 0;
+  const headerHeight = (datasetLabel ? 16 : 0) + (params.axis?.blocks.length ? 24 : 0);
   // The SV band and the coverage histogram sit between the header and the rows (as drawn).
   const histH = (showCoverageHistogram ? 30 : 0) + svBandHeight;
   const n = displayReads.length;
@@ -162,7 +178,7 @@ export function useReadTrackMouse(params: UseReadTrackMouseParams) {
     for (let i = 0; i < n; i++) {
       const read = displayReads[i];
       const rowY = headerHeight + histH + i * (rowHeight + rowGap) - scrollAdjust;
-      const cluster = clusterAssignmentForRead(myClusterAssignments, read.id);
+      const cluster = clusterAssignmentForRead(myClusterAssignments, read);
       if (cluster !== undefined) {
         if (!bounds.has(cluster)) {
           bounds.set(cluster, { startY: rowY, endY: rowY + rowHeight });
@@ -197,21 +213,61 @@ export function useReadTrackMouse(params: UseReadTrackMouseParams) {
     return null;
   }, [displayReads, n, layout, headerHeight, histH]);
 
+  /** Native rows keep their existing Y selection; lifted rows have empty connectors and gaps even on that Y. */
+  const getReadHitAtXY = useCallback((x: number, y: number): { read: CompactRead; liveLiftBadge?: LiveLiftBadge } | null => {
+    const read = getReadAtY(y);
+    if (!read) return null;
+    const { rowHeight, rowGap, scrollAdjust } = layout;
+    const index = Math.floor((y - headerHeight - histH + scrollAdjust) / (rowHeight + rowGap));
+    const scale = (width - sidebarWidth) / regionWidth;
+    const liftOptions = {
+      badgeMode: params.liveLiftBadgeMode,
+      y: headerHeight + histH + index * (rowHeight + rowGap) - scrollAdjust,
+      rowHeight: Math.max(1, rowHeight - rowGap),
+      linkedOffset: linkedBoundsStart !== undefined ? linkedBoundsStart - start : 0,
+      regionWidth,
+      toX: (rel: number) => sidebarWidth + (params.axis ? params.axis.toX(start + rel) : (isReversed ? regionWidth - rel : rel) * scale),
+    };
+    // A badge at an expanded column's edge is the badge, not the column (its notch straddles the edge).
+    if (read.live_lift && params.axis?.blocks.length) {
+      const edge = liveLiftHitAt(read.live_lift, x, y, liftOptions);
+      if (edge?.badge) return { read, liveLiftBadge: edge.badge };
+    }
+    const block = params.axis?.fromX(x - sidebarWidth);
+    if (block?.ins_id) {
+      const column=params.axis?.blocks.find(b=>b.ins.ins_id===block.ins_id)?.ins;
+      const allele=column?.alleles?.find(a=>a.hap_label===read.live_lift?.hap_label)?.ins_id ?? block.ins_id;
+      const payload = read.alternate_blocks?.[block.ins_id] ?? read.live_lift?.insertions?.[allele];
+      return payload && !('too_large' in payload) && block.within! >= payload.covered[0] && block.within! < payload.covered[1] ? { read } : null;
+    }
+    if (!read.live_lift) return { read };
+    if (x < sidebarWidth || x >= width || y < headerHeight + histH || y >= height) return null;
+    const hit = liveLiftHitAt(read.live_lift, x, y, liftOptions);
+    return hit ? { read, liveLiftBadge: hit.badge } : null;
+  }, [getReadAtY, sidebarWidth, width, height, headerHeight, histH, layout, regionWidth, linkedBoundsStart, start, isReversed, params.axis, params.liveLiftBadgeMode]);
+
   // --- SV events on reads (fb-n9-sv); the SV summary is its own track (SvTrack) ---
   const genomePosAtX = useCallback((x: number) => {
+    if (params.axis) return params.axis.fromX(x - sidebarWidth).pos;
     const scl = (width - sidebarWidth) / Math.max(1, regionWidth);
     const rel = (x - sidebarWidth) / scl;
     return isReversed ? end - rel : start + rel;
-  }, [width, sidebarWidth, regionWidth, isReversed, start, end]);
+  }, [width, sidebarWidth, regionWidth, isReversed, start, end, params.axis]);
   /** The SV event of the read at (x, y) within a few pixels. */
   const svEventAtXY = useCallback((x: number, y: number) => {
-    if (!svEnabled) return null;
-    const read = getReadAtY(y);
-    if (!read?.sv) return null;
+    if (x < sidebarWidth || x >= width || y < headerHeight + histH || y >= height) return null;
+    const body = getReadHitAtXY(x, y)?.read;
+    const read = body ?? getReadAtY(y);
+    if (!read) return null;
     const bpPerPx = regionWidth / Math.max(1, width - sidebarWidth);
+    const mapEvent = liveLiftMapEventAt(read.live_lift, genomePosAtX(x) - (linkedBoundsStart ?? start), 5 * bpPerPx);
+    if (mapEvent) return { read, event: mapEvent };
+    if (params.axis?.fromX(x-sidebarWidth).ins_id || !svEnabled || !read.sv) return null;
     const event = readSvEventAt(read, genomePosAtX(x), 5 * bpPerPx, svMinLen);
+    // A spanned map marker crosses connector space with no read body there.
+    if (!body && !(event?.source === 'assembly' && event.display_only && event.difference_id)) return null;
     return event ? { read, event } : null;
-  }, [svEnabled, getReadAtY, regionWidth, width, sidebarWidth, genomePosAtX, svMinLen]);
+  }, [svEnabled, getReadHitAtXY, getReadAtY, regionWidth, width, height, headerHeight, histH, sidebarWidth, genomePosAtX, svMinLen, linkedBoundsStart, start]);
 
   // Map pixel (x, y) to a specific footprint interval on a read.
   //
@@ -225,7 +281,7 @@ export function useReadTrackMouse(params: UseReadTrackMouseParams) {
   //   3. Optional clickTargetLayer scoping: when set, hit-test is restricted
   //      to that layer (set via the FootprintAnalysisPanel preference).
   const getFootprintAtXY = useCallback((pixelX: number, pixelY: number, assignedClassesOnly = false) => {
-    const read = getReadAtY(pixelY);
+    const read = getReadHitAtXY(pixelX, pixelY)?.read;
     if (!read) return null;
 
     const trackWidth = width - sidebarWidth;
@@ -242,8 +298,11 @@ export function useReadTrackMouse(params: UseReadTrackMouseParams) {
     const edgeAmbiguity = useBrowserStore.getState().activeColormap?.edgeAmbiguity;
     const footprintGroups = useBrowserStore.getState().footprintGroups;
 
+    if (params.axis?.fromX(pixelX - sidebarWidth).ins_id) return null;
     let relPos: number;
-    if (isReversed) {
+    if (params.axis) {
+      relPos = params.axis.fromX(pixelX - sidebarWidth).pos - start;
+    } else if (isReversed) {
       relPos = regionWidth - (pixelX - sidebarWidth) / scl;
     } else {
       relPos = (pixelX - sidebarWidth) / scl;
@@ -302,7 +361,7 @@ export function useReadTrackMouse(params: UseReadTrackMouseParams) {
     }
 
     return null;
-  }, [getReadAtY, width, sidebarWidth, regionWidth, start, isReversed, linkedBoundsStart, chrom, stateKey]);
+  }, [getReadHitAtXY, width, sidebarWidth, regionWidth, start, isReversed, linkedBoundsStart, chrom, stateKey, params.axis]);
 
   const startPanDrag = useCallback((clientX: number, renderedWidth: number) => {
     panDragCleanupRef.current?.();
@@ -323,7 +382,7 @@ export function useReadTrackMouse(params: UseReadTrackMouseParams) {
     const handleDocumentMouseUp = (ev: MouseEvent) => {
       const dx = logicalDx(ev);
       const viewportWidth = width - sidebarWidth;
-      const bpPerPixel = (panStartPos.end - panStartPos.start) / viewportWidth;
+      const bpPerPixel = params.axis ? 1 / params.axis.pxPerBp : (panStartPos.end - panStartPos.start) / viewportWidth;
       const bpShift = Math.round(-dx * bpPerPixel) * (isReversed ? -1 : 1);
       const windowWidth = panStartPos.end - panStartPos.start;
 
@@ -358,7 +417,7 @@ export function useReadTrackMouse(params: UseReadTrackMouseParams) {
     document.addEventListener('mousemove', handleDocumentMouseMove);
     document.addEventListener('mouseup', handleDocumentMouseUp);
     panDragCleanupRef.current = finish;
-  }, [start, end, width, sidebarWidth, isReversed, chrom, onViewportChange, panScope, genome]);
+  }, [start, end, width, sidebarWidth, isReversed, chrom, onViewportChange, panScope, genome, params.axis]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     // Only the main button pans; a right-click (or Ctrl-click on a Mac) opens the read menu instead.
@@ -395,6 +454,24 @@ export function useReadTrackMouse(params: UseReadTrackMouseParams) {
   /** Select the footprint at (x, y) and open Footprints (⌘/Ctrl-click, or the menu). */
   const selectFootprintAt = useCallback((x: number, y: number): boolean => {
     // Linked-session intervals are relative to the session's bounds, not the view.
+    const alternate=params.axis?.fromX(x-sidebarWidth);
+    if(alternate?.ins_id){
+      const read=getReadHitAtXY(x,y)?.read;
+      const column=params.axis!.blocks.find(b=>b.ins.ins_id===alternate.ins_id)?.ins;
+      const id=column?.alleles?.find(a=>a.hap_label===read?.live_lift?.hap_label)?.ins_id ?? alternate.ins_id;
+      const payload=read?.alternate_blocks?.[alternate.ins_id] ?? read?.live_lift?.insertions?.[id];
+      if(!read||!column||!payload||'too_large' in payload)return false;
+      const hit=findFootprintHit({...read,...payload},{relPos:alternate.within!,bpTolerance:3/params.axis!.pxPerBp,enabledModTypes:useBrowserStore.getState().enabledModTypes as Record<string,boolean>});
+      if(!hit)return false;
+      const panel=useBrowserStore.getState().panels.find(p=>p.datasetId===datasetId&&(p.stateKey??p.datasetId)===stateKey);
+      if(!panel)return false;
+      useDifferenceSelection.getState().select({datasetId:column.datasetId??datasetId,panelId:panel.id,viewKey:liveLiftViewKey(panel),chrom,
+        difference:{id:column.ins_id,hap:'',hap_label:column.hap_label,kind:column.kind??'insertion',source:column.source??'assembly',reason:'alternate_block',
+          t_start:column.ref_start??column.pos-(column.ref_bp??0),t_end:column.t_end??column.pos,ref_bp:column.ref_bp??0,alt_bp:column.selected_length??column.length,
+          chain:null,strand:column.strand??null,src:column.src??{contig:null,start:null,end:null},grch38:null,alt:null},
+        alternateHit:{readId:read.analysis_id??read.id,layer:hit.layer,start:hit.interval[0],end:hit.interval[1],offset:alternate.within!}});
+      return true;
+    }
     const origin = linkedBoundsStart ?? start;
     // Native/manual string family IDs use the shared consensus inspector, not
     // the legacy numeric-ID Cart. The read's original interval remains intact.
@@ -491,18 +568,24 @@ export function useReadTrackMouse(params: UseReadTrackMouseParams) {
     setHoveredRead(null);
     const scl = (width - sidebarWidth) / Math.max(1, regionWidth);
     const rel = (x - sidebarWidth) / scl;
-    const genomePos = Math.round(isReversed ? end - rel : start + rel);
-    const read = getReadAtY(y);
+    const genomePos = Math.round(genomePosAtX(x));
+    const hit = getReadHitAtXY(x, y);
+    const read = hit?.read ?? null;
+    if (read && hit?.liveLiftBadge && selectReadDifference(read, hit.liveLiftBadge, genomePos,
+      { datasetId, stateKey, chrom, start: linkedBoundsStart ?? start }, 'inspect')) return;
+    const mapHit = svEventAtXY(x, y);
+    if (mapHit && selectMapGap(mapHit.read, mapHit.event.difference_id, { datasetId, stateKey, chrom })) return;
     setContextTarget({
       clientX,
       clientY,
       x,
       y,
       read,
+      liveLiftBadge: hit?.liveLiftBadge,
       footprint: read ? getFootprintAtXY(x, y) : null,
       genomePos,
     });
-  }, [sidebarWidth, width, regionWidth, isReversed, start, end, getReadAtY, getFootprintAtXY, panScope]);
+  }, [sidebarWidth, width, regionWidth, isReversed, start, end, getReadHitAtXY, getFootprintAtXY, panScope, genomePosAtX, datasetId, stateKey, chrom, linkedBoundsStart, svEventAtXY]);
   const handleContextMenu = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
     const x = (e.clientX - rect.left) * e.currentTarget.clientWidth / rect.width;
@@ -537,17 +620,44 @@ export function useReadTrackMouse(params: UseReadTrackMouseParams) {
     const y = (e.clientY - rect.top) * e.currentTarget.clientHeight / rect.height;
 
     if (x >= sidebarWidth) {
+      const origin = linkedBoundsStart ?? start;
+      // A drawn mismatch under the pointer (live-lift reads select it as a difference).
+      const mismatchAt = (read: CompactRead | undefined) => useBrowserStore.getState().enabledCigarTypes.mismatches ? read?.cigar?.find(e => {
+        if (e.type !== 'X') return false;
+        const px = sidebarWidth + (params.axis ? params.axis.toX(origin + e.pos)
+          : (isReversed ? end - origin - e.pos : origin + e.pos - start) * (width - sidebarWidth) / regionWidth);
+        return Math.abs(px - x) <= Math.max(3, params.axis?.pxPerBp ?? 1);
+      }) : undefined;
       if (isFootprintClick(e)) {
+        // ⌘/Ctrl-click on an insertion badge or a lifted read's mismatch inspects it (as on the Differences row);
+        // elsewhere (and on native reads) it picks a footprint.
+        const hit = getReadHitAtXY(x, y);
+        const hitMismatch = hit && !hit.liveLiftBadge && hit.read.live_lift ? mismatchAt(hit.read) : undefined;
+        if (hit && (hit.liveLiftBadge || hitMismatch) && selectReadDifference(hit.read, hit.liveLiftBadge,
+          hitMismatch ? origin + hitMismatch.pos : genomePosAtX(x), { datasetId, stateKey, chrom, start: origin }, 'inspect')) return;
         selectFootprintAt(x, y);
         return;
       }
       if (e.shiftKey) {
-        const read = getReadAtY(y);
+        const read = getReadHitAtXY(x, y)?.read;
         if (read) selectReadById(read.id);
         return;
       }
+      const lifted = getReadHitAtXY(x, y);
+      const mismatch = mismatchAt(lifted?.read);
+      if (lifted && (lifted.liveLiftBadge || mismatch) && selectReadDifference(lifted.read, lifted.liveLiftBadge,
+        mismatch ? origin + mismatch.pos : genomePosAtX(x), { datasetId, stateKey, chrom, start: origin },
+        e.metaKey || e.ctrlKey ? 'inspect' : 'primary')) return;
       // A click on an insertion's flag copies its inserted bases.
       const hit = svEventAtXY(x, y);
+      if (hit && selectMapGap(hit.read, hit.event.difference_id, { datasetId, stateKey, chrom })) return;
+      if (hit && (hit.event.t === 'I' || hit.event.t === 'D') && e.detail >= 2) {
+        const event = hit.event;
+        selectNativeDifference({ id: `native:${chrom}:${event.ref}:${event.ref_end ?? event.ref}:${event.len}`, t: event.t,
+          ref: event.ref, end: event.ref_end ?? event.ref + (event.t === 'D' ? event.len : 0), len: event.len,
+          ref_len: event.ref_len, alt_len: event.alt_len }, datasetId, chrom);
+        return;
+      }
       if (hit && hit.event.t === 'I') {
         void copyInsertedSequence({ datasetId, chrom, readId: hit.read.id, event: hit.event, stateKey });
       }
@@ -568,7 +678,7 @@ export function useReadTrackMouse(params: UseReadTrackMouseParams) {
 
     useBrowserStore.getState().setClusterSelection(stateKey, [cluster]);
     useBrowserStore.getState().openAnalysisPanel('cluster-detail');
-  }, [hasCluster, sidebarWidth, getClusterAtY, getReadAtY, selectFootprintAt, selectReadById, stateKey, chrom, svEventAtXY, datasetId]);
+  }, [hasCluster, sidebarWidth, getClusterAtY, getReadHitAtXY, selectFootprintAt, selectReadById, stateKey, chrom, svEventAtXY, datasetId, genomePosAtX, linkedBoundsStart, start, params.axis, isReversed, end, width, regionWidth]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -592,10 +702,12 @@ export function useReadTrackMouse(params: UseReadTrackMouseParams) {
       setHoverY(null);
       const svHit = !isPanning && x >= sidebarWidth ? svEventAtXY(x, y) : null;
       setHoveredSv(svHit ? { kind: 'event', read: svHit.read, event: svHit.event, x, y } : null);
+      const pointed = !isPanning && x >= sidebarWidth ? getReadHitAtXY(x, y) : null;
+      setPointerRead(pointed?.read ?? null);
       if (showReadTooltip && !isPanning && x >= sidebarWidth) {
-        const read = getReadAtY(y);
-        if (read) {
-          setHoveredRead({ read, x, y });
+        const hit = pointed;
+        if (hit) {
+          setHoveredRead({ ...hit, x, y, pos: genomePosAtX(x) });
         } else {
           setHoveredRead(null);
         }
@@ -603,7 +715,7 @@ export function useReadTrackMouse(params: UseReadTrackMouseParams) {
         setHoveredRead(null);
       }
     }
-  }, [dragCluster, hasCluster, sidebarWidth, getClusterAtY, getReadAtY, isPanning, showReadTooltip, svEventAtXY]);
+  }, [dragCluster, hasCluster, sidebarWidth, getClusterAtY, getReadHitAtXY, isPanning, showReadTooltip, svEventAtXY, setPointerRead, genomePosAtX]);
 
   const handleMouseUp = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     if (dragCluster !== null && hoverCluster !== null && dragCluster !== hoverCluster) {
@@ -630,39 +742,23 @@ export function useReadTrackMouse(params: UseReadTrackMouseParams) {
     setHoverCluster(null);
     setHoverY(null);
     setHoveredRead(null);
-  }, []);
+    setPointerRead(null);
+  }, [setPointerRead]);
 
-  // Wheel handler for vertical zoom and scroll
+  const zoomWheel = useLinearWheelZoom({ chrom, start, end, width, sidebarWidth, isReversed, genome,
+    onViewportChange, anchorAt: genomePosAtX });
+  const rowWheel = useReadRowWheel(layout.rowHeight);
   const handleWheel = useCallback((e: React.WheelEvent<HTMLCanvasElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
-    const x = (e.clientX - rect.left) * e.currentTarget.clientWidth / rect.width;
-
+    const x = rect.width ? (e.clientX - rect.left) * width / rect.width : 0;
     if (x < sidebarWidth) return;
-
-    const { rowHeight, rowGap, totalContentHeight, needsScroll, maxScrollOffset, trackHeight } = layout;
-
-    if (e.ctrlKey || e.metaKey) {
+    if (zoomWheel(e, x) || rowWheel(e)) return;
+    if (n && layout.needsScroll) {
       e.preventDefault();
-      e.stopPropagation();
-      if (n === 0) return;
-
-      // A fixed-height layout reports its own height as autoRowHeight; the
-      // height automatic sizing would fit comes from an 'auto' layout.
-      const autoFitHeight = computeReadTrackLayout(
-        n, height, headerHeight, histH, fillReadHeight, 'auto', 0,
-        readSeparatorMode, readSeparatorMinHeight, readSeparatorWidth,
-      ).autoRowHeight;
-      useBrowserStore.getState().setReadRowHeight(nextReadRowHeight(storeReadRowHeight, autoFitHeight, e.deltaY));
-    } else {
-      if (n === 0) return;
-
-      if (needsScroll) {
-        e.preventDefault();
-        const newOffset = Math.max(0, Math.min(maxScrollOffset, readScrollOffset + e.deltaY));
-        useBrowserStore.getState().setReadScrollOffset(stateKey, newOffset);
-      }
+      const newOffset = Math.max(0, Math.min(layout.maxScrollOffset, readScrollOffset + e.deltaY));
+      useBrowserStore.getState().setReadScrollOffset(stateKey, newOffset);
     }
-  }, [sidebarWidth, n, layout, storeReadRowHeight, readScrollOffset, stateKey, height, headerHeight, histH, fillReadHeight, readSeparatorMode, readSeparatorMinHeight, readSeparatorWidth]);
+  }, [sidebarWidth, width, n, layout, readScrollOffset, stateKey, zoomWheel, rowWheel]);
 
   return {
     dragCluster,
@@ -672,6 +768,7 @@ export function useReadTrackMouse(params: UseReadTrackMouseParams) {
     selectedReadIds,
     hoveredRead,
     hoveredSv,
+    pointerRead,
     handleMouseDown,
     handleClick,
     handleContextMenu,

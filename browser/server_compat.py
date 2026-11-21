@@ -418,6 +418,7 @@ def build_compact_reads_from_bam(
         bam_handle_getter=_server_override("get_bam_handle", get_bam_handle),
         chrom_map=getattr(state, "chrom_map", None),
         contig_links=_contig_links(state, bam_path),
+        sv_reference=getattr(state, 'fasta_path', None),
     )
 
 

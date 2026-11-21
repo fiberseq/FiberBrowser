@@ -1,4 +1,5 @@
 import { fetchJson } from './sharedFetch';
+import type { RecentGenomeMatch } from './recentGenomes';
 
 const API_BASE = '/api';
 
@@ -70,6 +71,26 @@ export interface GenomeCheckResponse {
   suggestion: GenomeSuggestion | null;
   can_load_genomes: boolean;
   has_gtf: boolean;
+  /** The loaded gene annotation against the reference, and the registry annotation to reset it to (3.1.0). */
+  annotation?: AnnotationCheck;
+  /** A pinned or recent genome that fits the mismatched datasets clearly better than the loaded one (3.1.0). */
+  recent_match?: RecentGenomeMatch | null;
+}
+
+/** services/genome_check.annotation_check. */
+export interface AnnotationCheck {
+  loaded: boolean;
+  gene_count: number;
+  /** The registry genome whose cached annotation is loaded (null: none, or the user's own file). */
+  genome_id: string | null;
+  /** Its transcripts are on the reference's contigs (null without an annotation or a reference). */
+  fits: boolean | null;
+  /** The reference's registry genome (else, with no reference, the data's): its default annotation. */
+  target: { genome_id: string; name: string; gtf_label: string; cached: boolean } | null;
+  /** The loaded annotation is the target's own. */
+  current: boolean;
+  /** The annotation can be reset here (not a public server or a tour tab). */
+  can_reset: boolean;
 }
 
 export async function getGenomeCheck(options?: RequestInit): Promise<GenomeCheckResponse> {

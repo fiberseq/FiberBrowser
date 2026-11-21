@@ -1,3 +1,4 @@
+import { openCoaccPlot } from '../features/plots/coaccEntry';
 /**
  * The app's own data exports, registered once (utils/dataExportRegistry.ts).
  * Files made from the store are made here (utils/dataExportActions.ts, shared
@@ -12,8 +13,8 @@ import { isPublicMode } from './publicMode';
 import { buildSessionManifest, formatSessionManifest } from './sessionManifest';
 import {
   copyReadNames, downloadClusterAssignments, downloadClusterRegionsBed, downloadPeaksBed, downloadReadBams,
-  downloadHighlightsBed, downloadReadNames, downloadReadTable, downloadStateJson, downloadViewportBed, downloadWorkingSetTsv, openPanelForExport,
-  readsInViewFromStatus, viewportViews,
+  downloadHighlightsBed, downloadNucFootprintsTsv, downloadReadNames, downloadReadTable, downloadStateJson, downloadViewportBed, downloadWorkingSetTsv,
+  nucFootprintDatasetIds, openPanelForExport, readsInViewFromStatus, viewportViews,
 } from './dataExportActions';
 import { shownPanelViews, viewLocusLabel } from './panelScope';
 import { registerDataExport, type DataExportAvailability, type DataExportContext, type DataExportEntry } from './dataExportRegistry';
@@ -93,7 +94,14 @@ export function registerBuiltinDataExports(): void {
     id: 'read-table', group: 'reads', order: 20, usesReadScope: true,
     title: 'Read table', format: 'TSV',
     description: `Per read: dataset, cluster, span, strand, MAPQ, footprints, accessibility, modifications, display order (up to ${MAX_READ_STATS_READS.toLocaleString()} reads).`,
-    available: scopeAvailability,
+    available: (ctx) => {
+      const scope = scopeAvailability(ctx);
+      if (!scope.ok) return scope;
+      // Lifted datasets are described too: their alignment bounds are on the sample's own assembly (ref_contig).
+      const groups = readScopeGroups(ctx.state, ctx.readScope);
+      const lifted = groups.some(g => ctx.state.datasets.find(d => d.id === g.datasetId)?.data_type === 'bam_livelift');
+      return lifted ? { ok: true, detail: [scope.detail, 'lifted reads\' alignment bounds on their source assembly'].filter(Boolean).join('; ') } : scope;
+    },
     run: ({ state, readScope }) => downloadReadTable(state, readScopeGroups(state, readScope), readScopeSlug(readScope)),
   });
   registerDataExport({
@@ -105,13 +113,16 @@ export function registerBuiltinDataExports(): void {
       if (!scope.ok) return scope;
       if (!notPublic()) return no('Not available on a public server');
       const groups = readScopeGroups(ctx.state, ctx.readScope);
-      const bam = groups.filter(g => ctx.state.datasets.find(d => d.id === g.datasetId)?.data_type === 'bam');
+      const bam = groups.filter(g => isBamType(ctx.state.datasets.find(d => d.id === g.datasetId)?.data_type));
       if (bam.length === 0) return no('These reads are from BigBed datasets: a BAM subset needs a BAM');
-      if (bam.length < groups.length) return { ok: true, detail: `${scope.detail}; BigBed datasets are left out` };
-      return scope;
+      const lifted = bam.some(g => ctx.state.datasets.find(d => d.id === g.datasetId)?.data_type === 'bam_livelift');
+      const detail = [scope.detail, bam.length < groups.length ? 'BigBed datasets are left out' : '',
+        lifted ? 'lifted datasets\' reads on their source assembly' : ''].filter(Boolean).join('; ');
+      return { ok: true, detail };
     },
     run: ({ state, readScope }) => downloadReadBams(readScopeGroups(state, readScope)
-      .filter(g => state.datasets.find(d => d.id === g.datasetId)?.data_type === 'bam')),
+      .filter(g => isBamType(state.datasets.find(d => d.id === g.datasetId)?.data_type)),
+      new Set(state.datasets.filter(d => d.data_type === 'bam_livelift').map(d => d.id))),
   });
   registerDataExport({
     id: 'working-set', group: 'reads', order: 40,
@@ -254,6 +265,19 @@ export function registerBuiltinDataExports(): void {
     run: ({ state }) => openPanelForExport(state, 'footprint-analysis', 'saved'),
   });
   registerDataExport({
+    id: 'nuc-footprints', group: 'classes', order: 45,
+    title: 'Nucleosome footprints', format: 'TSV',
+    description: 'One row per footprint of the target panels\' reads: read, coordinates, molecular length, size class, posterior, z and TF flag (from a nucleosome scan or run).',
+    available: ({ state }) => {
+      const withLayer = nucFootprintDatasetIds(state);
+      if (withLayer.size === 0) return no('No nucleosome size classes: run Nucleosomes, or open a nucleosome scan');
+      const views = shownPanelViews(state);
+      const shown = views.some(view => view.panelIds.some(id => withLayer.has(state.panels.find(p => p.id === id)?.datasetId ?? '')));
+      return shown ? ok : no('No panel on screen shows a dataset with nucleosome size classes');
+    },
+    run: ({ state }) => downloadNucFootprintsTsv(state),
+  });
+  registerDataExport({
     id: 'co-occupancy', group: 'classes', order: 50, action: 'open',
     title: 'Co-occupancy', format: 'TSV',
     description: 'Opens Footprints > Co-occupancy: per-group and pairwise counts, odds ratios, q-values and read IDs.',
@@ -295,9 +319,9 @@ export function registerBuiltinDataExports(): void {
   registerDataExport({
     id: 'co-accessibility', group: 'analysis', order: 20, action: 'open',
     title: 'Co-accessibility matrix', format: 'TSV · JSON · Python',
-    description: 'Opens Co-accessibility; its Export group saves the matrix or copies the Python call.',
+    description: 'Opens Plots on a co-accessibility plot of the view; its JSON, TSV and Python buttons save the matrix or copy the call.',
     available: ({ state }) => needs(state.datasets.length > 0, 'Open a dataset first'),
-    run: ({ state }) => openPanelForExport(state, 'co-accessibility'),
+    run: () => { openCoaccPlot(); },
   });
   registerDataExport({
     id: 'transcription', group: 'analysis', order: 30, action: 'open',
@@ -339,4 +363,9 @@ export function registerBuiltinDataExports(): void {
       return 'Copied the summary';
     },
   });
+}
+
+/** A BAM subset's datasets: BAMs, and lifted datasets (their reads on the source assembly). */
+function isBamType(type: string | undefined): boolean {
+  return type === 'bam' || type === 'bam_livelift';
 }

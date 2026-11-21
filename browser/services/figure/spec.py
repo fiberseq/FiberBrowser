@@ -122,6 +122,10 @@ def build_panels(state, fe: dict, dataset_ids: Optional[list[str]] = None,
         # Default colours too, as the browser's cart takes them (a saved session's old colours).
         composites = refresh_auto_source_colors(composites, datasets.values())
         fe["compositeTracks"] = composites
+    # Sources following a layer the user recoloured (services/figure/layer_colours.py) take its colour.
+    from services.figure.layer_colours import follow_sources
+    composites = follow_sources(composites, fe)
+    fe["compositeTracks"] = composites
     by_id = {c.get("id"): c for c in composites}
 
     saved_fe = [p for p in fe.get("panels") or []
@@ -235,6 +239,9 @@ def resolve_spec(state, *, chrom: Optional[str] = None, start: Optional[int] = N
     if used == "session":
         session_ids = [d.get("id") for d in (session or {}).get("datasets") or []
                        if isinstance(d, dict) and d.get("id")] or None
+    # The user's layer colours (the session's over the saved defaults), as the browser draws them.
+    from services.figure.layer_colours import apply as apply_layer_colours
+    apply_layer_colours(fe)
     panels = build_panels(state, fe, dataset_ids, tracks, default_ids=session_ids)
     if not panels:
         if any(isinstance(p, dict) and p.get("collapsed") for p in fe.get("panels") or []):

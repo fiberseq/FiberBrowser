@@ -74,7 +74,7 @@ def _wait(genome_id, timeout=20.0):
 
 
 # --------------------------------------------------------------------------
-# The open local FASTA is the run's reference (the owner's case)
+# The open local FASTA is the run's reference (a genome opened from a local file)
 # --------------------------------------------------------------------------
 
 def _state_with_local_fasta(tmp_path, genome_id="dm6", index=True):
@@ -248,6 +248,79 @@ def test_the_download_never_touches_the_open_genome(home, monkeypatch, client):
 
 
 
+# --------------------------------------------------------------------------
+# Download and the wizard's validation agree on "downloaded" (no Download loop)
+# --------------------------------------------------------------------------
+
+def _cache_file(home, url):
+    from state.browser_state import cached_fasta_path
+    cache = home / ".fiberhmm" / "genomes"
+    cache.mkdir(parents=True, exist_ok=True)
+    return cached_fasta_path(str(cache), [url])
+
+
+def test_a_truncated_cached_gzip_is_fetched_again_not_answered_done(home, monkeypatch):
+    """A cache file holding a truncated gzip looked downloaded to start() (non-empty) and not to the validation
+    (it cannot become a plain FASTA): Download answered "done" at once and the wizard kept asking for it."""
+    httpd, base = _mirror({"/ref.fa": FASTA})
+    try:
+        url = f"{base}/ref.fa"
+        gid = _registry(monkeypatch, [url])
+        local = _cache_file(home, url)
+        with open(local, "wb") as fh:
+            fh.write(gzip.compress(FASTA * 50)[:40])      # truncated archive
+        assert pi.catalog_genome_fasta(gid)[0] is None     # the validation: not downloaded
+        first = genome_download.start(gid)
+        assert first["state"] == "running"                 # not "done" from the stale file
+        st = _wait(gid)
+        assert st["state"] == "done", st
+        with open(st["fasta"], "rb") as fh:
+            assert fh.read() == FASTA
+        assert pi.catalog_genome_fasta(gid)[0] == st["fasta"]
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_a_cached_fasta_without_index_is_done_only_once_indexed(home, monkeypatch):
+    url = "https://unused.example/ref.fa"
+    gid = _registry(monkeypatch, [url])
+    local = _cache_file(home, url)
+    with open(local, "wb") as fh:
+        fh.write(FASTA)
+    st = genome_download.start(gid)
+    assert st["state"] == "done"
+    assert os.path.exists(local + ".fai")
+    assert pi.catalog_genome_fasta(gid)[0] == st["fasta"]
+
+
+def test_the_download_reports_its_indexing_stage_and_a_cancel_is_acknowledged(home, monkeypatch):
+    from state import browser_state
+    seen, entered, release = [], threading.Event(), threading.Event()
+    real_index = browser_state.ensure_verified_index
+
+    def slow_index(path):
+        seen.append(genome_download.status(gid).get("stage"))
+        entered.set()
+        assert release.wait(10)
+        return real_index(path)
+
+    monkeypatch.setattr(browser_state, "ensure_verified_index", slow_index)
+    httpd, base = _mirror({"/ref.fa": FASTA})
+    try:
+        gid = _registry(monkeypatch, [f"{base}/ref.fa"])
+        genome_download.start(gid)
+        assert entered.wait(10)
+        assert seen == ["indexing"]
+        st = genome_download.cancel(gid)
+        assert st["state"] == "running" and st["cancelling"] is True   # the index being built finishes first
+        release.set()
+        assert _wait(gid)["state"] == "done"
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
 def test_a_download_whose_index_fails_is_discarded_and_retry_downloads_again(home, monkeypatch):
     """A mirror's file that cannot be indexed is not left in the cache: Retry downloads it again instead of
     reporting done for a file validation would refuse."""
@@ -278,32 +351,6 @@ def test_a_download_whose_index_fails_is_discarded_and_retry_downloads_again(hom
         httpd.shutdown()
 
 
-def test_cancel_during_indexing_is_honoured_and_keeps_nothing(home, monkeypatch):
-    from state import browser_state
-    httpd, base = _mirror({"/ref.fa": FASTA})
-    try:
-        gid = _registry(monkeypatch, [f"{base}/ref.fa"])
-        indexing, proceed = threading.Event(), threading.Event()
-        real = browser_state.ensure_verified_index
-
-        def slow_index(path):
-            indexing.set()
-            assert proceed.wait(10)
-            return real(path)
-
-        monkeypatch.setattr(browser_state, "ensure_verified_index", slow_index)
-        genome_download.start(gid)
-        assert indexing.wait(10)
-        genome_download.cancel(gid)
-        proceed.set()
-        st = _wait(gid)
-        assert st["state"] == "cancelled"
-        cache = home / ".fiberhmm" / "genomes"
-        assert not [n for n in os.listdir(cache) if n.startswith("ref.fa")]
-    finally:
-        httpd.shutdown()
-
-
 def test_a_mirror_whose_file_cannot_be_indexed_falls_back_to_the_next(home, monkeypatch):
     """The first mirror sends something beginning with '>' that cannot be indexed: it is removed and the next
     mirror's FASTA is used."""
@@ -321,3 +368,36 @@ def test_a_mirror_whose_file_cannot_be_indexed_falls_back_to_the_next(home, monk
         assert pi.catalog_genome_fasta(gid)[0] == st["fasta"]
     finally:
         httpd.shutdown()
+
+
+def test_a_cancel_during_indexing_never_tries_the_next_mirror(home, monkeypatch):
+    """Deferred 3.0.3 audit LOW: Cancel while the first mirror's file is indexed, then that index fails: the download
+    ends cancelled without opening the next mirror."""
+    from state import browser_state
+    entered, release = threading.Event(), threading.Event()
+    requested = []
+
+    def failing_index(path):
+        entered.set()
+        assert release.wait(10)
+        raise browser_state.ReferenceIndexError("the index could not be built")
+
+    monkeypatch.setattr(browser_state, "ensure_verified_index", failing_index)
+    httpd, base = _mirror({"/one/ref.fa": FASTA, "/two/ref.fa": FASTA})
+    real_fetch = http_download.fetch
+
+    def counting_fetch(url, *a, **k):
+        requested.append(url)
+        return real_fetch(url, *a, **k)
+    monkeypatch.setattr(http_download, "fetch", counting_fetch)
+    try:
+        gid = _registry(monkeypatch, [f"{base}/one/ref.fa", f"{base}/two/ref.fa"])
+        genome_download.start(gid)
+        assert entered.wait(10)
+        genome_download.cancel(gid)
+        release.set()
+        assert _wait(gid)["state"] == "cancelled"
+        assert requested == [f"{base}/one/ref.fa"]
+    finally:
+        httpd.shutdown()
+        httpd.server_close()

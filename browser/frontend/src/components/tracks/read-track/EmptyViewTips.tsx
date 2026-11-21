@@ -13,7 +13,8 @@ export function EmptyViewTips() {
       <div>Drag to pan; + / − (or ↑ / ↓) to zoom</div>
       <div><kbd className={KBD}>Right-click</kbd> a read for its actions</div>
       <div><kbd className={KBD}>Shift+click</kbd> selects a read, <kbd className={KBD}>{mod}+click</kbd> a footprint</div>
-      <div><kbd className={KBD}>{mod}+scroll</kbd> zooms read row height</div>
+      <div><kbd className={KBD}>{mod}+scroll</kbd> zooms the genomic region around the pointer</div>
+      <div><kbd className={KBD}>Shift+scroll</kbd> sizes read rows in all panels together; plain scroll moves through rows</div>
     </>
   );
 }

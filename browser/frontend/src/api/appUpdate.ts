@@ -50,6 +50,9 @@ export interface AppInfo {
     check_at_startup_set?: boolean;
   };
   auth: AuthStatus | null;
+  /** The download size warning (services/http_download.py): bytes in force (0: off), the default, the saved
+   *  choice (null: the default), and whether FIBERBROWSER_DOWNLOAD_WARN_BYTES sets it for this run. */
+  downloads?: { warn_bytes: number; default: number; saved: number | null; env: boolean };
 }
 
 export type UpdateStatus =
@@ -120,6 +123,10 @@ export const checkForUpdates = ({ startup = false, force = false } = {}) =>
 
 export const setUpdateSettings = (values: Partial<{ check_at_startup: boolean; manifest_url: string; repo: string }>) =>
   call<AppInfo>('/api/app/update/settings', json(values));
+
+/** The download warning size in bytes (0: no warning; null: the default, 4 GB). */
+export const setDownloadSettings = (values: { warn_bytes: number | null }) =>
+  call<AppInfo>('/api/app/downloads', json(values));
 
 export const saveGithubToken = (token: string) => call<{ auth: AuthStatus }>('/api/app/update/token', json({ token }));
 

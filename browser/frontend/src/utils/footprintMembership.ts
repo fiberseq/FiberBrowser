@@ -6,6 +6,7 @@
 import type { FootprintAnalysisResult } from '../api/footprints';
 import type { FootprintGroup, SelectedFootprint } from '../types';
 import { useBrowserStore } from '../stores/browserStore';
+import { seedHistoryBaseline } from '../stores/historySlice';
 
 /**
  * The whole bases [start, end) covering a footprint or class span. Class edges
@@ -131,13 +132,16 @@ export function applyMembershipClusters(
   selectedFootprints: SelectedFootprint[] = [],
 ): void {
   const store = useBrowserStore.getState();
+  // One undo step: a step to return to (an empty history, or changes since the last step) before any change, and the
+  // focus cleared as part of this step, not as a step of its own (stabilize 3, item 2).
+  seedHistoryBaseline(store, 'Before clustering by footprints', 'clustering');
   const order = clusters.patterns.map((_, index) => index);
   for (const [dsId, assignments] of Object.entries(clusters.byDataset)) {
     for (const key of stateKeyMap[dsId] ?? [dsId]) {
       store.setClusterAssignments(key, assignments);
       store.setClusterOrder(key, order);
       // The old clusters' focus and selection name IDs these new clusters reuse.
-      store.setClusterFocus(key, null);
+      store.setClusterFocus(key, null, { record: false });
       store.clearClusterSelection(key);
     }
   }

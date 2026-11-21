@@ -1,3 +1,4 @@
+import { referenceCanvasX } from '../../features/differences/referenceCanvas';
 import { sameChrom } from '../../utils/chromAliases';
 import { logicalOffset } from '../../utils/scaledCoordinates';
 import { useRef, useEffect, useMemo, useState, useCallback } from 'react';
@@ -231,7 +232,7 @@ export function GeneTrack({ width, height, overrideChrom, overrideStart, overrid
     if (!enableSelection) return;
 
     const rect = e.currentTarget.getBoundingClientRect();
-    const x = logicalOffset(e.clientX - rect.left, e.currentTarget.clientWidth, rect.width);
+    const x = referenceCanvasX(canvasRef.current, logicalOffset(e.clientX - rect.left, e.currentTarget.clientWidth, rect.width));
     const y = logicalOffset(e.clientY - rect.top, e.currentTarget.clientHeight, rect.height);
 
     const gene = getGeneAtPosition(x, y);
@@ -272,7 +273,7 @@ export function GeneTrack({ width, height, overrideChrom, overrideStart, overrid
     if (!enableSelection) return;
 
     const rect = e.currentTarget.getBoundingClientRect();
-    const x = logicalOffset(e.clientX - rect.left, e.currentTarget.clientWidth, rect.width);
+    const x = referenceCanvasX(canvasRef.current, logicalOffset(e.clientX - rect.left, e.currentTarget.clientWidth, rect.width));
     const y = logicalOffset(e.clientY - rect.top, e.currentTarget.clientHeight, rect.height);
 
     const gene = getGeneAtPosition(x, y);
@@ -400,8 +401,9 @@ export function GeneTrack({ width, height, overrideChrom, overrideStart, overrid
     }
 
     // Collapsed indicator — draw on top (outside pan offset); a hint, so not in exported figures
-    if (isCollapsed && !exportInProgress) {
-      const totalCollapsed = Array.from(isoformCounts.values()).reduce((s, n) => s + n, 0) - isoformCounts.size;
+    const totalCollapsed = Array.from(isoformCounts.values()).reduce((s, n) => s + n, 0) - isoformCounts.size;
+    // Only when isoforms were really merged (a thin row of single-isoform genes merges nothing).
+    if (isCollapsed && totalCollapsed > 0 && !exportInProgress) {
       ctx.fillStyle = '#9ca3af';
       ctx.font = '9px sans-serif';
       ctx.textAlign = 'right';
@@ -424,7 +426,7 @@ export function GeneTrack({ width, height, overrideChrom, overrideStart, overrid
         onMouseLeave={handleMouseLeave}
       />
       {displayGenes.length === 0 && <HoverHint>No genes in region</HoverHint>}
-      {isCollapsed && displayGenes.length > 0 && (
+      {isCollapsed && displayGenes.length > 0 && Array.from(isoformCounts.values()).reduce((n, c) => n + c, 0) > isoformCounts.size && (
         <HoverLabel style={{ left: 'auto', right: 4, top: 'auto', bottom: 1 }}>
           {Array.from(isoformCounts.values()).reduce((n, c) => n + c, 0) - isoformCounts.size} isoforms merged — resize to expand
         </HoverLabel>

@@ -1,10 +1,11 @@
 import { useShallow } from 'zustand/react/shallow';
+import { isBamBacked } from '../../../../utils/datasetKinds';
 import { useBrowserStore } from '../../../../stores/browserStore';
 import { defineSettings, inSidebar, settingAnchor, settingGroupAnchor, type SettingDef } from '../../../../utils/settingsCatalog';
 
 type CigarType = 'mismatches' | 'insertions' | 'deletions';
 
-const hasBam = () => useBrowserStore.getState().datasets.some(dataset => dataset.data_type === 'bam');
+const hasBam = () => useBrowserStore.getState().datasets.some(dataset => isBamBacked(dataset));
 const cigarSetting = (type: CigarType, id: string, label: string, keywords: string[]): SettingDef => ({
   id,
   label,
@@ -34,7 +35,7 @@ export function CigarDisplaySettings() {
     toggleCigarType: s.toggleCigarType,
   })));
 
-  const hasBam = datasets.some(dataset => dataset.data_type === 'bam');
+  const hasBam = datasets.some(dataset => isBamBacked(dataset));
   if (!hasBam) return null;
 
   return (

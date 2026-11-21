@@ -186,7 +186,7 @@ SETTING_KEYS = ("enzyme", "seq", "min_mapq", "min_read_length", "dedup", "dedup_
                 # FiberHMM 3.0 basecaller provenance: what the inputs record (shown, not a calling setting)
                 # and the --basecaller-info / --modbase-model override (carried into the re-call)
                 "basecaller", "basecaller_override")
-PIPELINE_DEFAULTS = {"min_mapq": 20, "min_read_length": 1000, "seq_daf": "nanopore"}
+PIPELINE_DEFAULTS = {"min_mapq": 0, "min_read_length": 1000, "seq_daf": "nanopore"}
 
 
 def override_args(override: Any) -> list[tuple[str, list[str]]]:
@@ -518,7 +518,13 @@ def recall_settings(entry: dict, enzyme: str, help_text: Optional[str],
         # DAF-seq's calling options do not apply to Hia5 (the pipeline records them as off): never passed back.
         options.update({k: pi.DEFAULT_OPTIONS[k] for k in pi.DAF_ONLY_OPTIONS})
     try:
+        recorded_mapq = source == "run record" and options.get("min_mapq") not in (None, "")
         options = pi.normalize_options(options)
+        # outputs.json: the recorded MAPQ is passed below with the other recorded settings (``more``), never a new
+        # run's default. A run record passes the MAPQ its job options hold; one without any is left to FiberHMM, as
+        # its original run was.
+        if not recorded_mapq:
+            options["min_mapq"] = None
         extra = pi.option_args(options, enzyme, help_text)
     except pi.InputError as exc:
         raise RecallError(f"The original run's settings cannot be used for a re-call: {exc}") from exc

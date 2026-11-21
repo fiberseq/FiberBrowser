@@ -1,24 +1,32 @@
-import { keepsSignal } from '../../../utils/signalFilters';
+import { effectiveReadLimit } from '../../../features/metaLocus/metaLocusStore';
+import { orderIndex, qnameOfId } from '../../../utils/recordKeys';
+import { enrichNativeRows } from '../../../features/differences/api';
+import { effectiveSignalFilters, keepsSignal } from '../../../utils/signalFilters';
 import { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import { useBrowserStore } from '../../../stores/browserStore';
+import { liveLiftViewKey } from '../../../features/liveLift/persistence';
 import {
   cancelReadPrefetch,
   compactReadsAllQueryKey,
   compactReadsQueryKey,
   getCompactReads,
   getCompactReadsAll,
+  fullSetParams,
+  isPartialReadsAll,
   getLinkedCompactReads,
   linkedCompactReadsQueryKey,
 } from '../../../api/readOperations';
-import { getCoverage } from '../../../api/coverage';
+import { getCoverage, type CoverageLiftOptions, type LiveLiftCoverage } from '../../../api/coverage';
 import { getOverlayMarks } from '../../../api/overlays';
 import { registerReadSet } from '../../../api/readSets';
-import type { CompactRead, ReadsResponse, SvSummary, WorkingSampling } from './types';
+import type { CompactRead, FirstPaintInfo, ReadsResponse, SvSummary, WorkingSampling } from './types';
 import { SV_MIN_LEN_DEFAULT } from './svDrawing';
 import { hydrateDerivedReadLayers } from './derivedLayers';
 import { DEBUG } from '../../../stores/utils';
 import {
   clusterAssignmentForRead,
+  sortRankOf,
+  readIdKeys,
   filterReadsByBranchScope,
   filterReadsByReadIdSet,
   stripSegmentSuffix,
@@ -27,11 +35,14 @@ import type { ReadDisplayMode, ReadSeparatorMode } from '../../../stores/uiSlice
 import { logPerfTiming, nowMs } from '../../../utils/perfDebug';
 import { computeReadRowGap } from './layout';
 import { getBrowserPerformanceProfile } from '../../../utils/performanceProfile';
+import { batchReadDatasets } from '../../../utils/datasetKinds';
+import { fullViewHidesOthers, usePanelActive } from '../../../hooks/usePanelDisplayStore';
 
-/** Identifies a zoomed-out coverage request (dataset, region, bins, duplicate and QC-fail visibility). */
+/** The lift identity, haplotype and refresh also identify coverage: the same region can now mean other molecules. Duplicate and QC-fail visibility too. */
 export function coverageRequestKey(datasetId: string, chrom: string, start: number, end: number, bins: number,
-  includeDuplicates = false, includeQcFail = false, hideUncalled = true): string {
-  return `${datasetId}|${chrom}:${start}-${end}|${bins}${includeDuplicates ? '|dup' : ''}${includeQcFail ? '|qc' : ''}${hideUncalled ? '' : '|uncalled'}`;
+  includeDuplicates = false, lift?: CoverageLiftOptions, includeQcFail = false, hideUncalled = true): string {
+  return `${datasetId}|${chrom}:${start}-${end}|${bins}${includeDuplicates ? '|dup' : ''}${includeQcFail ? '|qc' : ''}${hideUncalled ? '' : '|uncalled'}`
+    + (lift ? `|${JSON.stringify([lift.liftHap ?? '', lift.liftKey ?? '', lift.refreshGeneration])}` : '');
 }
 
 const EMPTY_OVERLAY_MARKS: Record<string, Record<string, number[]>> = {};
@@ -99,7 +110,13 @@ export function normalizeRequestReadIds(
   values?: Set<string> | null,
 ): Set<string> | null {
   if (!values || values.size === 0) return null;
-  return new Set(Array.from(values, value => String(value).replace(/_\d+$/, '')));
+  // A lifted row's cohort identity or record key (JSON, with commas) cannot travel in comma-separated filter_ids:
+  // the server would split it and match nothing, so the panel drew no reads. Its QNAME pre-filters on the server;
+  // the exact identity is matched here (filterReadsByReadIdSet, readIdKeys).
+  return new Set(Array.from(values, value => {
+    const text = String(value);
+    return text.startsWith('lift-cohort:v1 ') || text.startsWith('lift-record:v1 ') ? qnameOfId(text) : text.replace(/_\d+$/, '');
+  }));
 }
 
 export function clusterCohortNeedsFullPool(
@@ -121,6 +138,24 @@ export function canBatchReadDatasets(
     && !needsCigar
     && !requestFilterParam
     && (!clusteredIds || clusteredIds.size === 0);
+}
+
+/** Layers whose rows also depend on the dataset's regularity tiles and patches (services/nuc). */
+const REGULARITY_LAYERS = new Set(['nucreg', 'nucpatch']);
+
+/** The request names a layer built from regularity tiles or patches. */
+export function carriesRegularityLayer(layers: readonly string[] | null | undefined): boolean {
+  return (layers ?? []).some(name => REGULARITY_LAYERS.has(name));
+}
+
+/** What a dataset's rows come from, for read request keys: its source identity, and its regularity identity only
+ * when the rows carry nucreg or nucpatch (regularity computed for a view never reloads the other rows). */
+export function readRowsIdentity(
+  d: { id: string; source_identity?: string; regularity_identity?: string; paths?: string[]; path?: string },
+  withRegularity: boolean,
+): unknown {
+  const source = d.source_identity ?? d.paths ?? d.path ?? d.id;
+  return withRegularity && d.regularity_identity ? [source, d.regularity_identity] : source;
 }
 
 export function displayCapacity(
@@ -160,7 +195,7 @@ function sampleReadsForFit(reads: CompactRead[], limit: number, seed: string): C
     .map((read, index) => ({
       read,
       index,
-      hash: stableDisplayHash(`${seed}:${read.id}`),
+      hash: stableDisplayHash(`${seed}:${read.analysis_id ?? read.id}`),
     }))
     .sort((a, b) => a.hash - b.hash || a.index - b.index)
     .slice(0, limit)
@@ -176,14 +211,15 @@ function sampleReadsForFit(reads: CompactRead[], limit: number, seed: string): C
 export function keepPinnedReads(sample: CompactRead[], pool: CompactRead[], pinnedKey: string): CompactRead[] {
   if (!pinnedKey || sample.length === pool.length) return sample;
   const pins = new Set(pinnedKey.split(','));
-  const have = new Set(sample.map(r => r.id));
-  const missing = pool.filter(r => !have.has(r.id) && (pins.has(r.id) || pins.has(stripSegmentSuffix(r.id))));
-  if (missing.length === 0) return sample;
-  const keep = new Set([...have, ...missing.map(r => r.id)]);
-  return pool.filter(r => keep.has(r.id));
+  const kept = new Set(sample.map(r => r.analysis_id ?? r.id));
+  const missing = pool.filter(r => !kept.has(r.analysis_id ?? r.id)
+    && readIdKeys(r).some(id => pins.has(id) || pins.has(stripSegmentSuffix(id))));
+  if (!missing.length) return sample;
+  for (const r of missing) kept.add(r.analysis_id ?? r.id);
+  return pool.filter(r => kept.has(r.analysis_id ?? r.id));
 }
 
-function makeDataViewportKey(
+export function makeDataViewportKey(
   chrom: string,
   start: number,
   end: number,
@@ -191,15 +227,19 @@ function makeDataViewportKey(
   linkedSessionId?: string,
   linkedRegion?: string,
   readStrand?: string | null,
+  liftHap?: string | null,
 ): string {
-  // The strand is part of what the loaded reads are (switching it makes them stale).
-  return [chrom, start, end, datasetId, linkedSessionId ?? '', linkedRegion ?? '', readStrand ?? ''].join('|');
+  // The strand (and a live-lift panel's haplotype) is part of what the loaded reads are (switching it makes them stale).
+  return [chrom, start, end, datasetId, linkedSessionId ?? '', linkedRegion ?? '', readStrand ?? ''].join('|')
+    + (liftHap ? `|hap:${liftHap}` : '');
 }
 
 interface UseReadTrackDataParams {
   stateKey?: string;
   /** DAF-seq panel shown for one strand (CT or GA); the server filters the reads. */
   readStrand?: 'CT' | 'GA' | null;
+  /** Live-lift panel shown for one haplotype ('MAT'/'PAT'); the server filters the rows (a rule, not ids). */
+  liftHap?: string | null;
   chrom: string;
   start: number;
   end: number;
@@ -218,6 +258,7 @@ interface UseReadTrackDataParams {
   useServerMetaprofile: boolean;
   serverMetaprofileLayers: string[];
   needsCigar: boolean;
+  needsMismatches?: boolean;
   fillSmallGaps: boolean;
   fillGapSize: number;
   hideTerminalGaps: boolean;
@@ -278,13 +319,25 @@ interface CompactAllReadsResponse {
   server_elapsed_ms?: number;
 }
 
+/**
+ * What a layer newly listed by a read response does to its toggle: true (switched on), false (an opt-in toggle,
+ * written off), or null (left unset). The nucleosome layers (size classes, array segments) show a dataset's
+ * nucleosome outputs until the user turns them off. Regularity and patches stay unset: their tiles are computed on
+ * demand and the Regularity view / its patch section switch them on unless the user chose ("absent → on"). Writing
+ * them off here would make the lane depend on whether a read response or the panel arrived first.
+ */
+export function discoveredLayerDefault(key: string): boolean | null {
+  if (key === 'nucreg' || key === 'nucpatch') return null;
+  return key === 'nuc' || key === 'tf' || key === 'nucsz' || key === 'nucseg';
+}
+
 export function useReadTrackData(params: UseReadTrackDataParams) {
   const {
-    stateKey, readStrand,
+    stateKey, readStrand, liftHap,
     chrom, start, end, datasetId, spanningOnly, width, height, isBAM,
     needsMethylation, needsLayers, requestedLayers, needsLayerQualities, batchNeedsMethylation, batchRequestedLayers, batchNeedsLayerQualities,
     useServerMetaprofile, serverMetaprofileLayers,
-    needsCigar, fillSmallGaps, fillGapSize, hideTerminalGaps,
+    needsCigar, needsMismatches = true, fillSmallGaps, fillGapSize, hideTerminalGaps,
     terminalGapThreshold, minFpQuality, minFootprints, showDuplicateReads, showQcFailReads = false, downsampleCount, readDisplayMode, allReadsDisplayCap, backgroundReadCap, readRowHeight,
     readSeparatorMode, readSeparatorMinHeight, readSeparatorWidth,
     exportMatchedReadCount, exportMatchedReadFetchCount,
@@ -304,20 +357,36 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
   const pinnedKey = (pinnedReadIds ?? []).join(',');
 
   // Watch refreshGeneration so triggerRefresh() (crash recovery, undo/redo) re-fetches reads
-  const signalFilters = useBrowserStore(s => s.signalFilters);
+  const conflictOptions = useBrowserStore(s => s.svConflictOptions);
+  const conflictOptionsKey = JSON.stringify(conflictOptions);
+  // Inert unless a loaded dataset carries signal tags (the filters are not offered then).
+  const signalFilters = useBrowserStore(effectiveSignalFilters);
   const refreshGeneration = useBrowserStore(s => s.refreshGeneration);
+  const liftKey = useBrowserStore(s => s.datasets.find(d => d.id === datasetId)?.live_lift?.key);
+  const insertionIds = useBrowserStore(s => {
+    const panel = s.panels.find(p => p.datasetId === datasetId && (p.stateKey ?? p.datasetId) === (stateKey ?? datasetId));
+    return (s.liveLiftExpansions?.[liveLiftViewKey(panel)] ?? [])
+      .filter(e => (e.datasetId === datasetId || e.associate_native && s.datasets.find(d=>d.id===datasetId)?.data_type==='bam') && e.chrom === chrom && e.pos >= start && e.pos <= end)
+      .flatMap(e => e.alleles?.map(a => a.ins_id) ?? [e.ins_id]).sort().join(',');
+  });
+  const associationRevision=useBrowserStore(s=>JSON.stringify(Object.values(s.liveLiftExpansions??{}).flat().map(c=>[c.ins_id,c.associate_native])));
   useEffect(() => {
     useBrowserStore.getState().setSignalCounts(stateKey ?? datasetId, null);
     return () => { useBrowserStore.getState().setSignalCounts(stateKey ?? datasetId, null); };
   }, [stateKey, datasetId, chrom, start, end, refreshGeneration]);
-  const maxRegionForReads = useBrowserStore(s => s.maxRegionForReads);
+  // The meta-locus's whole window is one locus (features/metaLocus): its reads are fetched however wide it is.
+  const maxRegionForReads = useBrowserStore(s => effectiveReadLimit(chrom, s.maxRegionForReads));
   const sampleSeed = useBrowserStore(s => s.analysisSampleSeed);
   // The read-end footprint setting the server has confirmed: part of each read
   // URL, so a request made before the server switched is never reused after.
   const readEndFootprints = useBrowserStore(s => (s.appliedHideShortEndFootprints ? 'hide' : 'show'));
-  const batchDatasetIds = useBrowserStore(s => s.datasets.map(d => d.id).filter(Boolean).sort().join(','));
-  const batchSourceIdentity = useBrowserStore(s => JSON.stringify(s.datasets
-    .filter(d => d.id).map(d => [d.id, d.source_identity ?? d.paths ?? d.path ?? d.id])
+  const batchDatasetIds = useBrowserStore(s => batchReadDatasets(s.datasets, datasetId).map(d => d.id).sort().join(','));
+  // (Layers asked for without names are every layer: regularity included.)
+  const batchLayerNames = batchRequestedLayers ?? requestedLayers;
+  const batchCarriesRegularity = carriesRegularityLayer(batchLayerNames)
+    || (batchLayerNames.length === 0 && Boolean(batchNeedsLayerQualities ?? needsLayerQualities));
+  const batchSourceIdentity = useBrowserStore(s => JSON.stringify(batchReadDatasets(s.datasets, datasetId)
+    .map(d => [d.id, readRowsIdentity(d, batchCarriesRegularity)])
     .sort(([a], [b]) => String(a).localeCompare(String(b)))));
   const batchNeedsSvSummary = useBrowserStore(s => s.svDisplayEnabled && s.datasets.some(d => d.data_type === 'bam'));
   // A panel at its own locus (a copy elsewhere) fetches only its dataset: the
@@ -325,6 +394,21 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
   const showsMainView = useBrowserStore(s => s.chrom === chrom && s.start === start && s.end === end);
   // "Load all": every read in view, not the deep view's display sample.
   const loadAllReads = useBrowserStore(s => Boolean(s.loadAllReads?.[datasetId]));
+
+  // Hidden by full view (PanelActiveContext): no read or coverage request starts while hidden. A request skipped then
+  // runs once when the panel is shown again; nothing skipped (no change meanwhile): nothing is asked again.
+  const panelActive = usePanelActive();
+  const activeRef = useRef(panelActive);
+  activeRef.current = panelActive;
+  const skippedReadsRef = useRef(false);
+  const skippedCoverageRef = useRef(false);
+  const [revealTick, setRevealTick] = useState(0);
+  const [coverageRevealTick, setCoverageRevealTick] = useState(0);
+  useEffect(() => {
+    if (!panelActive) return;
+    if (skippedReadsRef.current) { skippedReadsRef.current = false; setRevealTick(t => t + 1); }
+    if (skippedCoverageRef.current) { skippedCoverageRef.current = false; setCoverageRevealTick(t => t + 1); }
+  }, [panelActive]);
 
   const [reads, setReads] = useState<CompactRead[]>([]);
   const [totalReads, setTotalReads] = useState(0);
@@ -335,6 +419,10 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
   const [hiddenByMinFootprints, setHiddenByMinFootprints] = useState(0);
   /** A deep view's reads were sampled on the server: how many of how many. */
   const [workingSampling, setWorkingSampling] = useState<WorkingSampling | null>(null);
+  /** The alignments in the request's scope before the read filters (the server's signal counts: primary alignments
+   * passing the signal filters, before Min footprints / FP quality), when the load was not sampled and not a first
+   * paint. Lets the panel count what the user's read filters hide the same way in full and sampled loads. */
+  const [inScopeBeforeFilters, setInScopeBeforeFilters] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [hasMethylationData, setHasMethylationData] = useState(false);
   const [warning, setWarning] = useState<string | null>(null);
@@ -344,12 +432,20 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
   const [serverMetaprofile, setServerMetaprofile] = useState<ReadsResponse['metaprofile'] | null>(null);
   /** SV clusters across the reads in view (server-side, before display sampling). */
   const [svSummary, setSvSummary] = useState<SvSummary | null>(null);
+  /** A partial first paint is shown: the rest of the view's reads are loading. */
+  const [firstPaint, setFirstPaint] = useState<FirstPaintInfo | null>(null);
+  /** The request whose first paint is shown while its full set loads (a re-run for it goes straight to the full set). */
+  const partialRequestKeyRef = useRef<string | null>(null);
+  /** The view (makeDataViewportKey) whose rows are drawn now: a request for the same view with other layers or settings
+   * keeps them drawn until its own rows arrive, without a first paint (that is for a new locus). */
+  const shownViewKeyRef = useRef<string | null>(null);
   const [fulfilledReadFetchCount, setFulfilledReadFetchCount] = useState(0);
 
   // Zoomed-out coverage data
   // Zoomed-out coverage, tagged with the request it answers: another region's
   // (still loading here, or failed) is never shown under this one's axis.
-  const [coverage, setCoverage] = useState<{ key: string; data: number[]; max: number; reads: number | null } | null>(null);
+  const [coverage, setCoverage] = useState<{ key: string; data: number[]; max: number; reads: number | null;
+    live_lift?: LiveLiftCoverage } | null>(null);
 
   // Track the last completed compact-read request. Store/layout updates can
   // re-run this hook without changing the actual API request; avoid logging and
@@ -407,37 +503,45 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
 
   // Fetch active reads from server
   useEffect(() => {
+    if (!activeRef.current) { skippedReadsRef.current = true; return; }
     const controller = new AbortController();
     const cancelled = () => controller.signal.aborted;
 
     const thisSequence = ++fetchSequenceRef.current;
     if (DEBUG) console.log(`[FETCH ${datasetId}] Effect triggered: seq=${thisSequence}, viewport=${start}-${end}, currentDataSeq=${currentDataSequenceRef.current}`);
 
+    let firstPaintShown = false;
     const fetchReads = async () => {
       if (!chrom || end <= start) {
         if (DEBUG) console.log(`[FETCH ${datasetId}] Skipping - invalid viewport`);
         lastCompletedRequestRef.current = null;
+        shownViewKeyRef.current = null;
         setDataViewportKey('');
         setServerMetaprofile(null);
         setSvSummary(null);
+        setFirstPaint(null);
         setFulfilledReadFetchCount(0);
         // A fetch this one superseded (aborted) never clears its loading flag.
         setLoading(false);
         return;
       }
 
-      const requestViewportKey = makeDataViewportKey(chrom, start, end, datasetId, linkedSessionId, linkedRegion, readStrand);
+      const requestViewportKey = makeDataViewportKey(chrom, start, end, datasetId, linkedSessionId, linkedRegion, readStrand, liftHap);
       const regionWidth = end - start;
       if (regionWidth > maxRegionForReads && !linkedSessionId) {
+        shownViewKeyRef.current = null;
+        partialRequestKeyRef.current = null;   // its first paint is no longer drawn: coming back loads it again
         setReads([]);
         setTotalReads(0);
         setTotalOverlappingReads(0);
         setTotalSpanningReads(0);
         setWorkingReads(0);
+        setInScopeBeforeFilters(null);
         setHiddenByMinFootprints(0);
         setDataViewportKey(requestViewportKey);
         setServerMetaprofile(null);
         setSvSummary(null);
+        setFirstPaint(null);
         setFulfilledReadFetchCount(0);
         currentDataSequenceRef.current = thisSequence;
         setDataSequence(thisSequence);
@@ -447,16 +551,19 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
       }
 
       if (hasPushedReads && jupyterPushedReads) {
+        partialRequestKeyRef.current = null;
         setReads(jupyterPushedReads as CompactRead[]);
         setTotalReads(jupyterPushedReads.length);
         setTotalOverlappingReads(jupyterPushedReads.length);
         setTotalSpanningReads(jupyterPushedReads.length);
         setWorkingReads(jupyterPushedReads.length);
+        setInScopeBeforeFilters(null);
         setHiddenByMinFootprints(0);
         setHasMethylationData(false);
         setDataViewportKey(requestViewportKey);
         setServerMetaprofile(null);
         setSvSummary(null);
+        setFirstPaint(null);
         setFulfilledReadFetchCount(Number.MAX_SAFE_INTEGER);
         currentDataSequenceRef.current = thisSequence;
         setDataSequence(thisSequence);
@@ -508,6 +615,119 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
         let requestKind: 'single' | 'batch' | 'linked' = 'single';
         let requestMs: number | null = null;
         let batchServerMs: number | undefined;
+        // A partial first paint (services/first_paint.py) is applied like a response, then the full set replaces it.
+        let partialReadIds: string | null = null;
+        const applyReadsData = async (data: ReadsResponse, partial: boolean) => {
+          if (requestMs !== null) {
+            const datasetServerMs = data.server_elapsed_ms;
+            const serverMs = requestKind === 'batch'
+              ? (batchServerMs ?? datasetServerMs)
+              : datasetServerMs;
+            const clientOverheadMs = typeof serverMs === 'number'
+              ? Math.max(0, requestMs - serverMs)
+              : undefined;
+            logPerfTiming('read.fetch', requestMs, {
+              kind: partial ? `${requestKind}-first-paint` : requestKind,
+              datasetId,
+              region: `${chrom}:${start}-${end}`,
+              reads: data.reads?.length ?? 0,
+              display: data.display_count ?? data.count ?? 0,
+              working: data.working_count,
+              inScope: data.total_in_scope ?? data.total,
+              spanning: data.total_spanning,
+              serverMs,
+              serverTimings: data.server_timings,
+              datasetServerMs: requestKind === 'batch' ? datasetServerMs : undefined,
+              clientOverheadMs: clientOverheadMs === undefined ? undefined : Math.round(clientOverheadMs * 10) / 10,
+              layers: requestedLayers,
+              layerQualities: needsLayerQualities,
+              methylation: needsMethylation,
+              cigar: needsCigar,
+              spanningOnly,
+            }, 75);
+          }
+          if (DEBUG) console.log(`[FETCH ${datasetId}] Data arrived: seq=${thisSequence}, reads=${(data.reads || []).length}, fetchSeq=${fetchSequenceRef.current}`);
+          let nextReads = hydrateDerivedReadLayers(data.reads || []);
+          if (isBAM && insertionIds && useBrowserStore.getState().datasets.find(d => d.id === datasetId)?.data_type === 'bam') {
+            const current = useBrowserStore.getState();
+            const panel = current.panels.find(p => p.datasetId === datasetId && (p.stateKey ?? p.datasetId) === (stateKey ?? datasetId));
+            const columns = (current.liveLiftExpansions?.[liveLiftViewKey(panel)] ?? []).filter(c => (c.source === 'reads' && c.datasetId === datasetId || c.associate_native) && c.chrom === chrom);
+            try {
+              nextReads = await enrichNativeRows(nextReads, { dataset_id: datasetId, chrom, start: Math.floor(start), end: Math.ceil(end) },
+                columns, requestedLayers, showDuplicateReads, controller.signal, {min_fp_quality:minFpQuality,infer_legacy_layers:legacyLayerInference,legacy_nuc_min_size:legacyNucMinSize});
+            } catch (error) { if (controller.signal.aborted) return; console.warn('Alternate block enrichment unavailable', error); }
+            if (controller.signal.aborted || fetchSequenceRef.current !== thisSequence) return;
+          }
+          const nextDisplayCount = data.display_count ?? data.count ?? nextReads.length;
+          const nextWorkingCount = data.working_count ?? nextDisplayCount;
+          const nextInScopeCount = data.total_in_scope ?? data.total ?? nextWorkingCount;
+          const nextOverlappingCount = data.total_overlapping ?? nextInScopeCount;
+          // A first paint drew these reads already (the full set draws the same ones): keep its rows.
+          const nextIds = nextReads.map(read => read.id).join('\n');
+          if (partial) partialReadIds = nextIds;
+          if (partial || nextIds !== partialReadIds) setReads(nextReads);
+          shownViewKeyRef.current = requestViewportKey;
+          setFirstPaint(partial ? (data.first_paint ?? null) : null);
+          if (!partial) partialRequestKeyRef.current = null;
+          setTotalReads(nextInScopeCount);
+          setTotalOverlappingReads(nextOverlappingCount);
+          setTotalSpanningReads(data.total_spanning ?? nextWorkingCount);
+          setWorkingReads(nextWorkingCount);
+          setHiddenByMinFootprints(typeof data.hidden_by_min_footprints === 'number' ? data.hidden_by_min_footprints : 0);
+          setWorkingSampling(data.working_sampling ?? null);
+          setInScopeBeforeFilters(!partial && !data.working_sampling && typeof data.signal_counts?.kept === 'number'
+            ? data.signal_counts.kept : null);
+          useBrowserStore.getState().setSignalCounts(stateKey ?? datasetId, data.signal_counts
+            ? { datasetId, locus: requestViewportKey, counts: data.signal_counts } : null);
+          setHasMethylationData(data.has_methylation || false);
+          setDataViewportKey(requestViewportKey);
+          setServerMetaprofile(data.metaprofile ?? null);
+          setSvSummary(data.sv_summary ?? null);
+          // Generic layer auto-detection: any layer name in the response gets
+          // an enabledModTypes entry + is stamped onto the dataset so the UI
+          // can gate toggles on actual data presence. Supports arbitrary custom
+          // annotation types from the fiberseq MA spec.
+          // Default-on for primary segmentation layers: nuc + TF. Secondary
+          // layers (FIRE/accessibility, deam, methylation, arbitrary custom
+          // types) remain opt-in to keep navigation lean and the display calm.
+          const layers = data.available_layers;
+          if (layers && Array.isArray(layers) && layers.length > 0) {
+            const store = useBrowserStore.getState();
+            const current = store.enabledModTypes;
+            // Auto-enable newly-discovered primary layers only.
+            const newlyDiscovered = layers.filter(n => {
+              const key = normalizeAnnotationLayer(n) ?? n;
+              return !(key in current);
+            });
+            if (newlyDiscovered.length > 0) {
+              newlyDiscovered.forEach(layerName => {
+                const key = normalizeAnnotationLayer(layerName) ?? layerName;
+                const defaultOn = discoveredLayerDefault(key);
+                if (defaultOn === null) return;
+                if (defaultOn || !(key in current)) {
+                  store.toggleModType(layerName as any, defaultOn);
+                }
+              });
+            }
+            // Always stamp discovered layers onto this dataset so ViewSection
+            // can filter toggles by dataset presence. Runs every fetch because
+            // different viewports can expose different layers; merges, never replaces.
+            store.mergeDatasetAvailableLayers(datasetId, layers);
+          }
+          if (data.warning) {
+            setWarning(data.warning);
+            console.warn(`[${datasetId}] Server warning: ${data.warning}`);
+          } else {
+            setWarning(null);
+          }
+          if (completedRequestKey && !partial) {
+            lastCompletedRequestRef.current = { key: completedRequestKey, refreshGeneration };
+          }
+          setFulfilledReadFetchCount(fulfilledRequestCount);
+          currentDataSequenceRef.current = thisSequence;
+          setDataSequence(thisSequence);
+          if (DEBUG) console.log(`[FETCH ${datasetId}] Data sequence set: currentDataSeq=${thisSequence}`);
+        };
 
         if (linkedSessionId && linkedRegion) {
           requestKind = 'linked';
@@ -555,6 +775,8 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
             chrom,
             start: start.toString(),
             end: end.toString(),
+            viewport_start: start.toString(),
+            viewport_end: end.toString(),
             max_reads: maxReads.toString(),
             spanning: spanningOnly.toString(),
             dataset_id: datasetId,
@@ -562,6 +784,7 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
             include_layers: needsLayers.toString(),
             include_layer_qualities: needsLayerQualities.toString(),
             include_cigar: needsCigar.toString(),
+            include_mismatches: needsMismatches.toString(),
             include_duplicates: showDuplicateReads.toString(),
             include_qcfail: showQcFailReads.toString(),
             hide_uncalled: hideUncalledReads.toString(),
@@ -573,11 +796,13 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
             sample_seed: sampleSeed,
             read_end_footprints: readEndFootprints,
             min_sv_len: String(minSvLen),
+            sv_conflict_options: conflictOptionsKey,
             include_sv_summary: String(svSummaryEnabled),
           });
           fetchParams.set('refresh_generation', String(refreshGeneration));
           const source = useBrowserStore.getState().datasets.find(d => d.id === datasetId);
-          fetchParams.set('source_identity', JSON.stringify(source?.source_identity ?? source?.paths ?? source?.path ?? datasetId));
+          fetchParams.set('source_identity', JSON.stringify(source ? readRowsIdentity(source, carriesRegularityLayer(requestedLayers)
+            || (needsLayers && requestedLayers.length === 0)) : datasetId));
           if (loadAllReads) fetchParams.set('full_working_set', 'true');
           if (requestedLayersKey) {
             fetchParams.set('layer_names', requestedLayersKey.split(SET_KEY_SEPARATOR).join(','));
@@ -627,11 +852,13 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
             fetchParams.set('strand', readStrand);
             fetchParams.set('include_methylation', 'true');
           }
+          if (liftHap) fetchParams.set('lift_hap', liftHap);
+          if (insertionIds) fetchParams.set('insertion_ids', insertionIds);
 
           // A one-strand panel filters on the server per request, which the
           // combined multi-dataset request doesn't do.
           // compact_all serves SV events at the cache floor only (50 bp).
-          const canBatchDatasets = !readStrand && showsMainView && minSvLen >= SV_MIN_LEN_DEFAULT && canBatchReadDatasets(
+          const canBatchDatasets = !readStrand && !liftHap && !insertionIds && showsMainView && minSvLen >= SV_MIN_LEN_DEFAULT && canBatchReadDatasets(
             batchDatasetIds.split(',').filter(Boolean).length,
             needsCigar,
             requestFilterKey,
@@ -639,8 +866,22 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
             // Independent dense loads can stream and retain each cohort for navigation.
             getBrowserPerformanceProfile().tier === 'high' && displayFetchCap >= 2000,
           );
+          // A panel the combined request would load whole, but for a cohort (a cluster run, a read filter): it loads
+          // the same read set on its own, every read in view, never a deep-view sample. A cluster or a hub filter
+          // never switches the panel from all reads to a sample with other totals; the full set is the broad cache
+          // the combined request filled.
+          const wholeExceptCohort = !canBatchDatasets && !loadAllReads && !readStrand && !liftHap && !insertionIds && showsMainView
+            && minSvLen >= SV_MIN_LEN_DEFAULT && (Boolean(requestFilterKey) || (clusteredRequestIds?.size ?? 0) > 0)
+            && getBrowserPerformanceProfile().tier !== 'low'
+            && canBatchReadDatasets(batchDatasetIds.split(',').filter(Boolean).length, needsCigar, '', null,
+              getBrowserPerformanceProfile().tier === 'high' && displayFetchCap >= 2000);
+          if (wholeExceptCohort) fetchParams.set('full_working_set', 'true');
           let batchParams: URLSearchParams | null = null;
-          if (canBatchDatasets) {
+          // In full view only the maximised panel loads: a new view's combined request would decode every dataset's
+          // reads for panels that are hidden (they load theirs, once, when shown again). Read when the view changes,
+          // not a dependency: entering or leaving full view alone never loads anything.
+          const soloInFullView = fullViewHidesOthers(useBrowserStore.getState());
+          if (canBatchDatasets && !soloInFullView) {
             batchParams = new URLSearchParams(fetchParams);
             batchParams.delete('dataset_id');
             batchParams.set('dataset_ids', batchDatasetIds);
@@ -672,7 +913,40 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
           if (batchParams) {
             requestKind = 'batch';
             const requestStarted = nowMs();
-            const batch = await getCompactReadsAll<CompactAllReadsResponse>(batchParams, { signal: controller.signal });
+            // A cold deep view answers first with the reads drawn (services/first_paint.py). Exports and "Load all"
+            // ask for every read at once, as before.
+            // A re-run while this view's first paint is shown (the panel resized) asks for the full set only.
+            // Only while that first paint is what the panel draws (a zoom-out or another view in between cleared it).
+            const resumeFullSet = partialRequestKeyRef.current === requestKey && shownViewKeyRef.current === requestViewportKey;
+            if (!resumeFullSet) partialRequestKeyRef.current = null;
+            if (resumeFullSet) {
+              // The first paint stays as it is (not loading again): only the rest of the view is awaited.
+              firstPaintShown = true;
+              setLoading(false);
+              // The rows shown are this request's view: current for this run (the profile and other effects).
+              currentDataSequenceRef.current = thisSequence;
+              setDataSequence(thisSequence);
+            }
+            // The view drawn now asked again (a layer, cohort or setting changed, or the panel re-mounted with its rows
+            // cached): its rows stay until the new ones arrive. A first paint is for a new locus only.
+            const sameView = shownViewKeyRef.current === requestViewportKey;
+            const firstPaintParams = resumeFullSet ? fullSetParams(batchParams) : new URLSearchParams(batchParams);
+            if (!resumeFullSet && !sameView && !loadAllReads && exportMatchedReadFetchCount == null && !useBrowserStore.getState().exportInProgress) {
+              firstPaintParams.set('first_paint', 'true');
+            }
+            let batch = await getCompactReadsAll<CompactAllReadsResponse>(firstPaintParams, { signal: controller.signal });
+            if (isPartialReadsAll(batch)) {
+              const partialData = batch.datasets?.[datasetId];
+              if (partialData && !cancelled()) {
+                requestMs = nowMs() - requestStarted;
+                batchServerMs = batch.server_elapsed_ms;
+                await applyReadsData(partialData, true);
+                firstPaintShown = true;
+                partialRequestKeyRef.current = requestKey;
+                setLoading(false);
+              }
+              batch = await getCompactReadsAll<CompactAllReadsResponse>(fullSetParams(batchParams), { signal: controller.signal });
+            }
             requestMs = nowMs() - requestStarted;
             batchServerMs = batch.server_elapsed_ms;
             data = batch.datasets?.[datasetId] ?? {
@@ -714,104 +988,20 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
         }
 
         if (!cancelled()) {
-          if (requestMs !== null) {
-            const datasetServerMs = data.server_elapsed_ms;
-            const serverMs = requestKind === 'batch'
-              ? (batchServerMs ?? datasetServerMs)
-              : datasetServerMs;
-            const clientOverheadMs = typeof serverMs === 'number'
-              ? Math.max(0, requestMs - serverMs)
-              : undefined;
-            logPerfTiming('read.fetch', requestMs, {
-              kind: requestKind,
-              datasetId,
-              region: `${chrom}:${start}-${end}`,
-              reads: data.reads?.length ?? 0,
-              display: data.display_count ?? data.count ?? 0,
-              working: data.working_count,
-              inScope: data.total_in_scope ?? data.total,
-              spanning: data.total_spanning,
-              serverMs,
-              serverTimings: data.server_timings,
-              datasetServerMs: requestKind === 'batch' ? datasetServerMs : undefined,
-              clientOverheadMs: clientOverheadMs === undefined ? undefined : Math.round(clientOverheadMs * 10) / 10,
-              layers: requestedLayers,
-              layerQualities: needsLayerQualities,
-              methylation: needsMethylation,
-              cigar: needsCigar,
-              spanningOnly,
-            }, 75);
-          }
-          if (DEBUG) console.log(`[FETCH ${datasetId}] Data arrived: seq=${thisSequence}, reads=${(data.reads || []).length}, fetchSeq=${fetchSequenceRef.current}`);
-          const nextReads = hydrateDerivedReadLayers(data.reads || []);
-          const nextDisplayCount = data.display_count ?? data.count ?? nextReads.length;
-          const nextWorkingCount = data.working_count ?? nextDisplayCount;
-          const nextInScopeCount = data.total_in_scope ?? data.total ?? nextWorkingCount;
-          const nextOverlappingCount = data.total_overlapping ?? nextInScopeCount;
-          setReads(nextReads);
-          setTotalReads(nextInScopeCount);
-          setTotalOverlappingReads(nextOverlappingCount);
-          setTotalSpanningReads(data.total_spanning ?? nextWorkingCount);
-          setWorkingReads(nextWorkingCount);
-          setHiddenByMinFootprints(typeof data.hidden_by_min_footprints === 'number' ? data.hidden_by_min_footprints : 0);
-          setWorkingSampling(data.working_sampling ?? null);
-          useBrowserStore.getState().setSignalCounts(stateKey ?? datasetId, data.signal_counts
-            ? { datasetId, locus: requestViewportKey, counts: data.signal_counts } : null);
-          setHasMethylationData(data.has_methylation || false);
-          setDataViewportKey(requestViewportKey);
-          setServerMetaprofile(data.metaprofile ?? null);
-          setSvSummary(data.sv_summary ?? null);
-          // Generic layer auto-detection: any layer name in the response gets
-          // an enabledModTypes entry + is stamped onto the dataset so the UI
-          // can gate toggles on actual data presence. Supports arbitrary custom
-          // annotation types from the fiberseq MA spec.
-          // Default-on for primary segmentation layers: nuc + TF. Secondary
-          // layers (FIRE/accessibility, deam, methylation, arbitrary custom
-          // types) remain opt-in to keep navigation lean and the display calm.
-          const layers = data.available_layers;
-          if (layers && Array.isArray(layers) && layers.length > 0) {
-            const store = useBrowserStore.getState();
-            const current = store.enabledModTypes;
-            // Auto-enable newly-discovered primary layers only.
-            const newlyDiscovered = layers.filter(n => {
-              const key = normalizeAnnotationLayer(n) ?? n;
-              return !(key in current);
-            });
-            if (newlyDiscovered.length > 0) {
-              newlyDiscovered.forEach(layerName => {
-                const key = normalizeAnnotationLayer(layerName) ?? layerName;
-                const defaultOn = key === 'nuc' || key === 'tf';
-                if (defaultOn || !(key in current)) {
-                  store.toggleModType(layerName as any, defaultOn);
-                }
-              });
-            }
-            // Always stamp discovered layers onto this dataset so ViewSection
-            // can filter toggles by dataset presence. Runs every fetch because
-            // different viewports can expose different layers; merges, never replaces.
-            store.mergeDatasetAvailableLayers(datasetId, layers);
-          }
-          if (data.warning) {
-            setWarning(data.warning);
-            console.warn(`[${datasetId}] Server warning: ${data.warning}`);
-          } else {
-            setWarning(null);
-          }
-          if (completedRequestKey) {
-            lastCompletedRequestRef.current = { key: completedRequestKey, refreshGeneration };
-          }
-          setFulfilledReadFetchCount(fulfilledRequestCount);
-          currentDataSequenceRef.current = thisSequence;
-          setDataSequence(thisSequence);
-          if (DEBUG) console.log(`[FETCH ${datasetId}] Data sequence set: currentDataSeq=${thisSequence}`);
+          await applyReadsData(data, false);
         } else {
           if (DEBUG) console.log(`[FETCH ${datasetId}] Data arrived but cancelled: seq=${thisSequence}`);
         }
       } catch (err) {
         if (err instanceof DOMException && err.name === 'AbortError') return;
         console.error('Failed to fetch reads:', err);
-        // The track keeps no reads from the previous view (see ReadTrack): say why it's empty.
-        if (!cancelled()) {
+        if (!cancelled() && firstPaintShown) {
+          // The full set failed after a first paint: the drawn reads stay (they are the view's), said so.
+          setFirstPaint(null);
+          setWarning('Could not load every read in this view: the reads drawn are shown; counts and the SV band are missing. Reload the region to try again.');
+        } else if (!cancelled()) {
+          // The track keeps no reads from the previous view (see ReadTrack): say why it's empty.
+          shownViewKeyRef.current = null;
           setReads([]);
           setWarning('Could not load reads for this region.');
           setFetchFailed(true);
@@ -825,10 +1015,11 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
 
     fetchReads();
     return () => { controller.abort(); };
-  }, [chrom, start, end, datasetId, needsMethylation, needsLayers, requestedLayersKey, needsLayerQualities, batchNeedsMethylation, batchRequestedLayersKey, batchNeedsLayerQualities, useServerMetaprofile, serverMetaprofileLayersKey, needsCigar, fillSmallGaps, fillGapSize, hideTerminalGaps, terminalGapThreshold, legacyLayerInference, legacyNucMinSize, showDuplicateReads, showQcFailReads, hideUncalledReads, isBAM, minFpQuality, minFootprints, spanningOnly, readDisplayMode, downsampleCount, allReadsDisplayCap, backgroundReadCap, height, readRowHeight, readSeparatorMode, readSeparatorMinHeight, readSeparatorWidth, exportMatchedReadFetchCount, hasPushedReads, jupyterPushedReads, requestFilterIdsParam, requestFilterKey, rootClusterFocusReadIdsKey, clusteredReadIdsKey, linkedSessionId, linkedRegion, linkedSortBy, panelLabel, refreshGeneration, maxRegionForReads, sampleSeed, batchDatasetIds, batchSourceIdentity, batchNeedsSvSummary, readStrand, showsMainView, readEndFootprints, pinnedKey, minSvLen, svSummaryEnabled, loadAllReads]);
+  }, [chrom, start, end, datasetId, needsMethylation, needsLayers, requestedLayersKey, needsLayerQualities, batchNeedsMethylation, batchRequestedLayersKey, batchNeedsLayerQualities, useServerMetaprofile, serverMetaprofileLayersKey, needsCigar, needsMismatches, fillSmallGaps, fillGapSize, hideTerminalGaps, terminalGapThreshold, legacyLayerInference, legacyNucMinSize, showDuplicateReads, showQcFailReads, hideUncalledReads, isBAM, minFpQuality, minFootprints, spanningOnly, readDisplayMode, downsampleCount, allReadsDisplayCap, backgroundReadCap, height, readRowHeight, readSeparatorMode, readSeparatorMinHeight, readSeparatorWidth, exportMatchedReadFetchCount, hasPushedReads, jupyterPushedReads, requestFilterIdsParam, requestFilterKey, rootClusterFocusReadIdsKey, clusteredReadIdsKey, linkedSessionId, linkedRegion, linkedSortBy, panelLabel, refreshGeneration, maxRegionForReads, sampleSeed, batchDatasetIds, batchSourceIdentity, batchNeedsSvSummary, readStrand, liftHap, showsMainView, readEndFootprints, pinnedKey, minSvLen, svSummaryEnabled, conflictOptionsKey, loadAllReads, insertionIds, associationRevision, revealTick]);
 
   // Fetch coverage data when zoomed out past maxRegionForReads
   useEffect(() => {
+    if (!activeRef.current) { skippedCoverageRef.current = true; return; }
     const regionWidth = end - start;
     if (regionWidth <= maxRegionForReads || linkedSessionId || !chrom || end <= start) {
       setCoverage(null);
@@ -837,22 +1028,24 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
 
     const controller = new AbortController();
     const bins = Math.max(100, Math.min(width, 2000));
-    const key = coverageRequestKey(datasetId, chrom, start, end, bins, showDuplicateReads, showQcFailReads, hideUncalledReads);
+    const lift = { liftHap, liftKey, refreshGeneration };
+    const key = coverageRequestKey(datasetId, chrom, start, end, bins, showDuplicateReads, lift, showQcFailReads, hideUncalledReads);
 
-    getCoverage(chrom, start, end, bins, datasetId, { signal: controller.signal }, showDuplicateReads, showQcFailReads, hideUncalledReads)
+    getCoverage(chrom, start, end, bins, datasetId, { signal: controller.signal }, showDuplicateReads, lift, showQcFailReads, hideUncalledReads)
       .then(result => {
         if (controller.signal.aborted) return;
         setCoverage({ key, data: result.coverage, max: result.max,
-          reads: typeof result.reads === 'number' ? result.reads : null });
+          reads: typeof result.reads === 'number' ? result.reads : null, live_lift: result.live_lift });
       })
       .catch(err => {
+        if (controller.signal.aborted) return;
         if (err instanceof DOMException && err.name === 'AbortError') return;
         console.error('Failed to fetch zoomed-out coverage:', err);
         setCoverage(null);
       });
 
     return () => controller.abort();
-  }, [chrom, start, end, datasetId, width, linkedSessionId, maxRegionForReads, showDuplicateReads, showQcFailReads, hideUncalledReads]);
+  }, [chrom, start, end, datasetId, width, linkedSessionId, maxRegionForReads, showDuplicateReads, showQcFailReads, hideUncalledReads, liftHap, liftKey, refreshGeneration, coverageRevealTick]);
 
   // Derive displayReads: apply client-side filters and ordering only
   const { displayReads, profileReads, displaySampleCount } = useMemo(() => {
@@ -916,7 +1109,7 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
       // null: no filter. An empty set is a filter that matches nothing (e.g. the
       // two windows share no molecules), not "no filter".
       if (linkedFilteredIds) {
-        filteredReads = duplicateFilteredReads.filter(read => linkedFilteredIds.has(read.id));
+        filteredReads = filterReadsByReadIdSet(duplicateFilteredReads, linkedFilteredIds);
         if (DEBUG) console.log(`[${panelLabel}] Coordinated filter: ${reads.length} -> ${filteredReads.length} reads`);
       }
 
@@ -928,14 +1121,12 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
 
       if (excludeIds && excludeIds.size > 0) {
         filteredReads = filteredReads.filter(r => {
-          if (excludeIds.has(r.id)) return false;
-          const baseId = r.id.replace(/_\d+$/, '');
-          return !excludeIds.has(baseId);
+          return !readIdKeys(r).some(id => excludeIds.has(id) || excludeIds.has(stripSegmentSuffix(id)));
         });
       }
 
       if (hasJupyterFilter && jupyterFilterSet) {
-        filteredReads = filteredReads.filter(r => jupyterFilterSet.has(r.id));
+        filteredReads = filterReadsByReadIdSet(filteredReads, jupyterFilterSet);
       }
 
       if (hasFilter && myFilteredReadIds) {
@@ -957,7 +1148,7 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
 
       if (hasClusterFocus && myClusterFocus) {
         filteredReads = filteredReads.filter(r => {
-          const cluster = clusterAssignmentForRead(myClusterAssignments, r.id);
+          const cluster = clusterAssignmentForRead(myClusterAssignments, r);
           return cluster !== undefined && myClusterFocus.has(cluster);
         });
       }
@@ -972,32 +1163,30 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
         });
       } else if (myReadSortOrder.length > 0 && hasCluster && myClusterOrder.length > 0) {
         const clusterOrderMap = new Map(myClusterOrder.map((c, i) => [c, i]));
-        const readOrderMap = new Map(myReadSortOrder.map((id, i) => [id, i]));
+        const readOrderMap = orderIndex(myReadSortOrder);
         sorted = [...filteredReads].sort((a, b) => {
-          const ca = clusterAssignmentForRead(myClusterAssignments, a.id) ?? 999;
-          const cb = clusterAssignmentForRead(myClusterAssignments, b.id) ?? 999;
+          const ca = clusterAssignmentForRead(myClusterAssignments, a) ?? 999;
+          const cb = clusterAssignmentForRead(myClusterAssignments, b) ?? 999;
           const clusterDiff = (clusterOrderMap.get(ca) ?? 999) - (clusterOrderMap.get(cb) ?? 999);
           if (clusterDiff !== 0) return clusterDiff;
-          return (readOrderMap.get(a.id) ?? 999999) - (readOrderMap.get(b.id) ?? 999999);
+          return sortRankOf(readOrderMap, a) - sortRankOf(readOrderMap, b);
         });
       } else if (myReadSortOrder.length > 0) {
-        const readOrderMap = new Map(myReadSortOrder.map((id, i) => [id, i]));
-        sorted = [...filteredReads].sort((a, b) => {
-          return (readOrderMap.get(a.id) ?? 999999) - (readOrderMap.get(b.id) ?? 999999);
-        });
+        const readOrderMap = orderIndex(myReadSortOrder);
+        sorted = [...filteredReads].sort((a, b) => sortRankOf(readOrderMap, a) - sortRankOf(readOrderMap, b));
       } else if (hasCluster && myClusterOrder.length > 0) {
         const orderMap = new Map(myClusterOrder.map((c, i) => [c, i]));
         sorted = [...filteredReads].sort((a, b) => {
-          const ca = clusterAssignmentForRead(myClusterAssignments, a.id) ?? 999;
-          const cb = clusterAssignmentForRead(myClusterAssignments, b.id) ?? 999;
+          const ca = clusterAssignmentForRead(myClusterAssignments, a) ?? 999;
+          const cb = clusterAssignmentForRead(myClusterAssignments, b) ?? 999;
           const posA = orderMap.get(ca) ?? 999;
           const posB = orderMap.get(cb) ?? 999;
           return posA - posB;
         });
       } else if (hasCluster) {
         sorted = [...filteredReads].sort((a, b) => {
-          const ca = clusterAssignmentForRead(myClusterAssignments, a.id) ?? 999;
-          const cb = clusterAssignmentForRead(myClusterAssignments, b.id) ?? 999;
+          const ca = clusterAssignmentForRead(myClusterAssignments, a) ?? 999;
+          const cb = clusterAssignmentForRead(myClusterAssignments, b) ?? 999;
           return ca - cb;
         });
       }
@@ -1045,7 +1234,8 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
     return () => { controller.abort(); };
   }, [chrom, start, end, modificationOverlays]);
 
-  const coverageKey = coverageRequestKey(datasetId, chrom, start, end, Math.max(100, Math.min(width, 2000)), showDuplicateReads, showQcFailReads, hideUncalledReads);
+  const coverageKey = coverageRequestKey(datasetId, chrom, start, end, Math.max(100, Math.min(width, 2000)), showDuplicateReads,
+    { liftHap, liftKey, refreshGeneration }, showQcFailReads, hideUncalledReads);
   const currentCoverage = coverage && coverage.key === coverageKey ? coverage : null;
   const coverageData = currentCoverage?.data ?? null;
   const coverageMax = currentCoverage?.max ?? 0;
@@ -1062,6 +1252,10 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
     workingReads,
     hiddenByMinFootprints,
     workingSampling,
+    inScopeBeforeFilters,
+    firstPaint,
+    /** The request names the reads it wants (filter_ids / filter_set: a cluster cohort, a branch, a read filter). */
+    readScoped: Boolean(requestFilterKey),
     loading,
     fetchFailed,
     hasMethylationData,
@@ -1075,6 +1269,7 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
     coverageData,
     coverageMax,
     coverageReads,
+    coverageLiveLift: currentCoverage?.live_lift ?? null,
     dataViewportKey,
     serverMetaprofile,
     fulfilledReadFetchCount,

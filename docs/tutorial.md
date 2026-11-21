@@ -28,7 +28,7 @@ Everything here works the same way on your own data (see
 5. [Footprints and footprint classes](#5-footprints-and-footprint-classes) (steps 21–29)
 6. [Regions and highlights](#6-regions-and-highlights) (steps 30–32)
 7. [Labeling and rules](#7-labeling-and-rules) (steps 33–35)
-8. [Tracks, co-accessibility and primers](#8-tracks-co-accessibility-and-primers) (steps 36–39)
+8. [Tracks, Plots and primers](#8-tracks-plots-and-primers) (steps 36–39)
 9. [Panels and layout](#9-panels-and-layout) (steps 40–43)
 10. [Variants: haplotypes, SVs and an insert](#10-variants-haplotypes-svs-and-an-insert) (steps 44–51)
 11. [Undo, save and export](#11-undo-save-and-export) (steps 52–58)
@@ -130,7 +130,9 @@ goes to the *NAPA* promoter.
    **Composition** shows each dataset's share, **Footprint sizes** plots footprint size
    against position (Size enrichment or V-plot; it also works without
    clustering, see [Footprint size enrichment plots](guide.md#footprint-size-enrichment-plots)), and **Differences** (once you have labeling rules) shows
-   what sets each cluster apart. ([18](guide.md#18-profiles-and-other-views))
+   what sets each cluster apart. The **Profile** chips pick the layers;
+   **Default** shows the layers switched on in the Layers toolbar, like the
+   metaprofile track. ([18](guide.md#18-profiles-and-other-views))
 7. In **Overview**, choose **Map**: each read is a dot on a t-SNE map,
    coloured by cluster. Neighbours are similar reads; distances between groups
    mean little. Click a dot to focus its cluster, Esc to show all again.
@@ -184,7 +186,7 @@ goes to the *NAPA* promoter.
 2. Open **Regions** and click **Save view**. Saved regions live in categories
    (your views, imported BED files, and in your own tab the regions **Scan
    regions** finds in your datasets). Type a region's name in the location box,
-   or press **N** and **P** to step through a category.
+   or press **N** and **Shift+N** to step through a category.
    ([31](guide.md#31-regions))
 3. **Compare haplotypes** opens the same coordinates on two chromosomes side by
    side (for example `chr1_mat` and `chr1_pat`). The demo has one haplotype, so
@@ -203,7 +205,7 @@ goes to the *NAPA* promoter.
    **Filter**), such as "open at the promoter and bound at the enhancer". A rule
    you add appears in that toolbar group. ([35](guide.md#35-rules))
 
-## 8. Tracks, co-accessibility and primers
+## 8. Tracks, Plots and primers
 
 1. In **Tracks**, type in the add box: a file path or URL, a JASPAR motif name
    such as `CTCF`, or a sequence. **+ Metaprofile** and **+ Combined track**
@@ -211,8 +213,12 @@ goes to the *NAPA* promoter.
    ([36](guide.md#36-adding-a-track))
 2. **Browse hubs…** searches UCSC, ENCODE and ChIP-Atlas for tracks to show
    beside the reads. ([37](guide.md#37-track-hubs))
-3. **Co-accessibility** shows which positions are open together on the same
-   molecules, as a matrix you can export. ([38](guide.md#38-co-accessibility))
+3. Press **P** (or click **Plots** at the top right) for the **Plots**
+   workspace. Pick **Metaprofile**, then **Group by → Cluster**: one line per
+   cluster, with **Summary across groups** for a bar per cluster. Try
+   **Co-accessibility** to see which positions are open together on the same
+   molecules. **Keep** saves a plot to the Gallery; **Esc** goes back to the
+   reads. ([38](guide.md#38-plots), [Plots](workflows/plots.md))
 4. **Primers** (your own tab only) designs PCR primers around the selected
    peaks, or for 3C and 4C, and checks them with BLAST; its **Order list**
    exports them for IDT and other vendors. ([39](guide.md#39-primers))
@@ -270,16 +276,20 @@ in 3.0; the expanded insert (step 50) is a Preview feature, on by default
    ![One panel per haplotype](images/guide/47_reads_split_by_haplotype.png)
 
 5. Open **SVs**. It lists the deletions and insertions of 50 bp or more in
-   view, with their carriers: here **INS 7.5 kb @ chr1:23,277,273**, carried by
-   71 of 108 informative reads. Each row can group or split the reads by the
-   SV (carriers, reference, not informative), open it in the **Insertion
-   lens**, or show which SNP alleles travel with it. Tick two to four SVs to
+   view, with their carriers: here **INS 7.5 kb @ chr1:23,277,273**, with its
+   confirmed carriers out of the informative reads, then its putative,
+   conflicting and ambiguous reads (see
+   [Structural variants](workflows/structural-variants.md#evidence-levels)).
+   Each row can group or split the reads by the SV (carriers, reference, not
+   informative), open it in the **Insertion lens**, inspect it, or show which
+   SNP alleles travel with it. Tick two to four SVs to
    split by their combined genotype. ([48](guide.md#48-structural-variants))
-6. Hover the insertion's flag in the **SV** row for its carriers, and
-   right-click it for the same actions.
-   ([49](guide.md#49-insertions-on-the-reads))
+6. Hover the insertion's flag in the **Differences** row (the SV row in 3.0)
+   for its carriers. Click it to highlight them and expand the insertion in
+   place, ⌘-click to inspect it, and right-click it for the same actions as
+   the SVs tab. ([49](guide.md#49-insertions-on-the-reads))
 
-   ![The SV row's menu](images/guide/x17_sv_row_menu.png)
+   ![The Differences row's menu on the insertion](images/guide/x17_sv_row_menu.png)
 
 7. Right-click the insertion and choose **Open carriers with the insert
    expanded**. The carriers are re-aligned onto the alternate allele (reference
@@ -338,6 +348,14 @@ steps above: scan peaks, select the ones you care about, cluster, save
 footprints, and compare datasets side by side. The display shows a sample of
 the reads for speed, while clustering and the analyses use every eligible read
 unless you set **Analysis cap** (sidebar → **Analysis & Reproducibility**).
+In **Low memory** performance mode (chosen automatically on machines with
+8 GiB of RAM or less, or 4 cores or fewer) the working set is capped at
+2,000 reads, sampled reproducibly; **Standard** and **High** have no such cap.
+
+To look at many sites at once, open a BED file (every promoter, say) with
+**Open ▾ → Open BED as meta-locus…** (Preview): the reads of all sites are
+pooled into one locus that you browse, cluster and plot like any other. See
+[Meta-locus](workflows/meta-locus.md) and [Plots](workflows/plots.md).
 
 From raw reads, **Process raw data** (the arrow beside **Open**) runs a DAF-seq
 or Nanopore POD5 run from the app; see

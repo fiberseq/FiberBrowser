@@ -4,6 +4,7 @@ import { loadFasta } from '../api/reference';
 import { showLoadedReference } from '../utils/referenceNavigation';
 import { useBrowserStore } from '../stores/browserStore';
 import { autoSaveNow } from './useAutoSave';
+import { markReferenceChosen } from '../stores/referenceNoticeStore';
 
 export interface ReferenceFileStatus {
   has_gtf: boolean;
@@ -41,6 +42,7 @@ export function useReferenceFastaLoader(
 
       const res = await loadFasta(picked.path);
       if (res.success) {
+        markReferenceChosen();
         setHasFasta(true);
         setFastaPath(res.path || picked.path);
         setCurrentGenome(res.inferred_genome ?? null);

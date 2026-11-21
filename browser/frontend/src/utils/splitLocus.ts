@@ -14,6 +14,7 @@ export interface View { chrom: string; start: number; end: number }
 
 /** Whether a split panel's view has left its split's locus (no overlap, or another chromosome). */
 export function splitAway(subset: ReadSubset | undefined, view: View, panel?: PanelConfig): boolean {
+  if (subset?.rule?.liftHap) return false;
   const locus = subset?.locus;
   if (!locus || panelTraits(panel).ownContig) return false;  // a panel on a contig of its own (an insert expanded)
   return !sameChrom(view.chrom, locus.chrom) || view.end <= locus.start || view.start >= locus.end;

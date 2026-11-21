@@ -1,10 +1,11 @@
 import type { AnalysisFilterMetric, AnalysisFilterOperator, AnalysisFilterRule, AnalysisFilterRuleSet, AnalysisSortMetric, AnalysisSortRule, AnalysisSortRuleSet, Bookmark, ClusterFeatureRule, ClusterFeatureRuleSet, ClusterFeatureRuleTerm, Colormap, ColorRule, FirePeak, FootprintGroup, Gene, PeakMode, QualityGate, ReadStateInfo, SelectedFootprint, SubTrackConfig, SubTrackType, TranscriptionStateFilters } from '../types';
-import { buildAnalysisFilterRuleAutoName, buildAnalysisSortRuleAutoName, buildClusterFeatureRuleAutoName, isRemovedTranscriptionStateTerm, normalizeAnalysisRuleScope, normalizeTranscriptionStateRuleKind } from '../utils/analysisRules';
+import { buildAnalysisFilterRuleAutoName, buildAnalysisSortRuleAutoName, buildClusterFeatureRuleAutoName, isRemovedTranscriptionStateTerm, normalizeAnalysisRuleScope, normalizeRuleTermSource, normalizeRuleTermSourceFields, normalizeTranscriptionStateRuleKind } from '../utils/analysisRules';
 import type { ReadFilterSource } from './clusterSlice';
 import { DEFAULT_COLORMAP } from '../types';
 import { FRONTEND_DIAGNOSTICS } from '../utils/diagnostics';
 import { normalizeAnnotationLayer, normalizeLayerList, normalizeQualityFilterLayers } from '../utils/layerAliases';
 import { normalizeRuleColorVisuals } from '../utils/ruleColors';
+import { hasNucNamedCondition, noteNucNamedDropped, withoutNucNamed } from '../utils/nucNamedRemoval';
 import { isKnownTrackType, placedTrackKinds } from '../components/tracks/trackRegistry';
 
 // Debug flag — opt-in only, even in local dev builds.
@@ -146,7 +147,8 @@ export function migrateColormap(c: Partial<Colormap> | null | undefined): Colorm
     displaySmoothing,
     edgeAmbiguity,
     qualityFilters: normalizeQualityFilterLayers(rest.qualityFilters ?? DEFAULT_COLORMAP.qualityFilters),
-    rules: rules.map(r => ({
+    // Named nucleosome classes were removed (owner, 20 Nov 2026): a saved rule's named-class condition is dropped.
+    rules: rules.map(withoutNucNamed).map(r => ({
       ...r,
       ...normalizeRuleColorVisuals(r as Partial<ColorRule> & Record<string, unknown>),
       opacity: normalizeOpacity(r.opacity),
@@ -160,7 +162,12 @@ export function migrateColormap(c: Partial<Colormap> | null | undefined): Colorm
 export function loadColormapsFromStorage(): Colormap[] {
   try {
     const stored = localStorage.getItem(COLORMAPS_STORAGE_KEY);
-    return stored ? (JSON.parse(stored) as Colormap[]).map(migrateColormap) : [];
+    if (!stored) return [];
+    const parsed = JSON.parse(stored) as Colormap[];
+    const colormaps = parsed.map(migrateColormap);
+    // Saved again without removed conditions (named nucleosome classes), so their notice is shown once.
+    if (parsed.some(c => Array.isArray(c?.rules) && c.rules.some(hasNucNamedCondition))) saveColormapsToStorage(colormaps);
+    return colormaps;
   } catch {
     return [];
   }
@@ -288,6 +295,13 @@ function normalizeColorRuleSnapshot(rule: unknown): ColorRule | undefined {
     conditions: Array.isArray(raw.conditions) ? raw.conditions as any : [],
     qualityGates: normalizeQualityGates(raw.qualityGates ?? raw.quality_gates),
     requireAnnotationName: raw.requireAnnotationName === true || raw.require_annotation_name === true,
+    // Nucleosome size conditions (read through each item's nucsz mark).
+    ...(Array.isArray(raw.nucCoarse) ? { nucCoarse: raw.nucCoarse.map(Number).filter(Number.isFinite) } : {}),
+    // A named-class condition (removed, owner 20 Nov 2026) is dropped, with the load's notice.
+    ...(hasNucNamedCondition(raw) ? (noteNucNamedDropped(1), {}) : {}),
+    ...(raw.zMin != null && Number.isFinite(Number(raw.zMin)) ? { zMin: Number(raw.zMin) } : {}),
+    ...(raw.zMax != null && Number.isFinite(Number(raw.zMax)) ? { zMax: Number(raw.zMax) } : {}),
+    ...(typeof raw.nucTf === 'boolean' ? { nucTf: raw.nucTf } : {}),
     enabled: raw.enabled !== false,
   };
 }
@@ -322,9 +336,7 @@ export function normalizeTranscriptionStateFilters(filters: unknown): Transcript
 function normalizeClusterFeatureTerm(term: unknown, idx: number): ClusterFeatureRuleTerm | null {
   if (!term || typeof term !== 'object') return null;
   const raw = term as Partial<ClusterFeatureRuleTerm> & Record<string, unknown>;
-  const source = raw.source === 'label_rule' || raw.source === 'footprint_group' || raw.source === 'footprint_class' || raw.source === 'transcription_state'
-    ? raw.source
-    : 'layer';
+  const source = normalizeRuleTermSource(raw.source);
   const rawLayer = raw.layer ?? raw.source_layer;
   const layer = rawLayer == null || rawLayer === 'primary' || rawLayer === 'footprint'
     ? null
@@ -351,6 +363,8 @@ function normalizeClusterFeatureTerm(term: unknown, idx: number): ClusterFeature
     ...(raw.footprintGroupName || raw.footprint_group_name ? { footprintGroupName: String(raw.footprintGroupName ?? raw.footprint_group_name) } : {}),
     ...(group ? { group } : {}),
     ...(source === 'transcription_state' ? { transcriptionState: normalizeTranscriptionStateRuleKind(raw.transcriptionState ?? raw.transcription_state) } : {}),
+    // Molecule metric and hub hit terms (no layer).
+    ...normalizeRuleTermSourceFields(source, raw),
   };
 }
 
@@ -386,13 +400,16 @@ export function loadClusterFeatureRuleSetsFromStorage(): ClusterFeatureRuleSet[]
     if (!stored) return [];
     const parsed = JSON.parse(stored);
     if (!Array.isArray(parsed)) return [];
-    return parsed
+    const ruleSets = parsed
       .filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === 'object')
       .map(entry => ({
         name: String(entry.name ?? 'Cluster feature rules'),
         savedAt: typeof entry.savedAt === 'number' ? entry.savedAt : Date.now(),
         rules: normalizeClusterFeatureRules(entry.rules),
       }));
+    // Named nucleosome conditions were dropped (one notice): saved back, so the notice is not repeated on every load.
+    if (stored.includes('nucNamed') || stored.includes('nuc_named')) saveClusterFeatureRuleSetsToStorage(ruleSets);
+    return ruleSets;
   } catch {
     return [];
   }
@@ -422,7 +439,7 @@ export function getInitialClusterFeatureRules(): ClusterFeatureRule[] {
 }
 
 function normalizeAnalysisSortMetric(metric: unknown): AnalysisSortMetric {
-  return metric === 'occupancy' || metric === 'rate' || metric === 'accessibility' ? metric : 'count';
+  return metric === 'occupancy' || metric === 'rate' || metric === 'accessibility' || metric === 'value' ? metric : 'count';
 }
 
 export function normalizeAnalysisSortRules(rules: unknown): AnalysisSortRule[] {
@@ -461,13 +478,16 @@ export function loadAnalysisSortRuleSetsFromStorage(): AnalysisSortRuleSet[] {
     if (!stored) return [];
     const parsed = JSON.parse(stored);
     if (!Array.isArray(parsed)) return [];
-    return parsed
+    const ruleSets = parsed
       .filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === 'object')
       .map(entry => ({
         name: String(entry.name ?? 'Sort rules'),
         savedAt: typeof entry.savedAt === 'number' ? entry.savedAt : Date.now(),
         rules: normalizeAnalysisSortRules(entry.rules),
       }));
+    // Named nucleosome conditions were dropped (one notice): saved back, so the notice is not repeated on every load.
+    if (stored.includes('nucNamed') || stored.includes('nuc_named')) saveAnalysisSortRuleSetsToStorage(ruleSets);
+    return ruleSets;
   } catch {
     return [];
   }
@@ -497,11 +517,11 @@ export function getInitialAnalysisSortRules(): AnalysisSortRule[] {
 }
 
 function normalizeAnalysisFilterMetric(metric: unknown): AnalysisFilterMetric {
-  return metric === 'occupancy' || metric === 'rate' || metric === 'accessibility' ? metric : 'count';
+  return metric === 'occupancy' || metric === 'rate' || metric === 'accessibility' || metric === 'value' ? metric : 'count';
 }
 
 function normalizeAnalysisFilterOperator(operator: unknown): AnalysisFilterOperator {
-  if (operator === 'gt' || operator === 'lt' || operator === 'lte' || operator === 'eq') return operator;
+  if (operator === 'gt' || operator === 'lt' || operator === 'lte' || operator === 'eq' || operator === 'between') return operator;
   return 'gte';
 }
 
@@ -517,7 +537,9 @@ export function normalizeAnalysisFilterRules(rules: unknown): AnalysisFilterRule
       const metric = normalizeAnalysisFilterMetric(rule.metric);
       const operator = normalizeAnalysisFilterOperator(rule.operator);
       const threshold = Number.isFinite(Number(rule.threshold)) ? Number(rule.threshold) : 1;
-      const autoName = String(rule.autoName ?? buildAnalysisFilterRuleAutoName({ terms, scope, metric, operator, threshold }));
+      const rawMax = rule.thresholdMax ?? rule.threshold_max;
+      const thresholdMax = rawMax == null || rawMax === '' || !Number.isFinite(Number(rawMax)) ? null : Number(rawMax);
+      const autoName = String(rule.autoName ?? buildAnalysisFilterRuleAutoName({ terms, scope, metric, operator, threshold, thresholdMax }));
       const rawName = typeof rule.name === 'string' ? rule.name : '';
       const nameEdited = typeof rule.nameEdited === 'boolean'
         ? rule.nameEdited
@@ -533,6 +555,8 @@ export function normalizeAnalysisFilterRules(rules: unknown): AnalysisFilterRule
         metric,
         operator,
         threshold,
+        ...(thresholdMax != null ? { thresholdMax } : {}),
+        ...(rule.combine === 'and' ? { combine: 'and' as const } : {}),
       };
     });
 }
@@ -543,13 +567,16 @@ export function loadAnalysisFilterRuleSetsFromStorage(): AnalysisFilterRuleSet[]
     if (!stored) return [];
     const parsed = JSON.parse(stored);
     if (!Array.isArray(parsed)) return [];
-    return parsed
+    const ruleSets = parsed
       .filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === 'object')
       .map(entry => ({
         name: String(entry.name ?? 'Filter rules'),
         savedAt: typeof entry.savedAt === 'number' ? entry.savedAt : Date.now(),
         rules: normalizeAnalysisFilterRules(entry.rules),
       }));
+    // Named nucleosome conditions were dropped (one notice): saved back, so the notice is not repeated on every load.
+    if (stored.includes('nucNamed') || stored.includes('nuc_named')) saveAnalysisFilterRuleSetsToStorage(ruleSets);
+    return ruleSets;
   } catch {
     return [];
   }
@@ -755,6 +782,26 @@ export function dropUnknownTracks(subTracks: SubTrackConfig[]): SubTrackConfig[]
   return subTracks.filter(st => !st || typeof st.type !== 'string' || isKnownTrackType(st.type));
 }
 
+/** The two parent track names share one canvas row. Hidden choices dominate
+ * duplicate defaults; explicit size/collapse settings survive canonicalization.
+ * The session capsule retains every original row for reversible recovery. */
+export function migrateDifferenceTracks(subTracks: SubTrackConfig[]): SubTrackConfig[] {
+  const aliases = new Set(['sv', 'difference', 'differences']);
+  const rows = subTracks.filter(t => t && aliases.has(t.type));
+  if (!rows.length || rows.length === 1 && rows[0].type === 'sv') return subTracks;
+  const canonical = rows.find(t => t.type === 'sv') ?? rows[0];
+  const combined = { ...Object.assign({}, ...rows.slice().reverse()), ...canonical, type: 'sv' as const,
+    visible: rows.every(t => t.visible !== false) };
+  if (canonical.heightOverride == null) combined.heightOverride = rows.find(t => t.heightOverride != null)?.heightOverride;
+  let added = false;
+  return subTracks.flatMap(t => {
+    if (!t || !aliases.has(t.type)) return [t];
+    if (added) return [];
+    added = true;
+    return [combined];
+  });
+}
+
 /** Sub-tracks for genome-only mode (no dataset loaded). */
 export function createGenomeSubTracks(
   _orthogonalTracks: { index: number }[] = [],
@@ -838,12 +885,13 @@ export function ensureBuiltinSubTracks(subTracks: SubTrackConfig[]): SubTrackCon
 export function migratePanelTracks<T extends { subTracks?: SubTrackConfig[]; contentType?: string }>(panels: T[], svTrackCollapsed = false): T[] {
   return panels.map(panel => {
     if (!panel || !Array.isArray(panel.subTracks)) return panel;
-    if (!panel.subTracks.some(t => t?.type === 'reads')) {
+    const migrated = migrateDifferenceTracks(panel.subTracks);
+    if (!migrated.some(t => t?.type === 'reads')) {
       // Rows of a plugin pack this build doesn't have go (their kind isn't known here).
-      const known = dropUnknownTracks(panel.subTracks);
-      return known.length === panel.subTracks.length ? panel : { ...panel, subTracks: known };
+      const known = dropUnknownTracks(migrated);
+      return known.length === panel.subTracks.length && known.every((t, i) => t === panel.subTracks![i]) ? panel : { ...panel, subTracks: known };
     }
-    let subTracks = ensureBuiltinSubTracks(dropUnknownTracks(panel.subTracks));
+    let subTracks = ensureBuiltinSubTracks(dropUnknownTracks(migrated));
     if (svTrackCollapsed) {
       subTracks = subTracks.map(t => (t.type === 'sv' && t.heightOverride == null ? { ...t, heightOverride: SV_COLLAPSED_MIGRATION_HEIGHT } : t));
     }

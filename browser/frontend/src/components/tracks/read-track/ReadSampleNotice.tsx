@@ -1,5 +1,5 @@
 import { useBrowserStore } from '../../../stores/browserStore';
-import type { WorkingSampling } from './types';
+import type { FirstPaintInfo, WorkingSampling } from './types';
 import { usePerformanceStore } from '../../../stores/performanceStore';
 
 const fmt = (n: number) => n.toLocaleString();
@@ -29,17 +29,38 @@ export function sampleNoticeText(sampling: WorkingSampling): { text: string; tit
   };
 }
 
+/** "Showing 1,000 of ~4,640 reads, loading the rest…" while a cold deep view's full set loads (services/first_paint.py). */
+export function firstPaintNoticeText(firstPaint: FirstPaintInfo): { text: string; title: string } {
+  return {
+    text: `Showing ${fmt(firstPaint.shown)} of ~${fmt(firstPaint.total_estimate)} reads, loading the rest…`,
+    title: 'The reads drawn are the ones this view keeps. The rest of its reads are still loading:'
+      + ' the read counts are estimates and the SV band waits for them. Cluster, Sort, Analyse and scans load'
+      + ' every read in view themselves, so they wait for the rest too.',
+  };
+}
+
 /**
  * Bottom-right chip of a read panel whose reads the server sampled (a deep
- * BAM view), or which loads every read on request ("Load all").
+ * BAM view), or which loads every read on request ("Load all"), or whose
+ * first paint is showing while the rest of the view loads.
  */
-export function ReadSampleNotice({ datasetId, sampling }: { datasetId: string; sampling: WorkingSampling | null }) {
+export function ReadSampleNotice({ datasetId, sampling, firstPaint = null }: {
+  datasetId: string; sampling: WorkingSampling | null; firstPaint?: FirstPaintInfo | null;
+}) {
   const lowMemory = usePerformanceStore(s => s.info?.effective === 'low');
   const loadAll = useBrowserStore(s => Boolean(s.loadAllReads?.[datasetId]));
   const setLoadAllReads = useBrowserStore(s => s.setLoadAllReads);
   const exporting = useBrowserStore(s => s.exportInProgress);
-  if (exporting || (!sampling && !loadAll)) return null;
   const base = 'absolute bottom-0 right-1 z-20 flex items-center gap-1 rounded-t bg-white/90 px-1 text-[11px] text-gray-600 dark:bg-gray-900/90 dark:text-gray-300';
+  if (!exporting && firstPaint) {
+    const { text, title } = firstPaintNoticeText(firstPaint);
+    return (
+      <div className={base} data-testid={`read-first-paint-notice-${datasetId}`} title={title}>
+        <span>{text}</span>
+      </div>
+    );
+  }
+  if (exporting || (!sampling && !loadAll)) return null;
   if (!sampling) {
     return (
       <div className={base} data-testid={`read-sample-notice-${datasetId}`} data-sampled="false">

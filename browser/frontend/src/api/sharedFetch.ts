@@ -1,3 +1,4 @@
+import { reportAuthStatus } from '../stores/sessionExpiredStore';
 import { signalFilterUrl } from '../utils/signalFilters';
 import { decodeReadStream, READ_STREAM_TYPE, type ReadProgress } from './readStream';
 export type ReadRequestOptions = RequestInit & { onReadProgress?: ReadProgress };
@@ -10,6 +11,7 @@ let activeApiRequests = 0;
 let apiActivity = 0;
 let activeReadRequests = 0;
 let readActivity = 0;
+const readIdleListeners = new Set<() => void>();
 const backgroundSyncPaths = new Set([
   '/api/render/live_state', '/api/tabs/heartbeat', '/api/jupyter/settings/sync',
   '/api/jupyter/browser_order', '/api/jupyter/sync_peaks', '/api/regions/catalog',
@@ -26,6 +28,25 @@ export function readIdleToken(): number | undefined {
   return activeReadRequests === 0 ? readActivity : undefined;
 }
 
+/** Auxiliary viewport work can start as soon as visible read bodies finish.
+ * Unlike speculative prefetch this needs no quiet interval. Abort releases a
+ * superseded view's waiter without starting its request. */
+export function waitForReadRequests(signal: AbortSignal): Promise<void> {
+  return new Promise(resolve => {
+    const finish = () => {
+      readIdleListeners.delete(check);
+      signal.removeEventListener('abort', finish);
+      resolve();
+    };
+    const check = () => {
+      if (signal.aborted || activeReadRequests === 0) finish();
+    };
+    readIdleListeners.add(check);
+    signal.addEventListener('abort', finish, { once: true });
+    check();
+  });
+}
+
 async function withApiActivity<T>(work: () => Promise<T>, options?: RequestInit, url = ''): Promise<T> {
   if ((options as RequestInit & { priority?: string })?.priority === 'low') return work();
   const path = new URL(url || '/', 'http://localhost').pathname;
@@ -37,7 +58,10 @@ async function withApiActivity<T>(work: () => Promise<T>, options?: RequestInit,
   try { return await work(); }
   finally {
     activeApiRequests--; apiActivity++;
-    if (isRead) { activeReadRequests--; readActivity++; }
+    if (isRead) {
+      activeReadRequests--; readActivity++;
+      if (activeReadRequests === 0) for (const listener of readIdleListeners) listener();
+    }
   }
 }
 
@@ -157,6 +181,13 @@ function _logFetch(input: RequestInfo | URL, options?: RequestInit): void {
   }
 }
 
+/** Nucleosome panel requests that never change what a read response holds under its URL: what they move on the server
+ * (the regularity and patch lanes' parameters, tiles, references) is part of the datasets' regularity identity, which
+ * read URLs carry, so the read responses already held stay valid (a returning setting finds its rows again). An
+ * Analyse (/api/nuc/jobs) changes the source identity and is not listed. */
+export const READ_SAFE_NUC_POSTS = ['/api/nuc/regularity', '/api/nuc/geometries', '/api/nuc/patch_labels',
+  '/api/nuc/status', '/api/nuc/summary', '/api/nuc/patches', '/api/nuc/records'];
+
 export function fetchApiResponse(input: RequestInfo | URL, options?: RequestInit): Promise<Response> {
   // API routes are session-scoped on the backend. Force credentials here so a
   // caller cannot accidentally override the cookie behavior with `omit`.
@@ -169,9 +200,12 @@ export function fetchApiResponse(input: RequestInfo | URL, options?: RequestInit
       '/api/jupyter/browser_order', '/api/jupyter/sync_peaks', '/api/scan_peaks',
       '/api/regions/catalog', '/api/preferences/analysis', '/api/quality_filters',
       // Read-only counts of the view (the toolbar's Quality group): never a reason to drop loaded reads.
-      '/api/quality/impact'].includes(path)) clearLoadedReadRegions();
+      '/api/quality/impact',
+      ...READ_SAFE_NUC_POSTS].includes(path)) clearLoadedReadRegions();
   return withApiActivity(async () => {
     const response = await fetch(input, { ...(options ?? {}), credentials: 'include' });
+    // 401: the server no longer accepts this tab (its token changed): say so, never fail silently.
+    if (response.status === 401) reportAuthStatus(401);
     if (path === '/api/quality_filters' && options?.method?.toUpperCase() === 'POST' && response.ok) {
       // Restoring settings already active on the server must not discard a
       // newly loaded view. Older servers without `changed` still invalidate.
@@ -302,7 +336,9 @@ async function fetchJsonBody<T>(url: string, options?: ReadRequestOptions): Prom
       }
     }
     const suffix = detail ? `: ${detail}` : '';
-    throw new Error(`API error ${response.status}${suffix}`);
+    // The status and the server's detail ride along, so a caller can tell an expected outcome (a superseded
+    // request's 409) from a failure without parsing the message.
+    throw Object.assign(new Error(`API error ${response.status}${suffix}`), { status: response.status, detail });
   }
   if (response.headers?.get('content-type')?.includes(READ_STREAM_TYPE)) {
     return await decodeReadStream(response, options?.onReadProgress) as T;

@@ -49,8 +49,22 @@ def nfr_states(state, job_id, feature):
             else:
                 p = (rec.get('p') or {}).get(name)
                 value = '.' if p is None else ('1' if p >= threshold else '0')
-        for read in _names(m):
-            per_name.setdefault((m['dataset'], read), set()).add(value)
+        ds = (getattr(state, 'datasets', None) or {}).get(m['dataset'])
+        if getattr(ds, 'data_type', None) == 'bam_livelift':
+            from services.scan.states import _Keyer
+            keyer = _Keyer(state, m['dataset'], dict(enumerate(ds.paths)))
+            records = m.get('source_members') or [m]
+            for rec in records:
+                key = rec.get('record_key')
+                if not key and rec.get('record_sha256') and rec.get('read_name'):
+                    record = str(rec['record_sha256']) + ':' + str(rec.get('alignment_occurrence', 0))
+                    index = next((i for i, p in enumerate(ds.paths) if p == rec.get('source_path')), int(rec.get('input_index', 0)))
+                    key = keyer.key(index, rec['read_name'], record)
+                if key:
+                    per_name.setdefault((m['dataset'], key), set()).add(value)
+        else:
+            for read in _names(m):
+                per_name.setdefault((m['dataset'], read), set()).add(value)
     datasets = [d['dataset_id'] for d in result.get('datasets') or ()] or sorted({m['dataset'] for m in result['molecules'].values()})
     if feature['kind'] == 'nfr-variant':
         v = next(v for v in nfr['variants'] if v['name'] == name)

@@ -268,7 +268,7 @@ methylation, short reads, footprints that are mostly not nucleosomes). The
 diagnostics report the basis, so a disagreement can be checked by hand.
 
 `diagnose_bam_tags` reports `legacy_frame` (`molecular` / `seq`) and
-`legacy_frame_basis` next to `fire_basis`. When the reads made the frame
+`legacy_frame_basis` next to `legacy_tag_frame`. When the reads made the frame
 molecular, Diagnose BAM says so instead of the unverifiable-frame warning.
 The warning shown when the dataset is added is FiberHMM's and is unchanged.
 

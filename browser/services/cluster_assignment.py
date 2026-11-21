@@ -187,8 +187,7 @@ def cluster_reads(reads_df, peak_regions, n_clusters, start, method="kmeans",
 
         sorted_patterns = sorted(
             pattern_to_reads.keys(),
-            key=lambda p: len(pattern_to_reads[p]),
-            reverse=True,
+            key=lambda p: (-len(pattern_to_reads[p]), p),
         )
 
         max_combinatorial = 50
@@ -287,7 +286,7 @@ def cluster_compact_reads(compact_reads, peak_regions, region_start, n_clusters,
                           random_state=42, cluster_feature_rules=None,
                           cluster_rule_context=None, window_groups=None,
                           resolution=1.0, fit_rows=None, missing_feature_groups=None,
-                          features_out=None):
+                          features_out=None, centers_out=None):
     """
     Cluster reads directly from compact format, skipping DataFrame intermediate.
 
@@ -316,7 +315,7 @@ def cluster_compact_reads(compact_reads, peak_regions, region_start, n_clusters,
     )
 
     if features_out is not None:
-        features_out.update(features=X, read_ids=read_ids, peak_widths=peak_widths)
+        features_out.update(features=X, read_ids=read_ids, peak_widths=peak_widths, peak_modes=peak_modes_used)
 
     if X.size == 0:
         return {}, {}, None, None
@@ -368,8 +367,7 @@ def cluster_compact_reads(compact_reads, peak_regions, region_start, n_clusters,
 
         sorted_patterns = sorted(
             pattern_to_reads.keys(),
-            key=lambda p: len(pattern_to_reads[p]),
-            reverse=True,
+            key=lambda p: (-len(pattern_to_reads[p]), p),
         )
 
         max_combinatorial = 50
@@ -383,7 +381,7 @@ def cluster_compact_reads(compact_reads, peak_regions, region_start, n_clusters,
             from services.dynamic_clustering import match_pattern_to_cluster, read_peak_overlap_weights
             reads_by_id = {}
             for read in compact_reads:
-                reads_by_id.setdefault(read.get("id"), read)
+                reads_by_id.setdefault(read.get("analysis_id") or read.get("id"), read)
             labels = np.empty(n_samples, dtype=np.int32)
             for i in range(n_samples):
                 pattern = read_patterns[i]
@@ -418,13 +416,14 @@ def cluster_compact_reads(compact_reads, peak_regions, region_start, n_clusters,
         element_read_ids = {i: [] for i in range(len(elements))}
         for read_idx, pattern in enumerate(read_patterns):
             for elem_idx, is_open in enumerate(pattern):
-                if is_open and elem_idx in element_read_ids:
+                # Only open (1): a missing element (-1, a window without the feature) is not open.
+                if is_open == 1 and elem_idx in element_read_ids:
                     element_read_ids[elem_idx].append(read_ids[read_idx])
         clusters = {}
         for pattern, label in pattern_to_label.items():
             clusters[int(label)] = {
                 "pattern": pattern,
-                "peak_states": {f"peak_{i}": bool(bit) for i, bit in enumerate(pattern)},
+                "peak_states": {f"peak_{i}": bit == 1 for i, bit in enumerate(pattern)},
                 "read_ids": [read_ids[i] for i in range(n_samples) if labels[i] == label],
             }
         combinatorial_info = {
@@ -440,7 +439,13 @@ def cluster_compact_reads(compact_reads, peak_regions, region_start, n_clusters,
 
     elif fit_rows is not None and method in ("kmeans", "minibatch"):
         from services.matched_view_clustering import _fit_predict
-        labels = _fit_predict(X, np.asarray(fit_rows, dtype=np.int64), n_clusters, method, random_state)
+        if len(read_ids) != len(compact_reads):
+            # A nucleosome feature set excludes no-calls records; fit indices name the original rows.
+            original_ids = [r.get('analysis_id') or r['id'] for r in compact_reads]
+            fitted_ids = {original_ids[i] for i in fit_rows}
+            fit_rows = [i for i, read_id in enumerate(read_ids) if read_id in fitted_ids]
+        labels = _fit_predict(X, np.asarray(fit_rows, dtype=np.int64), n_clusters, method, random_state,
+                              centers_out=centers_out)
 
     elif method == "minibatch":
         try:

@@ -48,6 +48,16 @@ describe('autosave and genome declarations', () => {
     for (const [state] of mocked(saveAutoSave).mock.calls) expect(state.genomeDeclarations).toBeUndefined();
   });
 
+  it('a public page never asks for them (host-only: a public server refuses the request)', async () => {
+    useBrowserStore.setState({ publicMode: true } as never);
+    try {
+      await autoSaveNow();
+      expect(getGenomeDeclarations).not.toHaveBeenCalled();
+    } finally {
+      useBrowserStore.setState({ publicMode: false } as never);
+    }
+  });
+
   it('drains older saves before capturing and committing the required update save', async () => {
     let release!: (value: []) => void;
     mocked(getGenomeDeclarations).mockImplementationOnce(() => new Promise<[]>(resolve => { release = resolve; }))

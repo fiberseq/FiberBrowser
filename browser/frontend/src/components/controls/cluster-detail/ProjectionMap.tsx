@@ -66,6 +66,12 @@ export interface ProjectionMapProps {
   onClearFocus: () => void;
   /** Outline one read in every panel (the read menu's Highlight read). */
   onShowRead: (readId: string) => void;
+  /** Cluster views: per-dot colours (null/absent: cluster colours), the colour/feature controls and each dot's value. */
+  pointColors?: ReadonlyArray<string | null> | null;
+  colorControls?: ReactNode;
+  colorValue?: (index: number) => string | null;
+  /** The map is built from other features than the clustering: the merge preview is not what Merge does. */
+  featureOverride?: boolean;
 }
 
 /**
@@ -104,6 +110,10 @@ export function ProjectionMap({
   onFocusCluster,
   onClearFocus,
   onShowRead,
+  pointColors = null,
+  colorControls = null,
+  colorValue,
+  featureOverride = false,
 }: ProjectionMapProps) {
   const clusterColors = useMemo(() => {
     const out: Record<number, string> = {};
@@ -216,10 +226,13 @@ export function ProjectionMap({
           {strand ? ` · ${strand} strand` : ''}
           {orientation ? ` · aligned ${orientation}` : ''}
         </div>
+        {colorValue && colorValue(index) != null && (
+          <div className="text-gray-600 dark:text-gray-300" data-testid="projection-tooltip-value">{colorValue(index)}</div>
+        )}
         <div className="mt-0.5 text-[10px] text-gray-400">Click: focus {getClusterLabel(now, true)} · ⇧ adds · {MOD}-click: show this read</div>
       </>
     );
-  }, [datasetLabel, projectionData]);
+  }, [colorValue, datasetLabel, projectionData]);
 
   const mapProps = projectionData ? {
     coordsX: projectionData.coords_x,
@@ -227,6 +240,7 @@ export function ProjectionMap({
     pointIds: projectionData.read_ids,
     datasetIds: projectionData.dataset_ids,
     clusterColors,
+    pointColors,
     highlightedClusters: focus,
     highlightLabels: projectionData.labels_before,
     selectedClusters: selected,
@@ -235,7 +249,7 @@ export function ProjectionMap({
     yLabel: axisLabel(1),
     onPointClick: handlePointClick,
     renderTooltip,
-    ariaLabel: `Read map (${projectionData.method}): ${projectionData.n_reads} reads coloured by cluster. Use the cluster buttons below to focus a cluster.`,
+    ariaLabel: `Read map (${projectionData.method}): ${projectionData.n_reads} reads coloured by ${pointColors ? 'the chosen value' : 'cluster'}. Use the cluster buttons below to focus a cluster.`,
   } : null;
 
   const info = mergeStrategyInfo(merge.strategy);
@@ -293,6 +307,8 @@ export function ProjectionMap({
           </AnalysisButton>
         </span>
       </div>
+
+      {colorControls}
 
       {showMergeSettings && (
         <div className="rounded border border-cyan-100 bg-cyan-50/40 p-1.5 text-[11px] text-gray-600 dark:border-cyan-900/40 dark:bg-cyan-950/10 dark:text-gray-300" data-testid="merge-settings">
@@ -358,9 +374,9 @@ export function ProjectionMap({
             {projectionView !== 'before' && projectionData && projectionData.dissolved.length > 0 && (
               <AnalysisButton
                 onClick={onApplyAutocull}
-                disabled={culling}
+                disabled={culling || featureOverride}
                 variant="warning"
-                title="Merge as previewed (Unmerge switches back)"
+                title={featureOverride ? 'The map is built from other features than the clustering: set Built from to Clustered features to merge as previewed' : 'Merge as previewed (Unmerge switches back)'}
                 data-testid="merge-apply"
               >
                 {culling ? 'Merging…' : `Merge ${projectionData.dissolved.length} now`}

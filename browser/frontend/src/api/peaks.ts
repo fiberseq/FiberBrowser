@@ -3,6 +3,9 @@ import { fetchJson } from './sharedFetch';
 const API_BASE = '/api';
 
 export interface ScanPeaksResponse {
+  execution_engine?: 'scan:peaks' | 'legacy';
+  execution_note?: string;
+  tier_rule?: 'local' | 'window';
   peaks: Array<{
     start: number;
     end: number;
@@ -32,6 +35,9 @@ export interface ScanPeaksResponse {
 }
 
 export interface PeakDetectionSettings {
+  /** Compatibility options retained for one release. */
+  executionEngine?: 'scan' | 'legacy';
+  tierRule?: 'local' | 'window';
   smoothWidth: number;
   thresholdStrong: number;
   thresholdMedium: number;
@@ -69,6 +75,8 @@ export async function scanPeaks(
     method: 'POST',
     headers,
     body: JSON.stringify({
+      ...(peakSettings?.executionEngine ? { execution_engine: peakSettings.executionEngine } : {}),
+      ...(peakSettings?.tierRule ? { tier_rule: peakSettings.tierRule } : {}),
       ...(readStrand ? { strand: readStrand } : {}),
       min_width: minWidth,
       min_reads: minReads,

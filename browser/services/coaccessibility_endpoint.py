@@ -247,6 +247,8 @@ def _coacc_scope(
         include_layers=layer is not None,
         requested_layers=requested_layers,
     )
+    from services.lift.capability import require_for_ids
+    require_for_ids(state, query.dataset_ids, "coaccessibility")
     width = max(0, int(query.region_width))
     if bin_size > 0:
         actual_bin_size = int(bin_size)
@@ -596,3 +598,15 @@ def get_coacc_strip_image_bytes(
     img.save(buf, format="PNG")
     buf.seek(0)
     return buf.read()
+
+
+def sampled_scope(state, scope: CoaccRequestScope, n: int, seed: int, **scope_args) -> CoaccRequestScope:
+    """Plots' Random N reads per dataset: the reads in scope by the stable sampling rule (services/stable_sample:
+    smallest blake2b keys of (seed, dataset, read name)), as a read-ID scope of the same request."""
+    import json
+    from services.stable_sample import lowest_k, stable_key
+    by_ds = {}
+    for ds in scope.query.dataset_ids:
+        ids = sorted({str(r.get("id")) for r in scope.query.build_working_set(state, ds).reads})
+        by_ds[ds] = lowest_k(ids, int(n), key=lambda i, d=ds: stable_key(int(seed), d, i))
+    return _coacc_scope(state, **{**scope_args, "read_ids": None, "read_ids_by_dataset": json.dumps(by_ds)})

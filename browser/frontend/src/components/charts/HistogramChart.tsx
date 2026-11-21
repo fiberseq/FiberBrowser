@@ -31,6 +31,8 @@ interface HistogramChartProps {
   selection?: { from: number; to: number } | null;
   /** Drag across bars to choose a range; called with inclusive group indices. */
   onSelectRange?: (from: number, to: number) => void;
+  /** A fixed top of the y axis (a shared y across a set of plots); absent: autoscale to the bars. */
+  yMax?: number;
 }
 
 function defaultYFormat(value: number): string {
@@ -57,6 +59,7 @@ function drawHistogram(
   groupedLayout: boolean,
   yFormat: (v: number) => string,
   selection: { from: number; to: number } | null = null,
+  yMax?: number,
 ) {
   ctx.clearRect(0, 0, width, height);
   if (groups.length === 0) return;
@@ -77,6 +80,7 @@ function drawHistogram(
       if ((b.ciHigh ?? b.value) > maxVal) maxVal = b.ciHigh ?? b.value;
     }
   }
+  if (yMax != null && yMax > 0) maxVal = yMax;
   if (maxVal === 0) maxVal = 1;
 
   ctx.strokeStyle = '#ccc';
@@ -196,14 +200,15 @@ export function HistogramChart({
   yFormat = defaultYFormat,
   selection = null,
   onSelectRange,
+  yMax,
 }: HistogramChartProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [drag, setDrag] = useState<{ from: number; to: number } | null>(null);
   const shown = drag ?? selection;
 
   const drawFn = useCallback((ctx: CanvasRenderingContext2D, w: number, h: number) => {
-    drawHistogram(ctx, w, h, groups, yLabel, groupedLayout, yFormat, shown);
-  }, [groups, yLabel, groupedLayout, yFormat, shown]);
+    drawHistogram(ctx, w, h, groups, yLabel, groupedLayout, yFormat, shown, yMax);
+  }, [groups, yLabel, groupedLayout, yFormat, shown, yMax]);
 
   const groupAt = (clientX: number): number => {
     const rect = canvasRef.current!.getBoundingClientRect();
@@ -262,7 +267,7 @@ export function HistogramChart({
         renderChart={(w, h) => (
           <HistogramChart groups={groups} width={w} height={h}
             yLabel={yLabel} groupedLayout={groupedLayout} filename={filename}
-            yFormat={yFormat} />
+            yFormat={yFormat} yMax={yMax} />
         )}
       />
     </div>

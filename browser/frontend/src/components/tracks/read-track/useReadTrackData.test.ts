@@ -7,6 +7,7 @@ import {
   canBatchReadDatasets,
   coverageRequestKey,
   displayCapacity,
+  discoveredLayerDefault,
 } from './useReadTrackData';
 import {computeReadTrackLayout} from './layout';
 
@@ -99,5 +100,16 @@ describe('read-ID request filters', () => {
     const long = new Set(Array.from({ length: 750 }, (_, i) => `m64011_190830_220126/${100000 + i}/ccs/fwd_segment`));
     expect(readFilterFitsRequest(long)).toBe(false);
     expect(readFilterFitsRequest(new Set(['read-a']))).toBe(true);
+  });
+});
+
+describe('layer discovery defaults', () => {
+  it('leaves regularity and patches unset so the Regularity view switches them on whatever arrives first', () => {
+    expect(discoveredLayerDefault('nucreg')).toBeNull();
+    expect(discoveredLayerDefault('nucpatch')).toBeNull();
+  });
+  it('switches the primary layers on and writes opt-in layers off', () => {
+    for (const k of ['nuc', 'tf', 'nucsz', 'nucseg']) expect(discoveredLayerDefault(k)).toBe(true);
+    for (const k of ['fire', 'm6a', 'custom']) expect(discoveredLayerDefault(k)).toBe(false);
   });
 });

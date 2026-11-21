@@ -1,14 +1,20 @@
+import { serializeSplitReads } from './splitPanelStore';
+import { normalizeClusterViewSettings, type ClusterViewSettings } from '../utils/clusterViewSettings';
+import { dualWriteFrontend, restoreHubOnly } from '../features/hub/migration';
+import { normalizeSvConflictOptions, type SvConflictOptions } from '../utils/svConflicts';
 import { validateMatchedState } from '../utils/matchedRegions';
 import { normalizeSignalFilters } from '../utils/signalFilters';
-import { normalizeClusterGroupLabels, normalizeSvSplits } from './svSlice';
+import { normalizeSvCarrierEvidence, normalizeClusterGroupLabels, normalizeSvSplits } from './svSlice';
+import { restoreDifferencesSession, restoreHistoricalMembership, legacySplitDefinitions, type DifferencesSession } from '../features/differences/session';
+import '../features/differences/persistence';
 import { clampMinSvLen, SV_MIN_LEN_DEFAULT, clampMinSvSupport, SV_MIN_SUPPORT_DEFAULT } from '../components/tracks/read-track/svDrawing';
 import { normalizeFeatureRefs } from './featureStore';
 import { normalizePinnedMotifs } from '../utils/pinnedMotifs';
 import { clampMotifP, normalizeCustomMotifs, normalizeScoreMode } from '../utils/motifSettings';
-import { restoreExtensions, serializeExtensions } from './storeExtensions';
+import { refreshFreeKeys, restoreExtensions, serializeExtensions } from './storeExtensions';
 import type { BrowserState } from './browserStore';
 import type { CatalogEntry, CompositeTrack } from '../types/dataset';
-import type { ClusterWindowPeaks } from '../types/clustering';
+import type { ClusterMetricCohort, ClusterWindowPeaks } from '../types/clustering';
 import type { SavedTrack } from './savedTracksSlice';
 import type { ReadFilterSource } from './clusterSlice';
 import { toArray, toSet } from './hydration';
@@ -63,7 +69,15 @@ export interface Snapshot {
   coalesceKey?: string;
   /** This step closed these datasets: undoing it reopens them from their files, redoing closes them again. */
   closedDatasets?: SerializedDataset[];
+  /** Unique per recorded step (a coalesced step gets a new one): lets a late effect fold into exactly its step. */
+  id?: number;
+  /** A "Before …" checkpoint (seedHistoryBaseline), never a step a late correction may rewrite. */
+  baseline?: boolean;
 }
+
+let snapshotSeq = 0;
+/** The id the most recently recorded step got (0: none yet). */
+export const lastSnapshotId = () => snapshotSeq;
 
 type SnapshotOptions = {
   kind?: SnapshotKind; coalesceKey?: string; coalesceMs?: number; closedDatasets?: SerializedDataset[];
@@ -120,6 +134,7 @@ export type SnapshotKind =
  * (same kind, within the coalescing window) must not replace it. */
 let baselineCounter = 0;
 const baselineKey = () => `baseline-${++baselineCounter}`;
+const isBaselineKey = (key?: string) => Boolean(key?.startsWith('baseline-'));
 
 /**
  * Display preferences kept in snapshots for sessions and crash recovery, but
@@ -151,9 +166,12 @@ export function sameHistoryState(a: SerializedState | undefined | null, b: Seria
  */
 function echoesRestore(state: BrowserState, snapshotState: SerializedState, kind: SnapshotKind, explicit = false): boolean {
   if (!(state._historyPaused || Date.now() - state._lastRestoreTime < 1500)) return false;
-  if (state._historyPaused || (kind === 'navigation' && !explicit)) return true;
+  if (state._historyPaused) return true;
   const current = state._historyStack[state._historyPointer];
+  // An import without history still needs its first checkpoint, even during
+  // the restore window: with no current snapshot, there is nothing to echo.
   if (!current) return false;
+  if (kind === 'navigation' && !explicit) return true;
   try {
     return JSON.stringify(historyComparable(current.state)) === JSON.stringify(historyComparable(snapshotState));
   } catch {
@@ -221,6 +239,9 @@ export function seedHistoryBaseline(
  */
 /** Minimal dataset info stored in snapshots for crash recovery. */
 export interface SerializedDataset {
+  molecule_groups?: [string, string][];
+  /** A native dataset's joint dedup policy over its molecule groups (only when not 'off'). */
+  joint_dedup?: 'off' | 'by_molecule';
   id: string;
   label: string;
   paths: string[];
@@ -232,6 +253,8 @@ export interface SerializedDataset {
   derived_layers?: Record<string, unknown>;
   /** A dataset closed while it had a reference of its own (services/panel_genomes.py): given back on reopen. */
   reference?: ClosedDatasetReference;
+  /** A live-lift dataset's map, haplotypes and settings: reopened through the lift route, never as a plain BAM. */
+  live_lift?: { manifest: string; haplotypes: string[]; settings: Record<string, unknown> };
 }
 
 /** A dataset's own reference as Undo gives it back (POST /api/panel_genomes/attach). */
@@ -282,18 +305,23 @@ export interface SerializedState {
   clusterAssignments: Record<string, Record<string, number>>;
   /** SV allele splits, per state key (stores/svSlice.ts); absent in older snapshots. */
   svSplits?: Record<string, unknown>;
+  differencesSession?: DifferencesSession;
+  svCarrierEvidence?: Record<string, unknown>;
   /** Names a group source gave cluster ids, per state key; absent in older snapshots. */
   clusterGroupLabels?: Record<string, Record<number, string>>;
   /** SV display settings (fb-n9-sv); absent in older snapshots. */
   svDisplayEnabled?: boolean;
   svMinLen?: number;
   svMinSupport?: number;
+  svConflictOptions?: SvConflictOptions;
   /** Retired (fb-n11-tracks): the SV summary is a track row; a true here restores it at its smallest height. */
   svTrackCollapsed?: boolean;
   clusterOrder: Record<string, number[]>;
   clusterPatterns: Record<number, number[]>;
   clusterCentroids?: Record<number, number[]>;
   clusterPeakWidths?: number[];
+  /** The fit's molecule metric cohort, with its patterns or centroids (older snapshots: none). */
+  clusterMetricCohort?: ClusterMetricCohort;
   clusterPeakRegions: Array<{ start: number; end: number; mode?: string }>;
   /** A run over panels at several loci: each panel's own matched peaks and view (older saves: none). */
   clusterMatchedRun?: import('../utils/clusterMatchedRun').ClusterMatchedRun | null;
@@ -307,6 +335,8 @@ export interface SerializedState {
   subnucleosomalThreshold: number;
   accessibilityThreshold: number;
   /** Merge similar clusters' settings (older saves: none, the defaults). */
+  /** Cluster views: metaprofile channels, map colour and features (older saves: none, the defaults). */
+  clusterViewSettings?: ClusterViewSettings;
   mergeMinFraction?: number;
   mergeMaxSimilarity?: number;
   mergeStrategy?: string;
@@ -414,6 +444,11 @@ export interface SerializedState {
   highlights?: unknown[];
   /** The Projection map (autosave only, not undo snapshots: utils/projectionExport projectionForSave). */
   readProjection?: unknown;
+  /** Autosave only: the Plots Gallery (features/plots/gallery; sessions carry it as frontend.plotsGallery). */
+  plotsGallery?: unknown;
+  /** Autosave only: the open meta-locus (features/metaLocus metaLocusSessionPayload; sessions carry it as
+   *  frontend.metaLocus), so a recovery after a restart reopens its pool. */
+  metaLocus?: unknown;
 
   // Selection
   selectedReadIds: Record<string, string[]>; // Set → array
@@ -488,6 +523,12 @@ export interface HistorySlice {
    * joins it rather than making an undo step of its own. Not while history is paused.
    */
   foldIntoCurrentSnapshot: (snapshotState: SerializedState) => void;
+  /**
+   * The saved states of the steps `ids` (their labels, times and places stay) become what `update` returns: a late
+   * result that belongs to a step recorded before others that left it alone (a source view's exact remap across the
+   * next source views' reveals) joins each of them. Not while history is paused.
+   */
+  rewriteSnapshots: (ids: number[], update: (snapshotState: SerializedState) => SerializedState) => void;
   pushSerializedSnapshot: (label: string, snapshotState: SerializedState, options?: { kind?: SnapshotKind; coalesceKey?: string; coalesceMs?: number }) => void;
   undo: () => void;
   redo: () => void;
@@ -549,11 +590,15 @@ export function serializeDataset(d: any): SerializedDataset {
     label: d.label,
     paths: d.paths || (d.path ? [d.path] : []),
     ...(d.source_identity ? { source_identity: d.source_identity } : {}),
+    ...(d.molecule_groups ? { molecule_groups: d.molecule_groups.map((p: [string, string]) => [p[0], p[1]] as [string, string]) } : {}),
+    ...(d.joint_dedup && d.joint_dedup !== 'off' ? { joint_dedup: d.joint_dedup } : {}),
     color: d.color,
     data_type: d.data_type,
     layer_type: d.layer_type ?? null,
     available_layers: d.available_layers ?? {},
     derived_layers: d.derived_layers ?? {},
+    ...(d.live_lift ? { live_lift: { manifest: d.live_lift.manifest, haplotypes: d.live_lift.haplotypes,
+      settings: d.live_lift.settings } } : {}),
   };
 }
 
@@ -576,15 +621,46 @@ export function datasetChangesBetween(stack: Snapshot[], from: number, to: numbe
 // A dataset's own-contigs reference key (services/panel_genomes.py): `contigs:<dataset id>`.
 const CONTIGS_KEY = 'contigs:';
 // Fields whose string values are dataset ids or per-dataset state keys.
-const DATASET_ID_FIELDS = new Set(['datasetId', 'sourceDatasetId', 'datasetIds', 'stateKey', 'stateKeys']);
+// (`dataset_id`: a graph run's observations, ClusterMatchedRun.graph, in the server's spelling.)
+const DATASET_ID_FIELDS = new Set(['datasetId', 'sourceDatasetId', 'datasetIds', 'stateKey', 'stateKeys', 'dataset_id']);
 // Top-level records keyed by a dataset's state key (its id, or `<id>:…`).
 const DATASET_KEYED_RECORDS = new Set([
   'selectedClusters', 'clusterAssignments', 'clusterOrder', 'readSortOrder', 'filteredReadIds',
   'readFilterSources', 'clusterFocus', 'readStateDetails', 'readScrollOffsets', 'selectedReadIds',
-  'excludedReadIds', 'svSplits', 'clusterGroupLabels',
+  'excludedReadIds', 'svSplits', 'clusterGroupLabels', 'svCarrierEvidence',
 ]);
 // The same, inside each cluster-tree branch (ClusterTreeNode).
-const CLUSTER_TREE_NODE_KEYED_RECORDS = ['assignments', 'order', 'focus', 'readScope'];
+const CLUSTER_TREE_NODE_KEYED_RECORDS = ['assignments', 'order', 'focus', 'readScope', 'groupLabels', 'graphProvenance', 'graphLabelsReplaced'];
+
+/**
+ * A tree node's graph-run provenance, keyed by state key. A node saved while it held one run's provenance whole
+ * (`{destinations, observations, owned}`; a development format, never released) gets that entry under each of its
+ * destinations, so a pop-out still splits the node's labels by the run (Codex post-merge review, group A round 1,
+ * #5). A malformed one is dropped (the pop-out then uses the current run's provenance).
+ */
+function keyedGraphProvenance<T>(node: T): T {
+  if (!node || typeof node !== 'object' || Array.isArray(node)) return node;
+  const gp = (node as { graphProvenance?: unknown }).graphProvenance;
+  const { destinations, observations, owned } = (gp ?? {}) as { destinations?: unknown; observations?: unknown; owned?: unknown };
+  // (A keyed entry is an object, never an array, whatever its state key.)
+  if (!Array.isArray(destinations)) return node;
+  const { graphProvenance: _old, ...rest } = node as Record<string, unknown>;
+  if (!Array.isArray(observations) || !owned || typeof owned !== 'object' || Array.isArray(owned)) return rest as T;
+  const entry = { observations, owned };
+  return { ...rest, graphProvenance: Object.fromEntries(destinations.filter(k => typeof k === 'string').map(k => [k, entry])) } as T;
+}
+
+/** Every tree node with keyed graph-run provenance (the same object when none needed it). */
+function withKeyedGraphProvenance(nodes: Record<string, unknown> | undefined): Record<string, unknown> {
+  if (!nodes) return {};
+  let changed = false;
+  const out = Object.fromEntries(Object.entries(nodes).map(([id, n]) => {
+    const next = keyedGraphProvenance(n);
+    if (next !== n) changed = true;
+    return [id, next];
+  }));
+  return changed ? out : nodes;
+}
 
 /**
  * Rename dataset ids in a serialized state (a reopened dataset can come back
@@ -616,6 +692,10 @@ export function remapDatasetIds<T>(value: T, idMap: Record<string, string>): T {
     for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
       // A panel on its dataset's own contigs (reference key `contigs:<dataset id>`).
       if (k === 'genome' && typeof x === 'string' && x.startsWith(CONTIGS_KEY)) out[k] = CONTIGS_KEY + mapId(x.slice(CONTIGS_KEY.length));
+      // Hub descriptors (selected hits, nested hubHit objects, graph paths and
+      // association requests) keep dataset IDs in `datasets` string arrays.
+      // Dataset objects and historical content identities keep their own shape.
+      else if (k === 'datasets' && Array.isArray(x) && x.every(id => typeof id === 'string')) out[k] = x.map(mapId);
       else out[k] = DATASET_ID_FIELDS.has(k) ? mapIdValues(x) : walk(x);
     }
     return out;
@@ -646,15 +726,20 @@ export function remapDatasetIds<T>(value: T, idMap: Record<string, string>): T {
   // A cluster-tree branch keeps its results per state key as well.
   const mapTreeNode = (node: unknown): unknown => {
     if (!node || typeof node !== 'object' || Array.isArray(node)) return node;
-    const out = walk(node) as Record<string, unknown>;
+    // (An unkeyed provenance is keyed first, so its destinations are renamed too.)
+    const out = walk(keyedGraphProvenance(node)) as Record<string, unknown>;
     for (const field of CLUSTER_TREE_NODE_KEYED_RECORDS) if (field in out) out[field] = mapKeys(out[field]);
+    if (out.windowPeaks && typeof out.windowPeaks === 'object') out.windowPeaks = mapWindowPeaks(out.windowPeaks);
     return out;
   };
   if (Array.isArray(value)) return mapDatasets(value) as T;
   if (!value || typeof value !== 'object') return value;
   const out: Record<string, unknown> = {};
   for (const [field, x] of Object.entries(value as Record<string, unknown>)) {
-    if (field === 'datasets') out[field] = mapDatasets(x);
+    // Saved content/provenance identities and reversible historical snapshots
+    // are not the reopened dataset's locator. Keep them for deliberate relink.
+    if (field === 'differencesSession') out[field] = x;
+    else if (field === 'datasets') out[field] = mapDatasets(x);
     else if (DATASET_KEYED_RECORDS.has(field)) out[field] = mapKeys(x);
     else if (field === 'clusterWindowPeaks' && x && typeof x === 'object' && !Array.isArray(x)) {
       out[field] = mapWindowPeaks(x);
@@ -713,7 +798,8 @@ function normalizeClusterWindowPeaks(value: unknown): ClusterWindowPeaks | null 
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const v = value as Partial<ClusterWindowPeaks>;
   if (!Array.isArray(v.regions) || !v.byKey || typeof v.byKey !== 'object') return null;
-  return { regions: v.regions, byKey: v.byKey, ...(v.views && typeof v.views === 'object' ? { views: v.views } : {}) };
+  return { regions: v.regions, byKey: v.byKey, ...(v.scope === 'whole-view' ? { scope: v.scope } : {}),
+    ...(v.views && typeof v.views === 'object' ? { views: v.views } : {}) };
 }
 
 /** Extract the restorable subset of state and convert Sets to arrays. */
@@ -727,7 +813,7 @@ export function serializeState(state: BrowserState): SerializedState {
   // Which plugin packs wrote parts of this state: a build without one leaves them out of an undo step, a recovered
   // state or a session (api/sessionPacks.ts).
   const packs = sessionPackMarker();
-  return {
+  return dualWriteFrontend({
     ...(Object.keys(packs).length ? { packs } : {}),
     // Datasets (for crash recovery)
     datasets: (state.datasets || []).map(serializeDataset),
@@ -761,11 +847,14 @@ export function serializeState(state: BrowserState): SerializedState {
     analysisFilterRules: normalizeAnalysisFilterRules(state.analysisFilterRules),
     clusterAssignments: state.clusterAssignments,
     svSplits: state.svSplits ?? {},
+    differencesSession: state.differencesSession,
+    svCarrierEvidence: state.svCarrierEvidence ?? {},
     clusterGroupLabels: state.clusterGroupLabels ?? {},
     clusterOrder: state.clusterOrder,
     clusterPatterns: state.clusterPatterns,
     clusterCentroids: state.clusterCentroids,
     clusterPeakWidths: state.clusterPeakWidths,
+    clusterMetricCohort: state.clusterMetricCohort,
     clusterPeakRegions: state.clusterPeakRegions,
     clusterMatchedRun: state.clusterMatchedRun ?? null,
     clusterWindowPeaks: state.clusterWindowPeaks ?? null,
@@ -781,6 +870,7 @@ export function serializeState(state: BrowserState): SerializedState {
     mergeMaxSimilarity: state.mergeMaxSimilarity,
     mergeStrategy: state.mergeStrategy,
     mergeThresholds: { ...(state.mergeThresholds ?? {}) },
+    clusterViewSettings: state.clusterViewSettings,
     clusterMergeLog: state.clusterMergeLog ?? null,
 
     // Filtering — convert Sets to arrays
@@ -847,6 +937,7 @@ export function serializeState(state: BrowserState): SerializedState {
     svDisplayEnabled: state.svDisplayEnabled,
     svMinLen: state.svMinLen,
     svMinSupport: state.svMinSupport,
+    svConflictOptions: state.svConflictOptions,
     darkMode: state.darkMode,
     peakSettings: { ...state.peakSettings },
     activeColormap: migrateColormap(state.activeColormap as any),
@@ -892,6 +983,7 @@ export function serializeState(state: BrowserState): SerializedState {
     customMotifs: state.customMotifs,
     // Plugin packs' state (stores/storeExtensions.ts).
     ...serializeExtensions(state),
+    splitPanelReads: serializeSplitReads(state.panels),
 
     // Capture regions cart
     captureRegions: state.captureRegions,
@@ -911,7 +1003,7 @@ export function serializeState(state: BrowserState): SerializedState {
     savedTracks: state.savedTracks ?? [],
     coaccSettings: serializeCoaccSettings(),
     commandHistory: state.commandHistory ?? [],
-  };
+  });
 }
 
 /**
@@ -929,7 +1021,13 @@ function deserializeState(
   options: { restoreViewport?: boolean } = {},
 ): Partial<BrowserState> {
   // Saved by a build with plugin packs this one doesn't have: their panels (and what only they showed) left out.
-  s = withoutMissingPackState(s);
+  s = withoutMissingPackState(restoreHubOnly(s as unknown as Record<string, unknown>) as unknown as SerializedState);
+  const differences = restoreDifferencesSession(s as unknown as Record<string, unknown>);
+  s = { ...s, ...restoreHistoricalMembership(s, differences) };
+  const svSplits = normalizeSvSplits(legacySplitDefinitions(s as unknown as Record<string, unknown>));
+  for (const [key, def] of Object.entries(svSplits)) {
+    if (!s.differencesSession || differences.targets[key]?.frozen) def.frozenImport = true;
+  }
   applyCoaccSettings(s.coaccSettings);
   applyExcludedReads(s.excludedReadIds);
 
@@ -1017,24 +1115,28 @@ function deserializeState(
     analysisSortRules: normalizeAnalysisSortRules(s.analysisSortRules),
     analysisFilterRules: normalizeAnalysisFilterRules(s.analysisFilterRules),
     clusterAssignments: s.clusterAssignments,
-    svSplits: normalizeSvSplits(s.svSplits),
+    svSplits,
+    differencesSession: differences,
+    svCarrierEvidence: normalizeSvCarrierEvidence(s.svCarrierEvidence),
     clusterGroupLabels: normalizeClusterGroupLabels(s.clusterGroupLabels),
     clusterOrder: s.clusterOrder,
     clusterPatterns: s.clusterPatterns,
     clusterCentroids: s.clusterCentroids ?? {},
     clusterPeakWidths: s.clusterPeakWidths ?? [],
+    clusterMetricCohort: s.clusterMetricCohort ?? {},
     clusterPeakRegions: s.clusterPeakRegions,
     clusterMatchedRun: s.clusterMatchedRun ?? null,
     clusterWindowPeaks: normalizeClusterWindowPeaks(s.clusterWindowPeaks),
     dynamicClustering: s.dynamicClustering,
     dynamicOverlapMode: s.dynamicOverlapMode ?? 'aggressive',
-    clusterTreeNodes: (s.clusterTreeNodes ?? {}) as any,
+    clusterTreeNodes: withKeyedGraphProvenance(s.clusterTreeNodes) as any,
     clusterTreeRootIds: s.clusterTreeRootIds ?? [],
     activeClusterTreeNodeId: s.activeClusterTreeNodeId ?? null,
     readSortOrder: s.readSortOrder,
     subnucleosomalThreshold: s.subnucleosomalThreshold,
     accessibilityThreshold: s.accessibilityThreshold,
     ...restoredMergeSettings(s),
+    clusterViewSettings: normalizeClusterViewSettings(s.clusterViewSettings),
     clusterMergeLog: normalizeMergeLog(s.clusterMergeLog),
 
     // Filtering
@@ -1094,6 +1196,7 @@ function deserializeState(
     enabledCigarTypes: s.enabledCigarTypes,
     svDisplayEnabled: s.svDisplayEnabled ?? true,
     svMinLen: clampMinSvLen(s.svMinLen ?? SV_MIN_LEN_DEFAULT),
+    svConflictOptions: normalizeSvConflictOptions(s.svConflictOptions),
     svMinSupport: clampMinSvSupport(s.svMinSupport ?? SV_MIN_SUPPORT_DEFAULT),
     // Theme and UI size are preferences, not steps: undo/redo keep the current ones.
     ...(!currentState && s.darkMode !== undefined ? { darkMode: s.darkMode } : {}),
@@ -1194,6 +1297,60 @@ export function deserializeSavedState(s: SerializedState): Partial<BrowserState>
   return deserializeState(s);
 }
 
+/** Structural equality of restored state values (plain data, Sets and Maps): an undo step leaves the values it does
+ * not change exactly as they are, so nothing subscribed to them re-runs. */
+export function sameRestoredValue(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false;
+  if (a instanceof Set || b instanceof Set) {
+    if (!(a instanceof Set && b instanceof Set) || a.size !== b.size) return false;
+    for (const v of a) if (!b.has(v)) return false;
+    return true;
+  }
+  if (a instanceof Map || b instanceof Map) {
+    if (!(a instanceof Map && b instanceof Map) || a.size !== b.size) return false;
+    for (const [k, v] of a) if (!b.has(k) || !sameRestoredValue(v, b.get(k))) return false;
+    return true;
+  }
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  if (Array.isArray(a)) {
+    const bb = b as unknown[];
+    return a.length === bb.length && a.every((v, i) => sameRestoredValue(v, bb[i]));
+  }
+  const ka = Object.keys(a as object), kb = Object.keys(b as object);
+  if (ka.length !== kb.length) return false;
+  return ka.every(k => Object.prototype.hasOwnProperty.call(b, k)
+    && sameRestoredValue((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]));
+}
+
+/**
+ * What an undo/redo/jump applies: only the restored fields that differ from the current state (the others keep their
+ * references, so their effects and fetches do not re-run), and whether the read lanes must repaint
+ * (`refreshGeneration`): only when a field the snapshot carries changed, and not when only refresh-free fields did (a
+ * saved geometry's star). Fields the restore derives on its own (not in the snapshot) are applied when they differ,
+ * never a reason to repaint by themselves; their own subscribers react. Audit: undoing a star replayed
+ * a whole session restore (genome check, tracks, read reloads, nucleosome requests).
+ *
+ * `current`: the current state put through the same serialize/restore: a carried field the restore only normalises
+ * (defaults filled in, aliases mapped) or resets (Fit scroll offsets) is applied but never a reason to repaint.
+ * `carried`: the snapshot's own keys.
+ */
+export function restoreDelta(restored: Partial<BrowserState>, state: BrowserState,
+  free: ReadonlySet<string> = refreshFreeKeys(), current?: Partial<BrowserState>,
+  carried?: ReadonlySet<string>): { patch: Partial<BrowserState>; refresh: boolean } {
+  const patch: Record<string, unknown> = {};
+  let refresh = false;
+  const base = (current ?? {}) as Record<string, unknown>;
+  const live = state as unknown as Record<string, unknown>;
+  for (const [key, value] of Object.entries(restored)) {
+    if (sameRestoredValue(value, live[key])) continue;
+    patch[key] = value;
+    const isCarried = !carried || carried.has(key);
+    if (isCarried && !free.has(key) && !(key in base && sameRestoredValue(value, base[key]))) refresh = true;
+  }
+  return { patch: patch as Partial<BrowserState>, refresh };
+}
+
 // ============================================================
 // HISTORY SLICE — Implementation
 // ============================================================
@@ -1234,6 +1391,14 @@ export function createHistorySlice(
       });
   };
 
+  /** An undo/redo/jump's delta (restoreDelta) against the current state as the same restore would give it back. */
+  const deltaFor = (snapshotState: SerializedState, state: BrowserState, restoreViewport: boolean) => {
+    const restored = deserializeState(snapshotState, state, { restoreViewport });
+    let current: Partial<BrowserState> | undefined;
+    try { current = deserializeState(serializeState(state), state, { restoreViewport }); } catch { current = undefined; }
+    return restoreDelta(restored, state, refreshFreeKeys(), current, new Set(Object.keys(snapshotState ?? {})));
+  };
+
   const restoreSnapshotAt = (index: number, restoreViewport = false) => {
     const state = get();
     if (index < 0 || index >= state._historyStack.length) return;
@@ -1242,12 +1407,12 @@ export function createHistorySlice(
     if (!snapshot) return;
     const from = state._historyPointer;
 
-    const restored = deserializeState(snapshot.state, state, { restoreViewport });
+    const { patch, refresh } = deltaFor(snapshot.state, state, restoreViewport);
     set({
-      ...restored,
+      ...patch,
       _historyPointer: index,
       _lastRestoreTime: Date.now(),
-      refreshGeneration: state.refreshGeneration + 1,
+      ...(refresh ? { refreshGeneration: state.refreshGeneration + 1 } : {}),
     } as Partial<BrowserState>);
 
     reconcileDatasets(from, index);
@@ -1296,6 +1461,15 @@ export function createHistorySlice(
       });
     },
 
+    rewriteSnapshots: (ids, update) => {
+      if (get()._historyPaused || !ids.length) return;
+      const wanted = new Set(ids);
+      set((s) => {
+        if (!s._historyStack.some(x => x.id != null && wanted.has(x.id))) return {};
+        return { _historyStack: s._historyStack.map(x => (x.id != null && wanted.has(x.id) ? { ...x, state: update(x.state) } : x)) };
+      });
+    },
+
     pushSnapshot: (label: string, options) => {
       const state = get();
       const kind = options?.kind ?? inferSnapshotKind(label);
@@ -1309,6 +1483,8 @@ export function createHistorySlice(
         state: serialized,
         kind,
         coalesceKey,
+        id: ++snapshotSeq,
+        ...(isBaselineKey(options?.coalesceKey) ? { baseline: true } : {}),
         ...(options?.closedDatasets?.length ? { closedDatasets: options.closedDatasets } : {}),
       };
 
@@ -1351,6 +1527,8 @@ export function createHistorySlice(
         state: snapshotState,
         kind,
         coalesceKey,
+        id: ++snapshotSeq,
+        ...(isBaselineKey(options?.coalesceKey) ? { baseline: true } : {}),
       };
 
       set((s) => {
@@ -1389,12 +1567,12 @@ export function createHistorySlice(
       // Pass current state so deserialize can validate datasets/panels. Bump
       // refreshGeneration so read/track fetch hooks repaint from restored
       // filters, cart state, viewport, and cluster state immediately.
-      const restored = deserializeState(snapshot.state, state, { restoreViewport: true });
+      const { patch, refresh } = deltaFor(snapshot.state, state, true);
       set({
-        ...restored,
+        ...patch,
         _historyPointer: targetIdx,
         _lastRestoreTime: Date.now(),
-        refreshGeneration: state.refreshGeneration + 1,
+        ...(refresh ? { refreshGeneration: state.refreshGeneration + 1 } : {}),
       } as Partial<BrowserState>);
 
       reconcileDatasets(from, targetIdx);
@@ -1409,12 +1587,12 @@ export function createHistorySlice(
       if (!snapshot) return;
       const from = state._historyPointer;
 
-      const restored = deserializeState(snapshot.state, state, { restoreViewport: true });
+      const { patch, refresh } = deltaFor(snapshot.state, state, true);
       set({
-        ...restored,
+        ...patch,
         _historyPointer: targetIdx,
         _lastRestoreTime: Date.now(),
-        refreshGeneration: state.refreshGeneration + 1,
+        ...(refresh ? { refreshGeneration: state.refreshGeneration + 1 } : {}),
       } as Partial<BrowserState>);
 
       reconcileDatasets(from, targetIdx);

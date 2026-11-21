@@ -1,0 +1,11 @@
+{
+  "about": "Golden values for the synthetic chromatin BAM written by tests/nuc_fixtures.chromatin_bam with the generator settings below. Counts were derived independently of FiberBrowser and FiberHMM: by parsing the BAM's MA nuc.QQQ calls with pysam and counting calls whose midpoint lies in the view (tests/test_nuc_golden.py::_truth). The NRL bands are the generator's planted repeats (190 bp and 172 bp arrays, sd 3 bp) widened by the 4 bp histogram bin and per-molecule averaging; the irregular view's spacing is uniform 150-300 bp, so its median must sit above both arrays.",
+  "generator": {"contig": "chrG", "length": 130000, "step": 900, "seed": 21},
+  "analyse": {"start": 15000, "end": 125000, "parameters": {"calibration": "self", "calibration_population": 300}},
+  "views": [
+    {"name": "array_190", "start": 21000, "end": 26000, "molecules": 16, "footprints": 289, "nrl_median": [186, 198]},
+    {"name": "array_172", "start": 96000, "end": 101000, "molecules": 18, "footprints": 294, "nrl_median": [169, 179]},
+    {"name": "irregular", "start": 70000, "end": 90000, "molecules": 32, "footprints": 959, "nrl_median": [200, 260]}
+  ],
+  "footprint_size_bp": 147
+}

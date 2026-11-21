@@ -13,7 +13,7 @@
  * Needs a dm6 DddB amplicon BAM (FIBERBROWSER_TEST_DM6_BAM)
  * and hg38 and dm6 in ~/.fiberhmm/genomes (never downloaded here).
  */
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures/nativeDialogs';
 import type { Page } from '@playwright/test';
 import type { ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';

@@ -1,0 +1,26 @@
+{
+ "input_kind": "reads",
+ "n_files": 1,
+ "samples": [
+  {
+   "barcode": null,
+   "files": [
+    {
+     "kind": "fastq",
+     "path": "/data/sample_a.fastq",
+     "size": 72
+    }
+   ],
+   "key": "file::/data/sample_a.fastq",
+   "kinds": [
+    "fastq"
+   ],
+   "name": "sample_a",
+   "order": null,
+   "size": 72
+  }
+ ],
+ "success": true,
+ "warnings": [],
+ "zips": []
+}

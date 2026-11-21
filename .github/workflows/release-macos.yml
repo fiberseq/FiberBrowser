@@ -44,11 +44,13 @@ jobs:
       ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
       ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
       FB_BUILD_DIR: ${{ github.workspace }}/build/macos
-      FB_FIBERHMM: ${{ inputs.fiberhmm || vars.FIBERHMM_REQUIREMENT || 'fiberhmm[consensus]>=3.0.3,<4' }}
+      FB_FIBERHMM: ${{ inputs.fiberhmm || vars.FIBERHMM_REQUIREMENT || 'fiberhmm[consensus]>=3.2.0,<4' }}
       FB_NOTARIZE: "0"
       FIBERHMM_NO_UPDATE_CHECK: "1"
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # the full history: check_frontend_dist.py compares the dist's last commit with the source's
 
       - uses: actions/setup-python@v5
         with:
@@ -59,6 +61,10 @@ jobs:
         run: |
           version="$(python -c 'import re; print(re.search(r"__version__ = \"(.+?)\"", open("browser/version.py").read())[1])')"
           [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "::error::tag $GITHUB_REF_NAME but browser/version.py says $version"; exit 1; }
+
+      - name: Check the tracked frontend build is current
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: python packaging/check_frontend_dist.py
 
       - name: Import the Developer ID certificate (temporary keychain)
         if: env.MACOS_CERT_P12 != ''

@@ -1,3 +1,4 @@
+import type { SvConflictReason } from '../../utils/svConflicts';
 /**
  * Insertion lens: pure view logic (no React, no canvas).
  *
@@ -21,6 +22,7 @@
  * The results are ordinary CompactReads, so the read-track renderer draws them.
  */
 import type { CompactRead, AnnotationLayer } from '../../components/tracks/read-track/types';
+import { accumulateChannels, type ChannelRead } from '../plots/profileEngine';
 
 export type LensAnchor = 'left' | 'right' | 'stretch' | 'consensus';
 
@@ -36,6 +38,8 @@ export interface LensStraddle { layer: string; start: number; end: number; size:
 export type LensPartial = 'start' | 'end';
 
 export interface LensEntry {
+  evidence_reason?: SvConflictReason;
+  evidence_level?: 'confirmed' | 'putative' | 'conflicting' | 'ambiguous';
   id: string;
   strand: '+' | '-';
   /** Carriers: a CIGAR insertion, or a read clipped at the breakpoint. */
@@ -72,6 +76,8 @@ export interface LensResponse {
     ref: number; len: number; len_lo: number; len_hi: number;
     /** Every carrier: CIGAR + clipped. */
     carriers: number;
+    confirmed?: number; putative?: number; conflicting?: number; ambiguous?: number; evidence_total?: number;
+    ref_len?: number; alt_len?: number;
     cigar?: number;
     /** Clipped at the breakpoint (hard-clipped included). */
     clipped?: number;
@@ -94,6 +100,13 @@ export interface LensResponse {
     carriers_ga?: number;
     /** A DAF dataset that got the majority vote: why the DAF-aware consensus was not used. */
     fallback?: string;
+  };
+  consensus_resource?: {
+    status: 'budget_exceeded' | 'cancelled' | 'partial' | 'unavailable';
+    reason: string;
+    complete: false;
+    parameters: Record<string, unknown>;
+    budget_version: string;
   };
   /** What the run that called the BAM reports for this insertion (qc/<BAM>.insert_consensus.json). */
   run_consensus?: {
@@ -132,6 +145,8 @@ export function consensusMethod(response: Pick<LensResponse, 'consensus' | 'run_
 
 /** An insertion in view, as the SV summary clusters it (/api/insertions/clusters). */
 export interface InsertionCluster {
+  confirmed?: number; putative?: number; conflicting?: number; ambiguous?: number;
+  uncertainty?: [number, number];
   id?: string;
   ref: number;
   len: number;
@@ -145,6 +160,12 @@ export interface InsertionCluster {
 
 /** What the lens shows; kept on the lens panel's PanelConfig (saved with sessions). */
 export interface InsertionLensTarget {
+  footprintGrouping?: import('../differences/footprintGroups').FootprintGrouping;
+  footprintSites?: number;
+  workspace?: { query: import('../differences/api').WorkspaceQuery; calls: import('../differences/api').WorkspaceCalls };
+  includePutative?: boolean;
+  includeConflicting?: boolean;
+  includeAmbiguous?: boolean;
   genome?: string | null;
   datasetId: string;
   chrom: string;
@@ -168,6 +189,8 @@ export interface LensAxis {
 }
 
 export interface LensRowMeta {
+  evidenceReason?: SvConflictReason;
+  evidenceLevel?: 'confirmed' | 'putative' | 'conflicting' | 'ambiguous';
   id: string; strand: '+' | '-'; len: number; identity?: number; carrier: boolean;
   partial?: LensPartial; hard?: boolean; clipLen?: number; sa?: boolean;
 }
@@ -178,6 +201,8 @@ export interface LensLayout {
   carriers: CompactRead[];
   reference: CompactRead[];
   carrierRows: LensRowMeta[];
+  /** Observed alternate coverage; annotation intervals themselves are not coverage. */
+  carrierCoverage?: [number, number][][];
   referenceRows: LensRowMeta[];
 }
 
@@ -185,8 +210,8 @@ export interface LensLayout {
 export function displayLength(response: LensResponse, anchor: LensAnchor): number {
   const cons = response.consensus?.length ?? 0;
   if (cons > 0) return cons;
-  if (anchor === 'consensus') return response.cluster.len || 0;
-  return response.cluster.len || 0;
+  if (anchor === 'consensus') return response.cluster.alt_len ?? response.cluster.len ?? 0;
+  return response.cluster.alt_len ?? response.cluster.len ?? 0;
 }
 
 /** The anchor actually used: consensus mode falls back to stretch without a consensus. */
@@ -389,10 +414,10 @@ export function mapLensRead(entry: LensEntry, axis: LensAxis, anchor: LensAnchor
     out.qualities = follow(read.qualities as number[], primary.origin);
   }
   if (read.fire) out.fire = mapIntervals(read.fire as number[][], mapper).intervals;
-  for (const field of ['methyl', 'methyl_m6a', 'methyl_m5c'] as const) {
+  for (const field of ['methyl', 'methyl_m6a', 'methyl_m5c', 'possible_deam_ct', 'possible_deam_ga'] as const) {
     if (read[field]) out[field] = mapPoints(read[field] as number[], mapper);
   }
-  for (const field of ['deam', 'possible_deam_ct', 'possible_deam_ga'] as const) {
+  for (const field of ['deam'] as const) {
     if (read[field]) out[field] = mapPairs(read[field] as unknown as number[][], mapper);
   }
   if (read.layers) {
@@ -409,6 +434,7 @@ export function layoutLens(response: LensResponse, anchorWanted: LensAnchor, rev
   const flank = response.flank;
   const axis: LensAxis = { flank, displayLen, total: 2 * flank + displayLen, reversed };
   const row = (e: LensEntry, carrier: boolean): LensRowMeta => ({
+    evidenceLevel: e.evidence_level, evidenceReason: e.evidence_reason,
     id: e.id, strand: e.strand, len: e.len, identity: e.identity, carrier,
     ...(e.partial ? { partial: e.partial, clipLen: e.clip_len, sa: Boolean(e.sa) } : {}),
     ...(e.hard ? { hard: true } : {}),
@@ -419,12 +445,14 @@ export function layoutLens(response: LensResponse, anchorWanted: LensAnchor, rev
     carriers: response.carriers.map(e => mapLensRead(e, axis, anchor)),
     reference: response.reference.map(e => mapLensRead(e, axis, anchor)),
     carrierRows: response.carriers.map(e => row(e, true)),
+    carrierCoverage: response.carriers.map(e => e.hard ? [] : makeReadMapper(e.len, axis, anchor, e.knots, e.partial).interval(0, e.len)),
     referenceRows: response.reference.map(e => row(e, false)),
   };
 }
 
 /** What a carrier row is, in words (its tooltip). */
 export function describeCarrier(row: LensRowMeta): string {
+  if (row.evidenceReason) return `conflicting · ${row.evidenceReason.message}`;
   const size = (n: number) => `${n.toLocaleString()} bp`;
   if (!row.partial) {
     return `insert ${size(row.len)}${row.identity !== undefined ? ` · ${(row.identity * 100).toFixed(1)}% identity to consensus` : ''}`;
@@ -490,17 +518,6 @@ export interface LensProfile {
 const NUC_LAYERS = ['nuc'];
 const MSP_LAYERS = ['msp', 'fire'];
 
-function addSpan(acc: number[], a: number, b: number, binWidth: number) {
-  if (b <= a) return;
-  const first = Math.max(0, Math.floor(a / binWidth));
-  const last = Math.min(acc.length - 1, Math.floor((b - 1e-9) / binWidth));
-  for (let k = first; k <= last; k++) {
-    const lo = Math.max(a, k * binWidth);
-    const hi = Math.min(b, (k + 1) * binWidth);
-    if (hi > lo) acc[k] += hi - lo;
-  }
-}
-
 function unionSpans(spans: [number, number][]): [number, number][] {
   const sorted = spans.filter(([a, b]) => b > a).sort((x, y) => x[0] - y[0]);
   const out: [number, number][] = [];
@@ -519,34 +536,30 @@ function layerSpans(read: CompactRead, names: string[]): [number, number][] {
   return unionSpans(spans);
 }
 
+/** The lens profile on the Plots profile engine (accumulateChannels, overlap weighting): the read body (the union of
+ *  its calls) is the denominator channel, nucleosome / MSP unions and marks the signals. */
 export function computeLensProfile(reads: CompactRead[], total: number, maxBins = 600): LensProfile {
   const bins = Math.max(1, Math.min(maxBins, Math.ceil(total)));
   const binWidth = total / bins;
-  const covered = new Array(bins).fill(0);
-  const nuc = new Array(bins).fill(0);
-  const msp = new Array(bins).fill(0);
-  const marks = new Array(bins).fill(0);
-  for (const read of reads) {
+  const channelReads: ChannelRead[] = reads.map(read => {
     const body: [number, number][] = [];
     for (const iv of read.intervals ?? []) body.push([iv[0], iv[1]]);
     for (const layer of Object.values(read.layers ?? {})) for (const iv of layer.intervals ?? []) body.push([iv[0], iv[1]]);
-    for (const [a, b] of unionSpans(body)) addSpan(covered, a, b, binWidth);
-    for (const [a, b] of layerSpans(read, NUC_LAYERS)) addSpan(nuc, a, b, binWidth);
-    for (const [a, b] of layerSpans(read, MSP_LAYERS)) addSpan(msp, a, b, binWidth);
     const points = read.methyl_m6a ?? read.methyl_m5c ?? (read.deam ? read.deam.map(d => d[0]) : read.methyl) ?? [];
-    for (const p of points) {
-      const k = Math.floor(p / binWidth);
-      if (k >= 0 && k < bins) marks[k] += 1;
-    }
-  }
-  const frac = (num: number[]) => num.map((v, k) => (covered[k] > 0 ? Math.min(1, v / covered[k]) : null));
+    // start = end: the engine's own coverage (the read's span) is not the lens's denominator.
+    return { start: 0, end: 0, spans: { body: unionSpans(body), nuc: layerSpans(read, NUC_LAYERS), msp: layerSpans(read, MSP_LAYERS) }, points: { marks: points } };
+  });
+  const { channels } = accumulateChannels(channelReads, bins, total, 'overlap');
+  const zero = new Float64Array(bins);
+  const body = channels.body ?? zero, nucC = channels.nuc ?? zero, mspC = channels.msp ?? zero, marksC = channels.marks ?? zero;
+  const frac = (num: Float64Array) => Array.from(num, (v, k) => (body[k] > 0 ? Math.min(1, v / body[k]) : null));
   return {
     bins,
     binWidth,
-    coverage: covered.map(c => c / binWidth),
-    nuc: frac(nuc),
-    msp: frac(msp),
-    marks: marks.map((m, k) => (covered[k] > 0 ? (100 * m) / covered[k] : null)),
+    coverage: Array.from(body),
+    nuc: frac(nucC),
+    msp: frac(mspC),
+    marks: Array.from(marksC, (m, k) => (body[k] > 0 ? (100 * m) / (body[k] * binWidth) : null)),
   };
 }
 
@@ -635,7 +648,7 @@ export function lensParams(target: InsertionLensTarget, extra: Record<string, st
 
 /** A lens target for one insertion cluster (the SV summary's, or the lens list's). */
 export function targetForCluster(
-  cluster: Pick<InsertionCluster, 'ref' | 'len'>, datasetId: string, chrom: string, previous?: Partial<InsertionLensTarget>,
+  cluster: Pick<InsertionCluster, 'ref' | 'len' | 'uncertainty'>, datasetId: string, chrom: string, previous?: Partial<InsertionLensTarget>,
 ): InsertionLensTarget {
   return {
     datasetId,
@@ -644,13 +657,16 @@ export function targetForCluster(
     ref: cluster.ref,
     len: cluster.len,
     // Kept for the fallback (a session without ref/len): the cluster's length class.
-    tolerance: 50,
+    tolerance: Math.max(50, (cluster.uncertainty?.[1] ?? cluster.ref) - cluster.ref),
     lenMin: Math.max(1, Math.floor(cluster.len * 0.8)),
     lenMax: Math.ceil(cluster.len * 1.2),
     ...(previous?.genome !== undefined ? { genome: previous.genome } : {}),
     flank: previous?.flank ?? 1000,
     anchor: previous?.anchor ?? 'consensus',
     reversed: previous?.reversed ?? false,
+    ...(previous?.includePutative !== undefined ? { includePutative: previous.includePutative } : {}),
+    ...(previous?.includeConflicting !== undefined ? { includeConflicting: previous.includeConflicting } : {}),
+    ...(previous?.includeAmbiguous !== undefined ? { includeAmbiguous: previous.includeAmbiguous } : {}),
   };
 }
 

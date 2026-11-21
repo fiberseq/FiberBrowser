@@ -1,3 +1,9 @@
+import { isExpandable, isExpanded, toggleExpansion } from '../../features/differences/differenceActions';
+import { liveLiftViewKey } from '../../features/differences/persistence';
+import { DifferenceTable } from '../../features/differences/DifferenceTable';
+import { nativeDifference, selectNativeDifference } from '../../features/differences/selection';
+import { useDifferenceSelection } from '../../features/differences/selectionStore';
+import { DifferencePopover } from '../../features/liveLift/DifferencePopover';
 /**
  * The SV track (fb-n9-sv summary; its own row since fb-n11-tracks): the SV
  * clusters of the panel's reads in view, as deletion arcs, insertion flags and
@@ -26,6 +32,7 @@ import {
 } from './read-track/svDrawing';
 import { runReadMenuContribution, SPLIT_IN_SPLIT, svClusterHints, svClusterMenu } from './read-track/readMenuModel';
 import type { SvCluster, SvSummary } from './read-track/types';
+import { useDifferenceAxis } from '../../features/differences/useDifferenceAxis';
 import { TRACK_BACKGROUND } from './TrackContainerConstants';
 
 /** x/y: track px; cx/cy: client px (the tooltip is fixed, over the reads below). */
@@ -52,17 +59,19 @@ export function SvTrack({ width, height, panel, sidebarWidth = 0 }: {
   const selectedSvs = useBrowserStore(useShallow(s => (svSelection ? svSelection.selected(s.selectedFeatures, datasetId) : NO_FEATURES)));
   const canvasRenderVersion = useCanvasRenderVersion();
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const inspectorAnchor = useRef<HTMLDivElement>(null);
+  const dataset = useBrowserStore(s => s.datasets.find(d => d.id === datasetId));
+  const [showTable, setShowTable] = useState(false);
   const [hover, setHover] = useState<Hover | null>(null);
-  const summary = feedHasSv(feed) ? feed!.sv : null;
+  const summary = feedHasSv(feed) ? feed!.sv ?? null : null;
   const metrics = svBandMetrics(height);
   // The view the panel shows now (clusters are absolute positions).
   const viewStart = feed?.start ?? 0;
   const regionWidth = Math.max(1, (feed?.end ?? 1) - viewStart);
   const isReversed = Boolean(feed?.isReversed);
-  const toX = useCallback((rel: number) => {
-    const scale = (width - sidebarWidth) / regionWidth;
-    return isReversed ? sidebarWidth + (regionWidth - rel) * scale : sidebarWidth + rel * scale;
-  }, [width, sidebarWidth, regionWidth, isReversed]);
+  const { axis } = useDifferenceAxis(feed?.chrom ?? '', viewStart, viewStart + regionWidth,
+    Math.max(1, width - sidebarWidth), isReversed);
+  const toX = useCallback((rel: number) => sidebarWidth + axis.toX(viewStart + rel), [axis, sidebarWidth, viewStart]);
   usePanOffsetTransform(canvasRef, { scope: feed?.panScope ?? 'main' });
 
   useEffect(() => {
@@ -110,14 +119,20 @@ export function SvTrack({ width, height, panel, sidebarWidth = 0 }: {
     }
     store.setSvSelectedCluster(stateKey, cluster.id);
     // Its supporting reads among those drawn: the read highlight (all panels).
-    const ids = supportingReadIds(feed?.reads ?? [], cluster, feed?.chrom);
-    if (ids.length > 0) actions.highlightReads(ids);
+    const ids = supportingReadIds(feed?.reads ?? [], cluster, feed?.chrom, 'carriers', feed?.sv?.evidence_targets ?? feed?.sv?.clusters, feed?.sv?.conflict_options);
+    if (ids.length > 0) actions.highlightReads(ids, { uncertainIds: supportingReadIds(feed?.reads ?? [], cluster, feed?.chrom, 'putative', feed?.sv?.evidence_targets ?? feed?.sv?.clusters, feed?.sv?.conflict_options) });
     else actions.clearHighlight();
   };
 
   const say = (text: string) => useReadActionsStore.getState().showNotice(stateKey, text);
   const runOwn = async (action: string, cluster: SvCluster | null) => {
     if (!feed) return;
+    if (cluster && (action === 'diff:inspect' || action === 'diff:expand')) {
+      selectNativeDifference(cluster, datasetId, feed.chrom, panel.id, action === 'diff:inspect');
+      const s = useDifferenceSelection.getState().selection;
+      if (action === 'diff:expand' && s) toggleExpansion(s);
+      return;
+    }
     switch (action) {
       case 'sv-split-this': {
         if (!cluster) return;
@@ -138,10 +153,17 @@ export function SvTrack({ width, height, panel, sidebarWidth = 0 }: {
         }
         return;
       }
-      case 'sv-highlight-supporting': {
+      case 'sv-highlight-supporting':
+      case 'sv-highlight-confirmed':
+      case 'sv-highlight-putative':
+      case 'sv-highlight-conflicting':
+      case 'sv-highlight-ambiguous': {
         if (!cluster) return;
-        const ids = supportingReadIds(feed.reads, cluster, feed.chrom);
-        if (ids.length) useReadActionsStore.getState().highlightReads(ids);
+        const level = action === 'sv-highlight-conflicting' ? 'conflicting' : action === 'sv-highlight-putative' ? 'putative' : action === 'sv-highlight-ambiguous' ? 'ambiguous' : action === 'sv-highlight-confirmed' ? 'confirmed' : 'carriers';
+        const ids = supportingReadIds(feed.reads, cluster, feed.chrom, level, feed.sv?.evidence_targets ?? feed.sv?.clusters, feed.sv?.conflict_options);
+        if (ids.length) useReadActionsStore.getState().highlightReads(ids, { uncertainIds: level === 'confirmed' ? [] : level === 'carriers'
+          ? supportingReadIds(feed.reads, cluster, feed.chrom, 'putative', feed.sv?.evidence_targets ?? feed.sv?.clusters, feed.sv?.conflict_options) : ids });
+        else useReadActionsStore.getState().clearHighlight();
         useBrowserStore.getState().setSvSelectedCluster(stateKey, cluster.id);
         return;
       }
@@ -174,8 +196,15 @@ export function SvTrack({ width, height, panel, sidebarWidth = 0 }: {
       ...(panel.readSubset ? { splitPanelsBlocked: SPLIT_IN_SPLIT } : {}),
       bamReads: isBam && !feed?.linked,
     });
+    if (cluster) {
+      // The same difference actions as the live-lift Differences row (inspect, expand an insertion in place).
+      const d = nativeDifference(cluster, feed?.chrom ?? '');
+      const view = { viewKey: liveLiftViewKey(panel), difference: d };
+      own.splice(1, 0, { kind: 'item', action: 'diff:inspect', label: 'Inspect…', icon: 'search', shortcut: '⌘-click' } as never,
+        ...(cluster.t === 'I' && isExpandable(d) ? [{ kind: 'item', action: 'diff:expand', label: isExpanded(view) ? 'Collapse insertion' : 'Expand insertion', icon: 'layers', shortcut: 'click' } as never] : []));
+    }
     useTrackMenuStore.getState().openMenu({
-      panelId: panel.id, type: 'sv', x: clientX, y: clientY, own, title: 'SV track',
+      panelId: panel.id, type: 'sv', x: clientX, y: clientY, own, title: 'Differences (SVs and indels in reads)',
       onOwn: action => { void runOwn(action, cluster); },
     });
   };
@@ -214,6 +243,7 @@ export function SvTrack({ width, height, panel, sidebarWidth = 0 }: {
         if ((e.shiftKey || e.key === ' ') && svSelection && feed) svSelection.toggle(keyCluster, datasetId, feed.chrom);
         else highlight(keyCluster);
         break;
+      case 'i': if (keyCluster && feed) { handled(); selectNativeDifference(keyCluster, datasetId, feed.chrom, panel.id); } break;
       case 'ContextMenu': case 'F10': {
         if (e.key === 'F10' && !e.shiftKey) return;
         handled();
@@ -231,7 +261,7 @@ export function SvTrack({ width, height, panel, sidebarWidth = 0 }: {
 
   return (
     <div className="relative focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-violet-500" style={{ width, height }}
-      data-copilot-track="sv" data-testid={`sv-track-${datasetId}`}
+      ref={inspectorAnchor} data-copilot-track="sv" data-testid={`sv-track-${datasetId}`}
       data-sv-clusters={summary?.clusters.length ?? 0} data-figure-fill={TRACK_BACKGROUND.signal}
       tabIndex={inView.length ? 0 : -1} role="group" onKeyDown={onKeyDown}
       onBlur={e => { if (keyIndex != null && !e.currentTarget.contains(e.relatedTarget as Node)) { setKeyIndex(null); if (!menuOpen) setHover(null); } }}
@@ -242,6 +272,11 @@ export function SvTrack({ width, height, panel, sidebarWidth = 0 }: {
           {svAlleleLabel(keyCluster.t, keyCluster.ref, keyCluster.len, feed?.chrom ?? '')}, {keyCluster.support.toLocaleString()} of {keyCluster.informative.toLocaleString()} informative reads carry it
         </span>
       )}
+      <button className="absolute right-1 top-0 z-10 text-[10px]" aria-expanded={showTable} onClick={()=>setShowTable(v=>!v)}>Table</button>
+      {showTable && feed && <div className="absolute left-0 right-0 top-full z-40 max-h-64 overflow-auto bg-white dark:bg-slate-900 border p-2">
+        <DifferenceTable chrom={feed.chrom} items={inView.map(c=>nativeDifference(c,feed.chrom))}
+          inspect={d=>{const c=inView.find(c=>c.id===d.id);if(c)selectNativeDifference(c,datasetId,feed.chrom,panel.id);}}/>
+      </div>}
       <canvas
         ref={canvasRef}
         width={width}
@@ -265,15 +300,27 @@ export function SvTrack({ width, height, panel, sidebarWidth = 0 }: {
         onMouseDown={e => { e.stopPropagation(); e.preventDefault(); }}
         onClick={e => {
           const hit = hitAt(local(e).x);
-          // Shift-click: the SV joins (or leaves) the feature selection (when a plugin pack provides it).
-          if ((e.shiftKey || e.metaKey || e.ctrlKey) && hit?.kind === 'cluster' && feed && svSelection) {
+          // As on the live-lift Differences row (features/differences/differenceActions.ts): ⌘/Ctrl-click inspects;
+          // Shift-click joins the feature selection; a plain click highlights the SV's reads, and on an insertion also
+          // expands (or collapses) it in place.
+          if ((e.metaKey || e.ctrlKey) && hit?.kind === 'cluster' && feed) {
+            selectNativeDifference(hit.cluster, datasetId, feed.chrom, panel.id);
+            return;
+          }
+          if (e.shiftKey && hit?.kind === 'cluster' && feed && svSelection) {
             svSelection.toggle(hit.cluster, datasetId, feed.chrom);
             return;
           }
           highlight(hit?.kind === 'cluster' ? hit.cluster : null);
+          if (hit?.kind === 'cluster' && feed) {
+            selectNativeDifference(hit.cluster, datasetId, feed.chrom, panel.id, false);
+            const s = useDifferenceSelection.getState().selection;
+            if (s && hit.cluster.t === 'I' && isExpandable(s.difference)) toggleExpansion(s);
+          }
         }}
         onContextMenu={onContextMenu}
       />
+      {dataset && <DifferencePopover panel={panel} dataset={dataset} anchor={inspectorAnchor} />}
       {hover && !menuOpen && !exportInProgress && feed && (
         <SvHoverTip hover={hover} summary={summary} datasetId={datasetId} feedReads={feed.reads} chrom={feed.chrom} />
       )}
@@ -322,7 +369,7 @@ function SvHoverTip({ hover, summary, datasetId, feedReads, chrom }: {
       )}
       {d.faint && <div className="text-[11px] text-amber-200" data-testid="sv-cluster-tooltip-faint">{d.faint}</div>}
       {d.jitter && <div className="text-[11px] text-amber-200" data-testid="sv-cluster-tooltip-jitter">{d.jitter}</div>}
-      <div className="text-[11px] text-gray-400">Click: highlight its reads · Right-click: {['group or split the reads by it', ...svClusterHints(hover.cluster)].join(', ')}</div>
+      <div className="text-[11px] text-gray-400">{hover.cluster.t === 'I' ? 'Click: expand and highlight its reads' : 'Click: highlight its reads'} · ⌘-click: inspect · Right-click: {['inspect', 'group or split the reads by it', ...svClusterHints(hover.cluster)].join(', ')}</div>
     </div>,
     document.body,
   );

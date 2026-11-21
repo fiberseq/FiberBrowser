@@ -6,6 +6,7 @@ import { SIDEBAR_SECTIONS } from '../../utils/settingsCatalog';
 import { setSettingsSearchQuery, useSettingsSearchStore } from '../../utils/settingsSearchStore';
 import { usePanelLauncherStore } from '../../stores/panelLauncherStore';
 import { PanelRail } from './PanelRail';
+import { WorkspaceToggle } from '../../features/plots/WorkspaceToggle';
 
 const ICON_STRIP_WIDTH = 40;
 
@@ -57,6 +58,8 @@ export function SidebarIconStrip() {
       data-testid="sidebar-rail"
       data-panel-launcher-mode={railMode ? 'rail' : 'strip'}
     >
+      {/* Browser · Hub · Plots (P / H / Esc): on show in both workspaces. */}
+      <WorkspaceToggle />
       {/* The settings pages (the only settings control: no cog elsewhere). The page
           on show is marked by a brand bar and tint; nothing is marked while closed. */}
       <div className="flex shrink-0 flex-col items-center gap-0.5" role="group" aria-label="Settings" data-testid="settings-rail-sections">

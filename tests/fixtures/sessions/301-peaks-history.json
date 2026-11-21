@@ -1,0 +1,401 @@
+{
+  "version": "2.0",
+  "viewport": {
+    "chrom": "chrT",
+    "start": 100,
+    "end": 900
+  },
+  "datasets": [
+    {
+      "id": "sample-a",
+      "label": "Sample A",
+      "paths": [
+        "/data/sample.bam"
+      ],
+      "color": "#336699",
+      "data_type": "bam"
+    }
+  ],
+  "frontend": {
+    "chrom": "chrT",
+    "start": 100,
+    "end": 900,
+    "selectedPeaks": [
+      1,
+      10000
+    ],
+    "peakModes": {
+      "1": "tf",
+      "10000": "nucleosome"
+    },
+    "clusterPeakRegions": [],
+    "clusterTreeNodes": {
+      "node-a": {
+        "id": "node-a",
+        "parentId": null,
+        "children": [],
+        "label": "Root",
+        "datasetIds": [
+          "sample-a"
+        ],
+        "selectedPeakIndices": [
+          1,
+          10000
+        ],
+        "peakModes": {
+          "1": "tf",
+          "10000": "nucleosome"
+        },
+        "peakRegions": [
+          {
+            "start": 400,
+            "end": 420,
+            "chrom": "chrT",
+            "mode": "tf"
+          }
+        ],
+        "assignments": {},
+        "order": {},
+        "patterns": {},
+        "centroids": {},
+        "peakWidths": []
+      }
+    },
+    "clusterTreeRootIds": [
+      "node-a"
+    ],
+    "activeClusterTreeNodeId": "node-a",
+    "peakRules": [
+      {
+        "id": "rule-a",
+        "name": "Peaks",
+        "source": "accessibility",
+        "enabled": true,
+        "color": "#1d4ed8",
+        "opacity": 0.7,
+        "useGradient": true,
+        "smoothWidth": 100,
+        "thresholds": [
+          0.5,
+          0.3,
+          0.15,
+          0.08
+        ],
+        "minPeakWidth": 80,
+        "minReads": 5
+      },
+      {
+        "id": "custom",
+        "name": "Custom",
+        "source": "custom",
+        "enabled": true,
+        "color": "#1d4ed8",
+        "opacity": 0.7,
+        "useGradient": true,
+        "smoothWidth": 100,
+        "thresholds": [
+          0.5,
+          0.3,
+          0.15,
+          0.08
+        ],
+        "minPeakWidth": 80,
+        "minReads": 5
+      }
+    ],
+    "peaksByRule": {
+      "rule-a": [
+        {
+          "start": 200,
+          "end": 220,
+          "index": 0,
+          "ruleId": "rule-a"
+        },
+        {
+          "start": 400,
+          "end": 420,
+          "index": 1,
+          "ruleId": "rule-a"
+        }
+      ],
+      "custom": [
+        {
+          "start": 600,
+          "end": 630,
+          "index": 10000,
+          "ruleId": "custom",
+          "isCustom": true,
+          "chrom": "chrT"
+        }
+      ]
+    },
+    "peaksLocked": true,
+    "sessionName": "Migration corpus",
+    "panels": [
+      {
+        "id": "panel-dataset",
+        "contentType": "dataset",
+        "datasetId": "sample-a",
+        "subTracks": [],
+        "collapsed": false,
+        "layoutRow": 0
+      },
+      {
+        "id": "panel-peak-detection",
+        "contentType": "peak-detection",
+        "datasetId": null,
+        "subTracks": [],
+        "collapsed": false,
+        "layoutRow": 0
+      }
+    ],
+    "footprintGroups": [],
+    "savedClusters": [
+      {
+        "id": "saved-a",
+        "parentId": null,
+        "children": [],
+        "label": "Root",
+        "datasetIds": [
+          "sample-a"
+        ],
+        "selectedPeakIndices": [
+          1,
+          10000
+        ],
+        "peakModes": {
+          "1": "tf",
+          "10000": "nucleosome"
+        },
+        "peakRegions": [
+          {
+            "start": 400,
+            "end": 420,
+            "chrom": "chrT",
+            "mode": "tf"
+          }
+        ],
+        "assignments": {},
+        "order": {},
+        "patterns": {},
+        "centroids": {},
+        "peakWidths": [],
+        "name": "Saved",
+        "chrom": "chrT",
+        "start": 100,
+        "end": 900,
+        "customPeaks": [
+          {
+            "start": 600,
+            "end": 630,
+            "chrom": "chrT"
+          }
+        ]
+      }
+    ],
+    "selectedFeatures": [],
+    "savedNfrVariants": [],
+    "historySnapshots": [
+      {
+        "id": "history-a",
+        "label": "Peaks",
+        "timestamp": 1,
+        "kind": "analysis",
+        "state": {
+          "chrom": "chrT",
+          "start": 100,
+          "end": 900,
+          "selectedPeaks": [
+            1,
+            10000
+          ],
+          "peakModes": {
+            "1": "tf",
+            "10000": "nucleosome"
+          },
+          "clusterPeakRegions": [],
+          "clusterTreeNodes": {
+            "node-a": {
+              "id": "node-a",
+              "parentId": null,
+              "children": [],
+              "label": "Root",
+              "datasetIds": [
+                "sample-a"
+              ],
+              "selectedPeakIndices": [
+                1,
+                10000
+              ],
+              "peakModes": {
+                "1": "tf",
+                "10000": "nucleosome"
+              },
+              "peakRegions": [
+                {
+                  "start": 400,
+                  "end": 420,
+                  "chrom": "chrT",
+                  "mode": "tf"
+                }
+              ],
+              "assignments": {},
+              "order": {},
+              "patterns": {},
+              "centroids": {},
+              "peakWidths": []
+            }
+          },
+          "clusterTreeRootIds": [
+            "node-a"
+          ],
+          "activeClusterTreeNodeId": "node-a",
+          "peakRules": [
+            {
+              "id": "rule-a",
+              "name": "Peaks",
+              "source": "accessibility",
+              "enabled": true,
+              "color": "#1d4ed8",
+              "opacity": 0.7,
+              "useGradient": true,
+              "smoothWidth": 100,
+              "thresholds": [
+                0.5,
+                0.3,
+                0.15,
+                0.08
+              ],
+              "minPeakWidth": 80,
+              "minReads": 5
+            },
+            {
+              "id": "custom",
+              "name": "Custom",
+              "source": "custom",
+              "enabled": true,
+              "color": "#1d4ed8",
+              "opacity": 0.7,
+              "useGradient": true,
+              "smoothWidth": 100,
+              "thresholds": [
+                0.5,
+                0.3,
+                0.15,
+                0.08
+              ],
+              "minPeakWidth": 80,
+              "minReads": 5
+            }
+          ],
+          "peaksByRule": {
+            "rule-a": [
+              {
+                "start": 200,
+                "end": 220,
+                "index": 0,
+                "ruleId": "rule-a"
+              },
+              {
+                "start": 400,
+                "end": 420,
+                "index": 1,
+                "ruleId": "rule-a"
+              }
+            ],
+            "custom": [
+              {
+                "start": 600,
+                "end": 630,
+                "index": 10000,
+                "ruleId": "custom",
+                "isCustom": true,
+                "chrom": "chrT"
+              }
+            ]
+          },
+          "peaksLocked": true,
+          "sessionName": "Migration corpus",
+          "panels": [
+            {
+              "id": "panel-dataset",
+              "contentType": "dataset",
+              "datasetId": "sample-a",
+              "subTracks": [],
+              "collapsed": false,
+              "layoutRow": 0
+            },
+            {
+              "id": "panel-peak-detection",
+              "contentType": "peak-detection",
+              "datasetId": null,
+              "subTracks": [],
+              "collapsed": false,
+              "layoutRow": 0
+            }
+          ],
+          "footprintGroups": [],
+          "savedClusters": [
+            {
+              "id": "saved-a",
+              "parentId": null,
+              "children": [],
+              "label": "Root",
+              "datasetIds": [
+                "sample-a"
+              ],
+              "selectedPeakIndices": [
+                1,
+                10000
+              ],
+              "peakModes": {
+                "1": "tf",
+                "10000": "nucleosome"
+              },
+              "peakRegions": [
+                {
+                  "start": 400,
+                  "end": 420,
+                  "chrom": "chrT",
+                  "mode": "tf"
+                }
+              ],
+              "assignments": {},
+              "order": {},
+              "patterns": {},
+              "centroids": {},
+              "peakWidths": [],
+              "name": "Saved",
+              "chrom": "chrT",
+              "start": 100,
+              "end": 900,
+              "customPeaks": [
+                {
+                  "start": 600,
+                  "end": 630,
+                  "chrom": "chrT"
+                }
+              ]
+            }
+          ],
+          "selectedFeatures": [],
+          "savedNfrVariants": []
+        }
+      }
+    ],
+    "historyPointer": 0
+  },
+  "_corpus": {
+    "release": "3.0.1",
+    "revision": "24c7a5c58",
+    "coverage": [
+      "rule peaks",
+      "custom peaks",
+      "selection and modes",
+      "cluster tree",
+      "saved clustering",
+      "history"
+    ],
+    "synthetic": true
+  }
+}

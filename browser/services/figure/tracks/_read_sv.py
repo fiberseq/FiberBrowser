@@ -40,7 +40,8 @@ def visible_summary(payload: dict, fe: dict) -> Optional[dict]:
     support = _num(fe.get('svMinSupport'), 3)
     min_support = int(max(1, min(1_000_000, support + 0.5))) if np.isfinite(support) else 3
     clusters = [c for c in summary.get('clusters') or []
-                if int(c.get('len', 0)) >= min_len and c.get('support', 0) >= min_support]
+                if int(c.get('len', 0)) >= min_len
+                and c.get('support', 0) + (c.get('putative') or 0) >= min_support]
     clips = [c for c in summary.get('clips') or [] if c.get('n', 0) >= min_support]
     if not clusters and not clips:
         return None
@@ -87,17 +88,17 @@ def read_draw(read: dict, start: int, end: int, min_len: int) -> dict:
         t = ev.get('t')
         if t == 'SA' or int(ev.get('len', 0)) < min_len:
             continue
-        ref = int(ev['ref'])
-        if t == 'D':
-            if ref + ev['len'] <= start or ref >= end:
-                continue
-            out['deletions'].append((ref - start, ref + int(ev['len']) - start, int(ev['len'])))
-        elif t == 'I':
-            if start <= ref <= end:
-                out['insertions'].append((ref - start, int(ev['len'])))
-        elif t == 'S':
+        if t == 'S':
+            ref = int(ev['ref'])
             if start <= ref <= end:
                 out['clips'].append((ref - start, ev.get('side'), int(ev['len'])))
+            continue
+        for piece in ev.get('raw_pieces') or [ev]:
+            ref, length = int(piece['ref']), int(piece['len'])
+            if piece['t'] == 'D' and ref + length > start and ref < end:
+                out['deletions'].append((ref - start, ref + length - start, length))
+            elif piece['t'] == 'I' and start <= ref <= end:
+                out['insertions'].append((ref - start, length))
     return out
 
 

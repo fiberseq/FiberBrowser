@@ -12,6 +12,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from services.genome_registry import GENOME_REGISTRY
 from state.browser_state import BrowserState
 
 
@@ -59,8 +60,10 @@ def test_the_current_genome_with_a_user_fasta_is_not_downloaded_again(tmp_path, 
     assert body["success"] is True and body["already_loaded"] is True and body["fasta_loaded"] is True
     assert body["fasta_path"] == str(fa)
     assert state.fasta is handle and state.fasta_path == str(fa) and state.current_genome == "hg38"
-    assert downloads == []
-    assert not (tmp_path / "home" / ".fiberhmm" / "genomes").exists()
+    # Never the FASTA. Its missing annotation is fetched (3.1.0 RC: asking for the loaded genome was a no-op, so
+    # --fasta dm6.fa never got dm6's genes); here offline, which leaves the genome loaded without genes.
+    assert downloads == [GENOME_REGISTRY["hg38"]["gtf_url"]]
+    assert body["gtf_loaded"] is False and state.gtf_data is None
 
 
 def test_another_genome_still_loads(tmp_path, monkeypatch):

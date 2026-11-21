@@ -153,7 +153,7 @@ def test_bigbed_coverage_handles_a_window_before_the_contig_start():
 def test_meta_profile_expiry_is_race_free(monkeypatch):
     import services.read_auxiliary_endpoint as aux
 
-    key = ("d", "chr1", 0, 100, None)
+    key = ("d", "chr1", 0, 100, None, True)   # the last field: Min footprints hides uncalled reads (default)
     state = SimpleNamespace(
         _meta_profile_cache=OrderedDict({key: ([1.0], [0.0], 0.0)}),
         _meta_profile_cache_timeout=60, _meta_profile_cache_max=10,

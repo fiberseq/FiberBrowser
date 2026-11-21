@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { useBrowserStore } from '../../stores/browserStore';
 import { beginRun, runResultPanelsClosed, setRunResult, useRunResultStore } from '../../stores/runResultStore';
 import { RunResultLines } from './RunResultLines';
+import { clusterRunReporter } from '../../utils/clusterRunReporter';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -96,6 +97,48 @@ describe('run result lines tied to their panels (round 2, N5)', () => {
     act(() => useBrowserStore.setState({ panels: [panel('src')] } as any));
     expect(line().dataset.panelsClosed).toBe('true');
     expect(container.querySelector('[data-testid="run-result-cluster-text"]')!.textContent).toBe('Clustered 2,033 reads in Carriers. (panel closed)');
+  });
+
+  it.each(['done', 'note'] as const)('keeps plan advice out of pending results, then publishes it with the %s outcome and panels', async tone => {
+    act(() => root.render(<RunResultLines />));
+    let run!: number;
+    act(() => { run = beginRun('cluster'); });
+    const advice = {
+      text: 'Plain peaks in each panel are paired from left to right and cropped to the narrowest width. These positions are not verified matches.',
+      action: { label: 'Synchronise regions', panel: 'sync-regions' },
+    };
+    const report = clusterRunReporter(run, advice);
+    let finish!: () => void;
+    const response = new Promise<void>(resolve => { finish = resolve; });
+    const pending = response.then(() => report(tone, 'Clustered 9 reads in Carriers.', ['car']));
+
+    // cluster-targets waits for this run's done/note marker before closing the split.
+    // Planning advice alone used to satisfy that wait and let Close cancel the request.
+    expect(useRunResultStore.getState().results.cluster).toBeUndefined();
+    expect(container.querySelector('[data-testid="run-result-cluster-marker"]')).toBeNull();
+    const published: Array<string[] | undefined> = [];
+    const unsubscribe = useRunResultStore.subscribe(s => published.push(s.results.cluster?.panelIds));
+    await act(async () => { finish(); await pending; });
+    unsubscribe();
+    expect(published).toEqual([['car']]); // no intermediate advice-only outcome
+    const line = container.querySelector<HTMLElement>('[data-testid="run-result-cluster"]')!;
+    expect(line.dataset.tone).toBe('note');
+    expect(line.textContent).toContain(`${advice.text} Clustered 9 reads in Carriers.`);
+    expect(container.querySelector('[data-testid="run-result-cluster-action"]')!.textContent).toBe('Synchronise regions');
+    expect(container.querySelector<HTMLElement>('[data-testid="run-result-cluster-marker"]')!.dataset.run).toBe(String(run));
+    act(() => report('note', 'Not clustered: Reference.'));
+    expect(line.textContent!.split(advice.text)).toHaveLength(2); // advice appears once
+    act(() => useBrowserStore.setState({ panels: [panel('src')] } as any));
+    expect(container.querySelector('[data-testid="run-result-cluster-closed"]')!.textContent).toBe('(panel closed)');
+  });
+
+  it('does not attach plan advice to a refusal or publish a superseded outcome', () => {
+    const report = clusterRunReporter(beginRun('cluster'), { text: 'Planning advice.' });
+    report('error', 'Request failed.');
+    expect(useRunResultStore.getState().results.cluster!.text).toBe('Request failed.');
+    beginRun('cluster');
+    report('done', 'Old response.', ['car']);
+    expect(useRunResultStore.getState().results.cluster).toBeUndefined();
   });
 
   it('a rerun with the same text replaces the line visibly: its run number and time (round 3, B5)', () => {

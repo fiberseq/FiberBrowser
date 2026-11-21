@@ -31,6 +31,10 @@ from services.insertion_lens import (
 )
 from services.sv_events import classify_allele_evidence, extract_sv_events
 
+# These synthetic reads carry no footprint calls: the tests ask for all reads ("All reads, including uncalled").
+pytestmark = pytest.mark.usefixtures("all_reads_including_uncalled")
+
+
 FLANK = 1000
 LOADER = {"include_methylation": True, "include_layers": True}
 
@@ -43,6 +47,28 @@ def fixture(tmp_path_factory):
 @pytest.fixture(scope="module")
 def lens(fixture):
     return build_lens([fixture["bam"]], "chrT", pos=SITE, len_min=1000, flank=FLANK, loader_kwargs=LOADER)
+
+
+def test_resource_refusal_retains_ordinary_inspection_and_is_not_cached(fixture, monkeypatch):
+    from services import insertion_consensus, insertion_lens
+    from services.reconstruction_budget import ResourceResult
+    def refuse(*args, **kwargs):
+        raise ResourceResult('budget_exceeded', 'alignment_pair', cells=30_000_000)
+    monkeypatch.setattr(insertion_consensus, 'reconstruct_lens', refuse)
+    result = build_lens([fixture['bam']], 'chrT', pos=SITE, len_min=1000, flank=FLANK, loader_kwargs=LOADER)
+    ordinary = build_lens([fixture['bam']], 'chrT', pos=SITE, len_min=1000, flank=FLANK, loader_kwargs=LOADER, consensus=False)
+    assert result['success'] and result['consensus_resource']['status'] == 'budget_exceeded'
+    assert 'consensus' not in result
+    assert result['carriers'] == ordinary['carriers'] and result['reference'] == ordinary['reference']
+    # Exercise the actual cache admission path with a real file stamp.
+    from types import SimpleNamespace
+    state = SimpleNamespace(translate_chrom=lambda c: c, get_dataset=lambda _: SimpleNamespace(), fasta=None)
+    monkeypatch.setattr(insertion_lens, '_dataset_bam_paths', lambda *_: ('synthetic', [fixture['bam']], None))
+    monkeypatch.setattr(insertion_lens, 'build_lens', lambda *a, **k: dict(result))
+    monkeypatch.setattr('services.plasmid_reconcile.contig_links', lambda *a, **k: None)
+    before = len(insertion_lens._cache)
+    insertion_lens.insertion_lens_payload(state, chrom='chrT', pos=SITE)
+    assert len(insertion_lens._cache) == before
 
 
 def _local_expected(intervals, q0, lo, hi):
@@ -119,8 +145,8 @@ def test_spliced_merged_read_keeps_a_bridge_mismatch_on_both_strands():
         read.cigartuples = [(0, 100), (1, 60), (0, 3), (1, 60), (0, 100)]
         read.set_tag("MD", "101C101")
         event = next(e for e in extract_sv_events(read, 50) if e["t"] == "I")
-        assert event == {"t": "I", "ref": 100, "len": 123, "q": 100}
-        assert insertion_span(read.cigartuples, 0, event["q"], event["len"]) == (103, 2)
+        assert (event["ref"], event["len"], event["alt_len"], event["q"]) == (100, 120, 123, 100)
+        assert insertion_span(read.cigartuples, 0, event["q"], event["alt_len"]) == (103, 2)
         spliced = splice_read(read, event)
         assert spliced.cigarstring == "323M"
         lower = {q: base for q, _r, base in spliced.get_aligned_pairs(with_seq=True) if base and base.islower()}
@@ -188,7 +214,8 @@ def test_site_reads_are_split_into_carriers_reference_and_excluded(lens, fixture
     # The read clipped 500 bp away does not reach the site: the lens never sees it.
     assert lens["excluded"] == {"other_insert": 1, "not_informative": 0}
     cluster = lens["cluster"]
-    assert cluster["carriers"] == len(carriers) + len(clipped)
+    assert cluster["carriers"] == len(carriers)
+    assert cluster['ambiguous'] == len(clipped)
     assert (cluster["cigar"], cluster["clipped"], cluster["hard"]) == (len(carriers), len(clipped), 1)
     lengths = [fixture["reads"][c]["len"] for c in carriers]
     assert cluster["len_lo"] == min(lengths) and cluster["len_hi"] == max(lengths)
@@ -332,7 +359,8 @@ def test_find_clusters_lists_the_insertion(fixture):
     big = max(clusters, key=lambda c: c["carriers"])
     carriers = sum(1 for v in fixture["reads"].values() if v["kind"] == "carrier")
     clipped = sum(1 for v in fixture["reads"].values() if v["kind"] == "clip")
-    assert big["carriers"] == carriers + clipped and big["clip_support"] == clipped
+    assert big["carriers"] == carriers and big["clip_support"] == 0
+    assert big["ambiguous"] == clipped
     assert abs(big["ref"] - SITE) <= 5 and 1900 < big["len"] < 2100
     assert any(c["len"] == 300 for c in clusters)
 
@@ -350,7 +378,7 @@ def test_insertion_endpoints(client, fixture):
             "chrom": "chrT", "start": SITE - 1000, "end": SITE + 1000, "dataset_id": dataset["id"], "min_len": 500})
         assert resp.status_code == 200, resp.text
         clusters = resp.json()["clusters"]
-        assert len(clusters) == 1 and clusters[0]["carriers"] == 27 and clusters[0]["clip_support"] == 3
+        assert len(clusters) == 1 and clusters[0]["carriers"] == 24 and clusters[0]["clip_support"] == 0
         resp = client.get("/api/insertions/lens", params={
             "chrom": "chrT", "pos": clusters[0]["ref"], "dataset_id": dataset["id"],
             "ref": clusters[0]["ref"], "length": clusters[0]["len"], "flank": 500,
@@ -394,7 +422,7 @@ def test_read_limits_apply_across_files_and_zero_means_none(fixture):
     # The same reads in two files are one read each (by name, as the allele split counts them).
     both = build_lens([fixture["bam"], fixture["bam"]], "chrT", pos=SITE, len_min=1000, flank=100,
                       max_carriers=10, max_reference=0, consensus=False, loader_kwargs=LOADER)
-    assert len(both["carriers"]) == 10 and both["cluster"]["carriers"] == 27
+    assert len(both["carriers"]) == 10 and both["cluster"]["carriers"] == 24
     assert both["truncated"] == {"carriers": 17, "reference": 16}
     assert both["reference"] == []
     # The cap keeps the kinds' proportions: CIGAR carriers and clipped ones both shown.
@@ -491,16 +519,16 @@ def test_lens_carriers_are_the_split_carriers(client, fixture):
             "t": "I", "ref": sv["ref"], "len": sv["len"], "margin": sv["margin"]}).json()
         carriers = {name for name, allele in split["assignments"].items() if allele == 0}
         reference = {name for name, allele in split["assignments"].items() if allele == 1}
-        assert carriers == {c["id"] for c in lens["carriers"]}
+        assert carriers == {c["id"] for c in lens["carriers"] if c["evidence_level"] == "confirmed"}
         assert reference == {r["id"] for r in lens["reference"]}
-        assert split["counts"][0] == lens["cluster"]["carriers"] == 27
-        assert split["carriers_by"] == {"cigar": 24, "sa": 0, "clip": 3}
+        assert split["counts"][0] == lens["cluster"]["carriers"] == 24
+        assert split["carriers_by"] == {"cigar": 24, "sa": 0, "clip": 0}
         assert split["assignments"]["clip_elsewhere_00"] == 2 and split["assignments"]["other_insert_00"] == 2
         # Opened on the cluster the SV summary reports, the lens has the same reads.
         again = client.get("/api/insertions/lens", params={
             "chrom": "chrT", "pos": SITE, "dataset_id": dataset["id"], "ref": sv["ref"], "length": sv["len"],
             "flank": 200, "consensus": "false", "max_carriers": 1000, "max_reference": 500}).json()
-        assert {c["id"] for c in again["carriers"]} == carriers
+        assert {c["id"] for c in again["carriers"] if c["evidence_level"] == "confirmed"} == carriers
     finally:
         client.delete(f"/api/datasets/{dataset['id']}")
 
@@ -513,21 +541,24 @@ def test_the_split_scan_cache_extends_and_matches_a_fresh_scan(client, fixture):
     try:
         sv_endpoint._SCAN_CACHE.clear()
         first = client.post("/api/sv/split", json={**body, "start": SITE - 12_000, "end": SITE - 2_000}).json()
-        # Overlapping the cached region: only the added part is read.
+        # Without a signal filter every fetched eligible record is retained,
+        # so overlap reuse does not lose rejected-primary suppression context.
         calls = []
         real = sv_endpoint._scan
         sv_endpoint._scan = lambda *a, **k: calls.append(a[3:5]) or real(*a, **k)
         try:
             panned = client.post("/api/sv/split", json={**body, "start": SITE - 6_000, "end": SITE + 6_000}).json()
             inside = client.post("/api/sv/split", json={**body, "start": SITE - 1_000, "end": SITE + 1_000}).json()
+            again = client.post("/api/sv/split", json={**body, "start": SITE - 6_000, "end": SITE + 6_000}).json()
         finally:
             sv_endpoint._scan = real
         assert calls == [(SITE - 2_000, SITE + 6_000)]
+        assert again == panned
         sv_endpoint._SCAN_CACHE.clear()
         fresh = client.post("/api/sv/split", json={**body, "start": SITE - 6_000, "end": SITE + 6_000}).json()
         assert panned["assignments"] == fresh["assignments"] and panned["counts"] == fresh["counts"]
-        assert sum(first["counts"]) > 0 and panned["counts"][0] == 27
-        assert set(inside["assignments"]) <= set(panned["assignments"]) and inside["counts"][0] == 27
+        assert sum(first["counts"]) > 0 and panned["counts"][0] == 24
+        assert set(inside["assignments"]) <= set(panned["assignments"]) and inside["counts"][0] == 24
     finally:
         client.delete(f"/api/datasets/{dataset['id']}")
 
@@ -557,7 +588,7 @@ def _tiny_bam(path, records, ref_len=20_000):
 class _State:
     def __init__(self, paths):
         self.chrom_map = {}
-        self._ds = type("D", (), {"paths": paths, "data_type": "bam"})()
+        self._ds = type("D", (), {"id": "d", "paths": paths, "data_type": "bam"})()
 
     def get_dataset(self, _dataset_id):
         return self._ds
@@ -710,3 +741,78 @@ def test_joined_insertion_pieces_are_one_daf_carrier(tmp_path):
     result, why = daf_aware_consensus(records)
     assert why is None and result["carriers_ct"] == 4 and result["carriers_ga"] == 0
     assert len(result["seq"]) == 103
+
+
+def test_summary_variants_split_and_lens_deduplicate_the_same_molecules(tmp_path, monkeypatch):
+    from services import plasmid_reconcile, sv_endpoint, variants_endpoint
+    from services.sv_events import sv_summary_for_reads, sv_extraction_floor
+    a = _tiny_bam(tmp_path / 'p0-a.bam', [
+        ('seed', 100, [(0, 900), (1, 100), (0, 1000)]),
+        ('clipped', 500, [(0, 500), (4, 60)]),
+        ('plain', 0, [(0, 2000)]), ('conflicting', 0, [(0, 2000)]),
+    ])
+    b = _tiny_bam(tmp_path / 'p0-b.bam', [
+        ('seed', 100, [(0, 900), (1, 100), (0, 1000)]),
+        ('near', 100, [(0, 900), (1, 80), (0, 1000)]),
+        ('conflicting', 100, [(0, 900), (1, 100), (0, 1000)]), ('plain', 0, [(0, 2000)]),
+    ])
+    monkeypatch.setattr(plasmid_reconcile, 'contig_links', lambda *_a, **_k: None)
+    monkeypatch.setattr(variants_endpoint, '_scoped_state', lambda state, body: state)
+    state = _State([a, b])
+    records = []
+    for path in [a, b]:
+        with pysam.AlignmentFile(path) as bam:
+            records.extend((r, 'chrX') for r in bam.fetch('chrX', 0, 2000))
+    compact = [dict(id=r.query_name, reference_start=r.reference_start, reference_end=r.reference_end,
+                    sv=extract_sv_events(r, sv_extraction_floor(50))) for r, _ in records]
+    lens = build_lens([a, b], 'chrX', pos=1000, ref=1000, length=100,
+                      flank=100, consensus=False, loader_kwargs=LOADER)
+    split = sv_endpoint.sv_split_payload(state, dataset_id='d', chrom='chrX', start=0, end=2000,
+                                         t='I', ref=1000, length=100, include_putative=False)
+    inclusive = sv_endpoint.sv_split_payload(state, dataset_id='d', chrom='chrX', start=0, end=2000,
+                                             t='I', ref=1000, length=100)
+    assert inclusive['counts'][0] == 4
+    assert {c['id'] for c in lens['carriers'] if c['evidence_level'] in ('confirmed', 'putative')} == {n for n, allele in inclusive['assignments'].items() if allele == 0}
+    assert lens['cluster']['carriers'] == split['counts'][0] == 3
+    assert lens['cluster']['reference'] == split['counts'][1] == 1
+    assert {c['id'] for c in lens['carriers'] if c['evidence_level'] == 'confirmed'} == {n for n, allele in split['assignments'].items() if allele == 0}
+    for cutoff in [50, 90]:
+        summary = sv_summary_for_reads(compact, 0, 2000, cutoff)
+        variants = variants_endpoint.svs_payload(state, dict(dataset_id='d', chrom='chrX', start=0, end=2000, min_len=cutoff))
+        assert summary['clusters'] == variants['clusters']
+        c = summary['clusters'][0]
+        assert (c['support'], c['informative'], c['clip_support']) == (3, 4, 0)
+        assert c['putative'] == 1
+
+
+def test_e2e_insertion_cohort_keeps_competing_clips_ambiguous_until_opted_in(fixture):
+    """The e2e fixture has two insertion sizes; clips alone cannot choose one."""
+    from services import sv_endpoint
+    from services.sv_events import sv_summary_for_reads
+
+    state = _State([fixture['bam']])
+    reads = sv_endpoint.scan_view(state, 'd', 'chrT', 11000, 19000, 10)
+    summary = sv_summary_for_reads(reads, 11000, 19000, 50, chrom='chrT')
+    target = next(c for c in summary['clusters'] if c['t'] == 'I' and c['len'] > 1500)
+    assert {k: target[k] for k in ('support', 'informative', 'clip_support', 'putative', 'conflicting', 'ambiguous')} == {
+        'support': 24, 'informative': 40, 'clip_support': 0, 'putative': 0, 'conflicting': 0, 'ambiguous': 3,
+    }
+    lens = build_lens([fixture['bam']], 'chrT', pos=SITE, ref=target['ref'], length=target['len'],
+                      consensus=False, loader_kwargs=LOADER)
+    expected_carriers = {name for name, truth in fixture['reads'].items() if truth['kind'] == 'carrier'}
+    expected_clips = {name for name, truth in fixture['reads'].items() if truth['kind'] == 'clip'}
+    expected_reference = {name for name, truth in fixture['reads'].items() if truth['kind'] == 'reference'}
+    assert len(expected_carriers) == 24 and len(expected_clips) == 3 and len(expected_reference) == 16
+    assert {c['id'] for c in lens['carriers'] if c['evidence_level'] == 'confirmed'} == expected_carriers
+    assert {c['id'] for c in lens['carriers'] if c['evidence_level'] == 'ambiguous'} == expected_clips
+    assert lens['cluster']['carriers'] == 24 and lens['cluster']['evidence_total'] == 27
+    assert {c['id'] for c in lens['reference']} == expected_reference
+    kwargs = dict(dataset_id='d', chrom='chrT', start=11000, end=19000,
+                  t='I', ref=target['ref'], length=target['len'])
+    default = sv_endpoint.sv_split_payload(state, **kwargs)
+    inclusive = sv_endpoint.sv_split_payload(state, **kwargs, include_ambiguous=True)
+    assert default['counts'] == [24, 16, 5] and inclusive['counts'] == [27, 16, 2]
+    assert {name for name, group in default['assignments'].items() if group == 0} == expected_carriers
+    assert {name for name, group in inclusive['assignments'].items() if group == 0} == expected_carriers | expected_clips
+    assert all(default['assignments'][name] == 2 for name in expected_clips)
+    assert default['evidence_counts'] == inclusive['evidence_counts'] == dict(confirmed=24, putative=0, conflicting=0, ambiguous=3)

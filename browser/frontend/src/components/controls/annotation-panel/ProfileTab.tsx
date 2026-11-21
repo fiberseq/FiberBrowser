@@ -1,3 +1,4 @@
+import { openPlots } from '../../../features/plots/workspace';
 import { useMemo, useState, useEffect } from 'react';
 import { useBrowserStore } from '../../../stores/browserStore';
 import { useShallow } from 'zustand/react/shallow';
@@ -114,6 +115,14 @@ export function ProfileTab() {
 
   return (
     <div className="space-y-2">
+      <div className="flex justify-end">
+        <button type="button" data-testid="annotation-profile-open-in-plots"
+          className="rounded border border-gray-200 px-1.5 py-0.5 text-[11px] text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300"
+          title="Open in Plots: the read-layer metaprofile of this view (any source, per dataset or group, Compare, the Gallery). This profile keeps its own maths: confidence-weighted per-read annotations, which the read layers do not carry."
+          onClick={() => openPlots({ type: 'metaprofile', where: 'view', groupBy: 'dataset' })}>
+          Open in Plots
+        </button>
+      </div>
       <div className="flex items-center justify-between gap-2">
         <div className="text-[11px] text-gray-500">Annotation density across viewport.</div>
         <AnalysisButton onClick={exportProfileTsv} variant="neutral" size="xs">

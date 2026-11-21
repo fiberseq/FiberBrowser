@@ -17,6 +17,8 @@ from typing import Callable, Iterator, Optional
 import numpy as np
 
 from services import snp_scan
+from services.bam_tags import record_passes_call_rule
+from services.signal_evidence import body_hide_uncalled
 
 MAX_SPAN = 300_000
 from services.byte_cache import shared_cache
@@ -35,7 +37,11 @@ class VariantsCancelled(RuntimeError):
 
 
 def _dataset(state, dataset_id: str):
+    from services.query_params import resolve_dataset_id
+    from services.lift.capability import require
+    dataset_id = resolve_dataset_id(state, dataset_id)
     dataset = state.get_dataset(dataset_id) if dataset_id else None
+    require(dataset, "variants")
     if dataset is None:
         raise VariantsRequestError(f"Dataset '{dataset_id}' not found", 404)
     if getattr(dataset, "data_type", None) != "bam":
@@ -73,10 +79,19 @@ def _refuse_mixed_on_variant_layers(state, body: dict) -> None:
         raise VariantsRequestError(VARIANT_LAYER_NEEDS_BAM, 409)
 
 
+def _dataset_or_layers(state, body: dict):
+    """The request's BAM dataset, or a bigBed dataset whose FiberHMM var / sv layers answer it."""
+    from services import fiberhmm_variant_layers as fvl
+    layered = _variant_layer_dataset(state, body, fvl.SV_LAYER) or _variant_layer_dataset(state, body, fvl.VAR_LAYER)
+    return layered if layered is not None else _dataset(state, body.get("dataset_id"))
+
+
 def _scoped_state(state, body):
     from copy import copy
     from services.panel_genomes import for_datasets
-    scoped = copy(for_datasets(state, [body.get("dataset_id")]))
+    # Resolve and classify before panel scoping, cache lookup or BAM-only validation.
+    dataset = _dataset_or_layers(state, body)
+    scoped = copy(for_datasets(state, [dataset.id]))
     ids = body.get("read_ids")
     if ids is not None and (not isinstance(ids, list) or not all(isinstance(x, str) for x in ids)):
         raise VariantsRequestError("read_ids must be a list of read names")
@@ -84,7 +99,9 @@ def _scoped_state(state, body):
     return scoped
 
 
-def _records(state, dataset, chrom: str, start: int, end: int) -> Iterator:
+def _records(state, dataset, chrom: str, start: int, end: int, hide_uncalled=None) -> Iterator:
+    """The view's records for the SNP scan and allele reads: the panel's signal and uncalled-read rules
+    (bam_tags.record_passes_call_rule; None: as the request asked; QC-fail and duplicates are the scan's own options)."""
     from services.bam_handles import get_bam_handle
     from services.signal_evidence import record_keeps_signal, signal_header
     from services.plasmid_reconcile import contig_links
@@ -100,8 +117,11 @@ def _records(state, dataset, chrom: str, start: int, end: int) -> Iterator:
             continue
         ids = getattr(state, "_variant_read_ids", None)
         provenance = signal_header(bam.header)
+        from services.graph_lift import lift_hidden_predicate
+        hidden = lift_hidden_predicate(bam.header)  # an unrepaired lift's ex-supplementaries, as the read track
         yield from (read for read in bam.fetch(actual, max(0, int(start)), int(end))
-                    if (ids is None or read.query_name in ids) and record_keeps_signal(read, provenance))
+                    if (ids is None or read.query_name in ids) and record_keeps_signal(read, provenance)
+                    and (hidden is None or not hidden(read)) and record_passes_call_rule(read, hide_uncalled))
 
 
 def _reference(state, chrom: str, start: int, end: int) -> Optional[np.ndarray]:
@@ -172,11 +192,13 @@ def scan_params(body: dict) -> dict:
         "min_depth": _int(body.get("min_depth"), 20, 1, 1_000_000),
         "both_strands": bool(body.get("both_strands", True)),
         "min_bq": _int(body.get("min_bq"), 20, 0, 93),
-        "min_mapq": _int(body.get("min_mapq"), 20, 0, 255),
+        "min_mapq": _int(body.get("min_mapq"), 0, 0, 255),
         "max_indel": _int(body.get("max_indel"), 30, 1, 1000),
         "mode": mode,
         "include_duplicates": bool(body.get("include_duplicates", False)),
         "include_qcfail": bool(body.get("include_qcfail", False)),
+        # Min footprints' uncalled-read rule (body, else min_footprints -1, else the query; default hide).
+        "hide_uncalled": body_hide_uncalled(body),
     }
 
 
@@ -209,7 +231,8 @@ def _entry(state, dataset_id: str, chrom: str, start: int, end: int, params: dic
     fasta_id = (str(fasta_name), _stamps([fasta_name]) if fasta_name else None)
     from services.signal_evidence import signal_filter_key
     key = (dataset_id, chrom, start, end, params["min_bq"], params["min_mapq"], params["max_indel"],
-           params["include_duplicates"], params["include_qcfail"], stamps, str(fasta_id), getattr(state, "_variant_read_ids", None), signal_filter_key(state))
+           params["include_duplicates"], params["include_qcfail"], stamps, str(fasta_id), getattr(state, "_variant_read_ids", None), signal_filter_key(state),
+           params["hide_uncalled"])
     with _LOCK:
         hit = _CACHE.get(key) if stamps is not None else None
         if hit is not None:
@@ -218,7 +241,7 @@ def _entry(state, dataset_id: str, chrom: str, start: int, end: int, params: dic
             return hit
     t0 = time.perf_counter()
     ref = _reference(state, chrom, start, end)
-    pile = snp_scan.pileup(_records(state, dataset, chrom, start, end), chrom, start, end, ref=ref,
+    pile = snp_scan.pileup(_records(state, dataset, chrom, start, end, params["hide_uncalled"]), chrom, start, end, ref=ref,
                            min_bq=params["min_bq"], min_mapq=params["min_mapq"], max_indel=params["max_indel"],
                            include_duplicates=params["include_duplicates"], include_qcfail=params["include_qcfail"], cancelled=cancelled)
     if pile.cancelled:
@@ -247,7 +270,8 @@ def scan_key(dataset_id: str, chrom: str, start: int, end: int, params: dict, id
     digest = hashlib.sha1(repr(identity).encode()).hexdigest()[:10]
     return "|".join(str(x) for x in (dataset_id, chrom, start, end, params["min_maf"], params["min_depth"],
                                      params["both_strands"], params["min_bq"], params["min_mapq"],
-                                     params["max_indel"], params["mode"], params["include_duplicates"], params["include_qcfail"], digest))
+                                     params["max_indel"], params["mode"], params["include_duplicates"], params["include_qcfail"],
+                                     *(() if params.get("hide_uncalled", True) else ("uncalled-shown",)), digest))
 
 
 def snps_payload(state, body: dict, cancelled: Optional[Callable[[], bool]] = None) -> dict:
@@ -256,7 +280,7 @@ def snps_payload(state, body: dict, cancelled: Optional[Callable[[], bool]] = No
     if layered is not None:
         return layered
     state = _scoped_state(state, body)
-    dataset_id = str(body.get("dataset_id") or "")
+    dataset_id = _dataset(state, body.get("dataset_id")).id
     chrom, start, end = _region(body)
     params = scan_params(body)
     t0 = time.perf_counter()
@@ -298,7 +322,7 @@ def _matrix(state, entry: dict, candidates: list[dict], params: dict,
         # The reads' differences from the reference, kept by the scan: no second pass over the BAM.
         matrix = snp_scan.alleles_from_pileup(pile, candidates)
     else:
-        matrix = snp_scan.read_alleles(_records(state, entry["dataset"], pile.chrom, pile.start, pile.end),
+        matrix = snp_scan.read_alleles(_records(state, entry["dataset"], pile.chrom, pile.start, pile.end, params["hide_uncalled"]),
                                        pile.chrom, pile.start, pile.end, candidates,
                                        min_bq=params["min_bq"], min_mapq=params["min_mapq"],
                                        include_duplicates=params["include_duplicates"], include_qcfail=params["include_qcfail"], cancelled=cancelled)
@@ -325,14 +349,27 @@ def _columns(entry: dict, matrix: snp_scan.AlleleMatrix, candidates: list[dict])
 def alleles_payload(state, body: dict, cancelled: Optional[Callable[[], bool]] = None) -> dict:
     """Group the view's reads by allele (one SNP), by allele combination (several), or by HP tag."""
     from services import fiberhmm_variant_layers as fvl
-    if not body.get("svs"):
+    if not body.get("svs") and body.get("source") != "lift_hap":
         layered = _from_variant_layer(fvl.alleles_payload, state, body, fvl.VAR_LAYER)
         if layered is not None:
             return layered
-    elif body.get("snps"):
+    elif body.get("svs") and body.get("snps"):
         _refuse_mixed_on_variant_layers(state, body)  # SNPs + SVs together: not from the layers yet
+    if body.get("source") == "lift_hap":
+        from services.query_params import resolve_dataset_id
+        from services.lift.capability import is_lifted
+        did = resolve_dataset_id(state, body.get("dataset_id"))
+        ds = state.get_dataset(did)
+        if not is_lifted(ds):
+            raise VariantsRequestError("Haplotype grouping requires a live-lift dataset")
+        chrom, start, end = _region(body)
+        labels = list(ds.live_lift.labels().values())
+        return dict(dataset_id=did, region=dict(chrom=chrom, start=start, end=end), source="lift_hap",
+                    mode="lift_hap", assignments={}, n_reads=0, covering=0, threshold=0, distinct=len(labels),
+                    groups=[dict(id=i, key=label, label=label, alleles=[label], count=0, kind="combo") for i, label in enumerate(labels)],
+                    phase=None, tags=None, snps=[], scan_key=ds.live_lift.key())
     state = _scoped_state(state, body)
-    dataset_id = str(body.get("dataset_id") or "")
+    dataset_id = _dataset_or_layers(state, body).id
     chrom, start, end = _region(body)
     params = scan_params(body)
     svs = body.get("svs")
@@ -455,16 +492,21 @@ def _genotype_payload(state, body, entry, called, matrix, mcands, col_of, candid
         snp_letters = snp_scan.allele_letters(matrix, mcands, cols) if cols else [[] for _ in matrix.names]
         row_of = {name: r for r, name in enumerate(matrix.names)}
         matrix_names = list(matrix.names)
-    calls = []
+    calls, evidence_calls = [], []
     for sv in parsed:
         if cancelled is not None and cancelled():
             raise VariantsCancelled()
         try:
             res = sv_split_payload(state, dataset_id=dataset_id, chrom=chrom, start=start, end=end, t=sv["t"],
-                                   ref=sv["ref"], length=sv["len"], include_duplicates=params["include_duplicates"], include_qcfail=params["include_qcfail"])
+                                   ref=sv["ref"], length=sv["len"], include_duplicates=params["include_duplicates"], include_qcfail=params["include_qcfail"],
+                                   hide_uncalled=params["hide_uncalled"],
+                                   include_putative=bool(body.get("include_putative", True)),
+                                   include_ambiguous=bool(body.get("include_ambiguous", False)),
+                                  include_conflicting=bool(body.get("include_conflicting", False)), conflict_options=body.get("conflict_options"))
         except SvRequestError as exc:
             raise VariantsRequestError(str(exc)) from None
         calls.append(res["assignments"])
+        evidence_calls.append(res.get("evidence_levels", {}))
     names = list(dict.fromkeys([*matrix_names, *(n for c in calls for n in c)]))
     letters = []
     for name in names:
@@ -479,6 +521,23 @@ def _genotype_payload(state, body, entry, called, matrix, mcands, col_of, candid
     result = snp_scan.genotype_groups(names, letters, columns, partial=bool(body.get("partial", False)),
                                       min_fraction=_float(body.get("min_fraction"), 0.02, 0.0, 0.5),
                                       min_reads=_int(body.get("min_reads"), 3, 1, 1_000_000))
+    rank = {'confirmed': 0, 'putative': 1, 'conflicting': 2, 'ambiguous': 3}
+    evidence_levels = {}
+    for name in names:
+        levels = [tiers.get(name) for assignments, tiers in zip(calls, evidence_calls)
+                  if assignments.get(name) == 0 and tiers.get(name) in rank]
+        if levels:
+            evidence_levels[name] = max(levels, key=rank.get)
+    result['sv_evidence_levels'] = evidence_levels
+    result['include_putative'] = bool(body.get('include_putative', True))
+    result['include_conflicting'] = bool(body.get('include_conflicting', False))
+    result['include_ambiguous'] = bool(body.get('include_ambiguous', False))
+    for group in result['groups']:
+        levels = [level for name, level in evidence_levels.items() if result['assignments'].get(name) == group['id']]
+        counts = {level: levels.count(level) for level in rank}
+        group['evidence_counts'] = counts
+        if group['kind'] == 'combo' and (counts['putative'] or counts['conflicting'] or counts['ambiguous']):
+            group['label'] += f" ({counts['confirmed']} confirmed, {counts['putative']} putative, {counts['conflicting']} conflicting, {counts['ambiguous']} ambiguous carriers)"
     result["tags"] = None
     if entry is None:
         result.update({"dataset_id": dataset_id, "region": {"chrom": chrom, "start": start, "end": end},
@@ -526,78 +585,57 @@ def clear_cache() -> None:
 # ---------------------------------------------------------------------------
 # SVs in view, and how an SV's carriers line up with the SNP alleles
 
-def _sv_records(state, dataset, chrom: str, start: int, end: int, include_duplicates: bool, include_qcfail: bool = False) -> list[tuple]:
-    from services.bam_handles import get_bam_handle
-    from services.signal_evidence import record_keeps_signal, signal_header
-    from services.plasmid_reconcile import contig_links
-    from utils.chrom import resolve_reference_name
-
-    out = []
-    for path in dataset.paths:
-        bam = get_bam_handle(path)
-        if bam is None:
-            continue
-        actual = resolve_reference_name(chrom, bam.references, getattr(state, "chrom_map", None) or {},
-                                        links=contig_links(state, path=path))
-        if actual is None:
-            continue
-        provenance = signal_header(bam.header)
-        for read in bam.fetch(actual, max(0, int(start)), int(end)):
-            if not record_keeps_signal(read, provenance):
-                continue
-            ids = getattr(state, "_variant_read_ids", None)
-            if ids is not None and read.query_name not in ids:
-                continue
-            if read.is_unmapped or read.is_secondary or read.is_supplementary:
-                continue
-            if read.is_duplicate and not include_duplicates:
-                continue
-            if getattr(read, "is_qcfail", False) and not include_qcfail:
-                continue
-            out.append((read, actual))
-    return out
+def _sv_compact(state, dataset_id, chrom, start, end, floor, include_duplicates, cancelled=None, include_qcfail=False,
+                hide_uncalled=None):
+    from services import sv_endpoint
+    from services.sv_evidence import select_cohort
+    # The provider checks the server cancel scope during collection and spool
+    # replay as well as on warm hits. Explicit callers keep their old callback.
+    if cancelled is not None and cancelled():
+        raise VariantsCancelled()
+    from services.sv_evidence import ScanCancelled
+    try:
+        compact = sv_endpoint.scan_view(state, dataset_id, chrom, start, end, floor, cancelled=cancelled)
+    except ScanCancelled:
+        raise VariantsCancelled() from None
+    if cancelled is not None and cancelled():
+        raise VariantsCancelled()
+    from services.sv_evidence import resolve_hide_uncalled
+    return select_cohort(compact, include_duplicates=include_duplicates, include_qcfail=include_qcfail,
+                         hide_uncalled=resolve_hide_uncalled(hide_uncalled))
 
 
 def svs_payload(state, body: dict, cancelled: Optional[Callable[[], bool]] = None) -> dict:
     """SV clusters (deletions and insertions of at least ``min_len``) in the view, as the SV band clusters them."""
-    from services.sv_events import extract_sv_events, normalize_min_sv_len, sv_summary_for_reads
+    from services.sv_events import normalize_min_sv_len, sv_summary_for_reads, sv_extraction_floor
     from services import fiberhmm_variant_layers as fvl
 
     layered = _from_variant_layer(fvl.svs_payload, state, body, fvl.SV_LAYER)
     if layered is not None:
         return layered
     state = _scoped_state(state, body)
-    dataset_id = str(body.get("dataset_id") or "")
+    dataset_id = _dataset(state, body.get("dataset_id")).id
     chrom, start, end = _region(body)
-    dataset = _dataset(state, dataset_id)
     min_len = normalize_min_sv_len(body.get("min_len"))
     include_duplicates = bool(body.get("include_duplicates", False))
-    include_qcfail = bool(body.get("include_qcfail", False))
-    compact = []
-    for n, (read, _c) in enumerate(_sv_records(state, dataset, chrom, start, end, include_duplicates, include_qcfail)):
-        if cancelled is not None and n % 500 == 0 and cancelled():
-            raise VariantsCancelled()
-        item = {"id": read.query_name, "reference_start": int(read.reference_start),
-                "reference_end": int(read.reference_end)}
-        events = extract_sv_events(read, min_len)
-        if events:
-            item["sv"] = events
-        compact.append(item)
-    summary = sv_summary_for_reads(compact, start, end, min_len, chrom=chrom) or {"clusters": []}
+    compact = _sv_compact(state, dataset_id, chrom, start, end, sv_extraction_floor(min_len),
+                          include_duplicates, cancelled, include_qcfail=bool(body.get("include_qcfail", False)),
+                          hide_uncalled=body_hide_uncalled(body))
+    summary = sv_summary_for_reads(compact, start, end, min_len, chrom=chrom, conflict_options=body.get("conflict_options")) or {"clusters": []}
     clusters = [c for c in summary["clusters"] if c["len"] >= min_len]
     clusters.sort(key=lambda c: (c["ref"], c["t"]))
     return {"dataset_id": dataset_id, "region": {"chrom": chrom, "start": start, "end": end}, "min_len": min_len,
-            "n_reads": len(compact), "clusters": clusters}
+            "n_reads": len({r["id"] for r in compact}), "clusters": clusters}
 
 
 def sv_linkage_payload(state, body: dict, cancelled: Optional[Callable[[], bool]] = None) -> dict:
     """An SV's carriers vs its reference reads at each informative SNP: the minor allele's fraction in each, and
     how many SNPs separate them (>= 0.9 in one, <= 0.1 in the other)."""
-    from services.sv_endpoint import classify_records
+    from services.sv_endpoint import classify_compact, allele_floor
 
     _refuse_mixed_on_variant_layers(state, body)  # not from the FiberHMM layers yet
     state = _scoped_state(state, body)
-    dataset_id = str(body.get("dataset_id") or "")
+    dataset_id = _dataset(state, body.get("dataset_id")).id
     chrom, start, end = _region(body)
     params = scan_params(body)
     t = str(body.get("t") or "")
@@ -613,9 +651,14 @@ def sv_linkage_payload(state, body: dict, cancelled: Optional[Callable[[], bool]
     matrix = _matrix(state, entry, candidates, params, cancelled)
     col_of = {sid: j for j, sid in enumerate(matrix.ids)}
     mcands = _columns(entry, matrix, candidates)
-    records = _sv_records(state, entry["dataset"], chrom, start, end, params["include_duplicates"], params["include_qcfail"])
-    classified = classify_records(records, t=t, ref=ref, length=length,
-                                  include_duplicates=params["include_duplicates"], include_qcfail=params["include_qcfail"])
+    compact = _sv_compact(state, dataset_id, chrom, start, end, allele_floor(length), params["include_duplicates"], cancelled, include_qcfail=params["include_qcfail"],
+                          hide_uncalled=params["hide_uncalled"])
+    classified = classify_compact(((c, c) for c in compact), t=t, ref=ref, length=length,
+                                  include_duplicates=params["include_duplicates"], include_qcfail=params["include_qcfail"],
+                                  hide_uncalled=params["hide_uncalled"],
+                                  include_putative=bool(body.get("include_putative", True)),
+                                  include_ambiguous=bool(body.get("include_ambiguous", False)),
+                                  include_conflicting=bool(body.get("include_conflicting", False)), conflict_options=body.get("conflict_options"))
     allele = {name: v["allele"] for name, v in classified.items()}
     counts = {"carriers": sum(1 for a in allele.values() if a == 0),
               "reference": sum(1 for a in allele.values() if a == 1),
@@ -646,6 +689,10 @@ def sv_linkage_payload(state, body: dict, cancelled: Optional[Callable[[], bool]
                      "linked": (f0 >= 0.9 and f1 <= 0.1) or (f0 <= 0.1 and f1 >= 0.9)})
     rows.sort(key=lambda r: (-r["diff"], r["pos"]))
     return {"dataset_id": dataset_id, "region": {"chrom": chrom, "start": start, "end": end},
-            "sv": {"t": t, "ref": ref, "len": length}, "counts": counts, "tested": len(rows),
+            "sv": {"t": t, "ref": ref, "len": length}, "counts": counts,
+            "carrier_evidence_counts": {level: sum(v['allele'] == 0 and (v['evidence'] or {}).get('level') == level
+                                                    for v in classified.values())
+                                        for level in ('confirmed', 'putative', 'conflicting', 'ambiguous')},
+            "tested": len(rows),
             "linked": sum(1 for r in rows if r["linked"]), "snps": rows[:200],
             "scan_key": scan_key(dataset_id, chrom, start, end, params, entry["key"])}

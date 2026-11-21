@@ -149,6 +149,7 @@ export function HaplotypeClusteringControls() {
               result_key: panel.stateKey,
               ...(filter ? { read_ids: [...filter] } : {}),
               ...(panel.strand ? { strand: panel.strand } : {}),
+              ...(panel.liftHap ? { lift_hap: panel.liftHap } : {}),
             };
           }),
         })),

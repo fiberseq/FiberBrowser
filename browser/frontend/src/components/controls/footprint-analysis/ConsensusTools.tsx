@@ -15,6 +15,7 @@ import { ConsensusCrossEvidence } from './ConsensusCrossEvidence';
 import { ConsensusFitStatus } from './ConsensusFitStatus';
 import {ConsensusBamExport} from './ConsensusBamExport';
 import {ConsensusProgress} from './ConsensusProgress';
+import {useLiveJobs} from '../../../stores/liveJobsStore';
 import {FamilyStages,stagedControlVisible,stagedPreset,recallerControlVisible,recallerPreset,workflowPreset} from './FamilyStages';
 import {NativeCrossPrecision} from './NativeCrossDiagnostics';
 import {crossControlVisible,nativeCrossPrecision} from '../../../utils/nativeCrossEvidence';
@@ -161,6 +162,8 @@ export function ConsensusTools({datasetIds,peaks,onOpenSetup,activeFilterKey=nul
   const referenceName=(key:string|null)=>key?panelGenomeLabel(panelGenomes[key],key):'the main genome';
   const [chemistry,setChemistry]=useState<Record<string,string>>({});
   const [job,setJob]=useState<ConsensusJob|null>(null);
+  // Plots' Find classes button shows this run's progress (stores/liveJobsStore).
+  useEffect(()=>{useLiveJobs.setState({consensus:job});},[job]);
   const [history,setHistory]=useState<ConsensusJob[]>([]);
   const [filters,setFilters]=useState<DisplayFilters|null>(null);
   const [error,setError]=useState('');const [submitting,setSubmitting]=useState(false);

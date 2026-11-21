@@ -1,0 +1,444 @@
+{
+ "classification_display": {
+  "maximum": 99.999,
+  "minimum": 50.0,
+  "parameter": "classification_reference_percent",
+  "semantics": "Native predictive reference compatibility, not accuracy, posterior probability, or FDR. Higher reference values admit more alternatives; source spans are fixed."
+ },
+ "cr_mode": "lattice_recaller",
+ "display_defaults": {
+  "classification_reference_percent": 99.9,
+  "minimum_comparability_q": 0.0,
+  "minimum_model_q": 0.0,
+  "minimum_rescue_model_q": 0.0,
+  "recaller_class_tiers": {},
+  "recaller_edges": "native",
+  "require_cross_comparable": false,
+  "require_molecule_comparable": false,
+  "require_population_comparable": false,
+  "show_quality_outlines": true
+ },
+ "groups": {
+  "comparability": [
+   {
+    "choices": null,
+    "default": false,
+    "help": "Conditional population comparison from native evidence only; no balancing or deletion of calls.",
+    "label": "Score CT/GA comparability",
+    "maximum": null,
+    "minimum": null,
+    "name": "enabled",
+    "step": null,
+    "type": "bool"
+   },
+   {
+    "choices": null,
+    "default": 0.1,
+    "help": "Absolute CT\u2013GA margin for comparability, separate from existence and testability.",
+    "label": "Allowed population fraction difference",
+    "maximum": 0.99999,
+    "minimum": 0.001,
+    "name": "equivalence_margin",
+    "step": 0.01,
+    "type": "float"
+   },
+   {
+    "choices": null,
+    "default": 0.01,
+    "help": "Both conditional fractions must exceed this floor for comparative support.",
+    "label": "Population existence floor",
+    "maximum": 0.99,
+    "minimum": 1e-06,
+    "name": "existence_floor",
+    "step": 0.005,
+    "type": "float"
+   }
+  ],
+  "compute": [
+   {
+    "choices": null,
+    "default": false,
+    "help": "Start at consolidation: fail on a missing or incompatible native-fit checkpoint instead of fitting again.",
+    "label": "Require saved native fits",
+    "maximum": null,
+    "minimum": null,
+    "name": "require_native_cache",
+    "step": null,
+    "type": "bool"
+   },
+   {
+    "choices": [
+     "cpu",
+     "vectorized",
+     "cuda"
+    ],
+    "default": "cpu",
+    "help": "CPU reference or opt-in CUDA/MPS interval scoring. Same CPU random draws and probabilities; numerically borderline device results are rechecked on CPU. Unavailable devices fall back explicitly.",
+    "label": "Predictive scoring backend (vectorized = counter-based generator, declared versioned kernel)",
+    "maximum": null,
+    "minimum": null,
+    "name": "predictive_backend",
+    "step": null,
+    "type": "str"
+   },
+   {
+    "choices": null,
+    "default": "0",
+    "help": "Only with predictive_backend=vectorized. 0 = plain Monte Carlo with the counter-based generator; a fraction in (0,1) mixes the generating-projection law with uniform; threshold:M spends draws on projections whose penalty could reach the observed loss within M nats. Unbiased for the same tail in every case; only the variance changes.",
+    "label": "Vectorized predictive importance tilt",
+    "maximum": null,
+    "minimum": null,
+    "name": "predictive_tilt",
+    "step": null,
+    "type": "str"
+   }
+  ],
+  "cr": [
+   {
+    "choices": [
+     "lattice_recaller",
+     "staged_native_families",
+     "call_harmonization"
+    ],
+    "default": "lattice_recaller",
+    "help": "Lattice recaller (the default) finds class geometries by k-means on confident calls and scores every molecule's lattice against them with EM (no Monte Carlo). Staged native families (deprecated) uses lattice-aware Monte Carlo fits and shared-geometry consolidation. Call harmonization is the separate lightweight overlap method. Saved historical engines remain available.",
+    "label": "Consensus algorithm",
+    "maximum": null,
+    "minimum": null,
+    "name": "engine",
+    "step": null,
+    "type": "str"
+   },
+   {
+    "choices": null,
+    "default": 0.5,
+    "help": "Average-linkage cut on overlap of the shorter footprint. Larger values merge more similar geometries.",
+    "label": "Native-call clustering distance",
+    "maximum": 0.99,
+    "minimum": 0,
+    "name": "harmonization_cut",
+    "step": 0.05,
+    "type": "float"
+   },
+   {
+    "choices": null,
+    "default": 0.7,
+    "help": "Direct non-transitive overlap required to fold a recurrent family into an anchor.",
+    "label": "Family folding overlap",
+    "maximum": 1,
+    "minimum": 0.01,
+    "name": "harmonization_fold_overlap",
+    "step": 0.05,
+    "type": "float"
+   }
+  ],
+  "cross": [
+   {
+    "choices": null,
+    "default": false,
+    "help": "All plausible cross-dataset pairs; native nodes and both intervals stay unchanged. At least two datasets required.",
+    "label": "Build XCR relationship graph",
+    "maximum": null,
+    "minimum": null,
+    "name": "enabled",
+    "step": null,
+    "type": "bool"
+   },
+   {
+    "choices": null,
+    "default": true,
+    "help": "Keep fine native classes and additionally report bounded, non-transitive broad-anchor groups. Count each molecule once, even if it carries multiple children. No detection is added.",
+    "label": "Report coarser ANY-child comparisons",
+    "maximum": null,
+    "minimum": null,
+    "name": "coarse_native_events",
+    "step": null,
+    "type": "bool"
+   },
+   {
+    "choices": null,
+    "default": 0.8,
+    "help": "Flag comparison as lattice-limited below this fraction of span-covered units able to reach the native threshold. Necessary reachability only, not sensitivity or a fit to observed agreement.",
+    "label": "Minimum lattice-capable fraction",
+    "maximum": 1,
+    "minimum": 0,
+    "name": "lattice_capable_fraction",
+    "step": 0.05,
+    "type": "float"
+   }
+  ],
+  "families": [
+   {
+    "choices": null,
+    "default": 99.9,
+    "help": "50 is strict; 99.9 accepts any state compatible under the native predictive test. Uses the upper predictive-tail interval bound, not a posterior probability. Never forces a rejected or unassessed match. Does not refit models.",
+    "label": "Assignment compatibility reference (%)",
+    "maximum": 99.9,
+    "minimum": 50,
+    "name": "assignment_reference_percent",
+    "step": 0.1,
+    "type": "float"
+   },
+   {
+    "choices": null,
+    "default": 2,
+    "help": "Retain a tested alternative when recurring physical molecules distinguish it from every proposed replacement in both directions. Does not veto promotion or rerun Monte Carlo. 0 reproduces historical retirement.",
+    "label": "Alternative retention: witnesses per direction",
+    "maximum": 100000,
+    "minimum": 0,
+    "name": "minimum_retention_groups",
+    "step": 1,
+    "type": "int"
+   },
+   {
+    "choices": null,
+    "default": 3,
+    "help": "Show a fitted population state only when it is the primary explanation for at least this many independent evidence units. All fitted alternatives remain in the frozen audit evidence.",
+    "label": "Minimum recurrent-state molecules",
+    "maximum": 100000,
+    "minimum": 1,
+    "name": "minimum_display_primary_units",
+    "step": 1,
+    "type": "int"
+   }
+  ],
+  "input": [
+   {
+    "choices": [
+     "disabled",
+     "seq",
+     "molecular"
+    ],
+    "default": "disabled",
+    "help": "Only for BAMs without MA/Ma: explicitly declare whether as/al and ns/nl coordinates use stored SEQ or molecular orientation. Disabled uses molecular when the header shows fibertools wrote the tags (a fibertools nucleosome command with no later FiberHMM caller), otherwise stops; it never guesses or flips REV from the data. The verified ind 2\u20134 h input uses seq.",
+    "label": "Legacy Hia5 MSP/nucleosome tag frame",
+    "maximum": null,
+    "minimum": null,
+    "name": "legacy_hia5_annotation_frame",
+    "step": null,
+    "type": "str"
+   },
+   {
+    "choices": null,
+    "default": true,
+    "help": "Re-score fixed MSPs with the multi-interval decoder. Original BAM calls remain untouched in the native layer.",
+    "label": "Replay corrected native TF decoder",
+    "maximum": null,
+    "minimum": null,
+    "name": "correct_native",
+    "step": null,
+    "type": "bool"
+   },
+   {
+    "choices": null,
+    "default": true,
+    "help": "Use the production DddA mCG rate correction at tagged CpGs, in native replay and every downstream lattice score. Untagged observations are unchanged.",
+    "label": "Honor DddA mCG substrate annotations",
+    "maximum": null,
+    "minimum": null,
+    "name": "ddda_m5c_correction",
+    "step": null,
+    "type": "bool"
+   }
+  ],
+  "recaller": [
+   {
+    "choices": null,
+    "default": 0,
+    "help": "0 = all molecules; 2000 is a good cap for deep data (thousands of reads per site). Stable hash sample per dataset and chemical channel, independently in each discovery tile, after evidence filters and duplicate collapse.",
+    "label": "Discovery molecules per channel (0 = all)",
+    "maximum": null,
+    "minimum": 0,
+    "name": "max_discovery_molecules",
+    "step": 1,
+    "type": "int"
+   },
+   {
+    "choices": null,
+    "default": 0,
+    "help": "0 = all molecules; 2000 is a good cap for deep data (thousands of reads per site). Score the same discovered catalogue on a stable sample per dataset and chemical channel in each scoring window. Prevalence uses the selected eligible molecules.",
+    "label": "Quantification molecules per channel (0 = all)",
+    "maximum": null,
+    "minimum": 0,
+    "name": "max_quantification_molecules",
+    "step": 1,
+    "type": "int"
+   },
+   {
+    "choices": null,
+    "default": 1,
+    "help": "Stable molecule hash seed shared across overlapping tiles; independent of the discovery initialization seed.",
+    "label": "Molecule sampling seed",
+    "maximum": null,
+    "minimum": 0,
+    "name": "sample_seed",
+    "step": 1,
+    "type": "int"
+   }
+  ],
+  "rescue": [
+   {
+    "choices": null,
+    "default": false,
+    "help": "Separate opt-in layer. Existing TFs and nucleosomes are obstacles. Fold-excluded source geometry must support each addition.",
+    "label": "Add strictly supported uncalled footprints",
+    "maximum": null,
+    "minimum": null,
+    "name": "enabled",
+    "step": null,
+    "type": "bool"
+   },
+   {
+    "choices": null,
+    "default": 10,
+    "help": "Bounded proposal grid for the explicitly named strict-detection auxiliary only. Not native CR variation, assay resolution, or an SR tolerance. Every addition also needs an independently trained full-grid native shape check with zero extra bp allowance.",
+    "label": "Strict auxiliary proposal radius (\u00b1bp/edge)",
+    "maximum": 100,
+    "minimum": 0,
+    "name": "proposal_edge_radius_bp",
+    "step": 1,
+    "type": "int"
+   },
+   {
+    "choices": [
+     "opposite_strand",
+     "same_strand",
+     "pooled"
+    ],
+    "default": "opposite_strand",
+    "help": "Opposite strand is meaningful only for strand-resolved chemistries; pooled enables within-dataset CR recall.",
+    "label": "Rescue source population",
+    "maximum": null,
+    "minimum": null,
+    "name": "source_mode",
+    "step": null,
+    "type": "str"
+   }
+  ],
+  "split": [
+   {
+    "choices": null,
+    "default": false,
+    "help": "Retain original outer spans. Compare intact spans with internal accessible separators and CR-like protected pieces.",
+    "label": "Test CR-supported nucleosome splits",
+    "maximum": null,
+    "minimum": null,
+    "name": "enabled",
+    "step": null,
+    "type": "bool"
+   },
+   {
+    "choices": null,
+    "default": 10,
+    "help": "Both ends of a proposed protected piece must match a supported CR class.",
+    "label": "CR matching edge allowance (\u00b1bp)",
+    "maximum": 100,
+    "minimum": 0,
+    "name": "ambiguity_bp",
+    "step": 1,
+    "type": "int"
+   },
+   {
+    "choices": null,
+    "default": 30,
+    "help": "No cap on the number of compatible separators or protected pieces.",
+    "label": "Maximum internal separator width",
+    "maximum": 1000,
+    "minimum": 1,
+    "name": "maximum_gap_bp",
+    "step": 1,
+    "type": "int"
+   }
+  ],
+  "sr": [
+   {
+    "choices": null,
+    "default": true,
+    "help": "Current harmonization changes only measurement-equivalent native edges. Historical fitted engines retain their original strand-specific rules.",
+    "label": "Normalize boundaries with SR",
+    "maximum": null,
+    "minimum": null,
+    "name": "enabled",
+    "step": null,
+    "type": "bool"
+   },
+   {
+    "choices": null,
+    "default": 3.0,
+    "help": "Each edge and their joint change must pass this native-likelihood loss budget.",
+    "label": "Maximum native edge-loss odds",
+    "maximum": 10000,
+    "minimum": 1,
+    "name": "loss_odds",
+    "step": 1,
+    "type": "float"
+   },
+   {
+    "choices": null,
+    "default": false,
+    "help": "Do not change which recipient opportunities are protected.",
+    "label": "Only projection-equivalent changes",
+    "maximum": null,
+    "minimum": null,
+    "name": "projection_only",
+    "step": null,
+    "type": "bool"
+   }
+  ]
+ },
+ "layers": {
+  "cr_split_gap": [
+   "Internal accessible separators",
+   "#f59e0b"
+  ],
+  "msp_native_replay": [
+   "Native replay \u00b7 MSPs",
+   "#a7c7bd"
+  ],
+  "nuc_cr_split": [
+   "Alternative protected pieces",
+   "#14b8a6"
+  ],
+  "nuc_native_replay": [
+   "Native replay \u00b7 nucleosomes",
+   "#64748b"
+  ],
+  "tf_cr": [
+   "Population footprint states",
+   "#0891b2"
+  ],
+  "tf_cr_manual": [
+   "Manual footprint groups",
+   "#d97706"
+  ],
+  "tf_cr_recalled": [
+   "CR \u00b7 including new-call hypotheses",
+   "#0d9488"
+  ],
+  "tf_native_replay": [
+   "Native \u00b7 analysis baseline",
+   "#94a3b8"
+  ],
+  "tf_rc": [
+   "Footprint classes",
+   "#7c3aed"
+  ],
+  "tf_recall": [
+   "Recall \u00b7 new footprint hypotheses",
+   "#db2777"
+  ],
+  "tf_sr_lattice": [
+   "Cross-strand footprint states",
+   "#8b5cf6"
+  ],
+  "tf_xcr": [
+   "Cross-dataset state relationships",
+   "#06b6d4"
+  ]
+ },
+ "runtime": {
+  "source_root": "/data/fh-covplan",
+  "workflow_path": "/data/workflow.py"
+ },
+ "schema": "fiberhmm.consensus.v1"
+}

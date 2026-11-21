@@ -66,7 +66,7 @@ def fiberhmm_minimum(root: Path) -> str:
             return match.group(1)
     except OSError:
         pass
-    return "3.0.3"
+    return ""  # unknown: the app then uses services/fiberhmm_runtime.FIBERHMM_REQUIREMENT's floor
 
 
 def build_info(flavor: str, version: str, platform: str, fiberhmm_version: str = "", commit: str = "",
@@ -92,7 +92,7 @@ def build_info(flavor: str, version: str, platform: str, fiberhmm_version: str =
         "source_commit": source_commit or commit or None,
         "platform": platform,
         "fiberhmm_version": fiberhmm_version or None,
-        "fiberhmm_min_version": fiberhmm_minimum(root),
+        "fiberhmm_min_version": fiberhmm_minimum(root) or None,
         "update_manifest_url": (env.get("FB_UPDATE_URL") or "").strip(),
         "update_repo": (env.get("FB_UPDATE_REPO") or "").strip(),
         "built_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),

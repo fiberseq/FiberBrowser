@@ -25,13 +25,18 @@ export function usePrimerBlastConfig() {
   const [blastSetupBusy, setBlastSetupBusy] = useState(false);
   const [blastSetupMessage, setBlastSetupMessage] = useState<string | null>(null);
   const [blastTool, setBlastTool] = useState<BlastToolSummary | null>(null);
+  // Whether Build has a local FASTA to work from (undefined: an older server that doesn't say).
+  const [buildFastaLocal, setBuildFastaLocal] = useState<string | null | undefined>(undefined);
 
   useEffect(() => {
     if (isPublicMode()) return;
     let cancelled = false;
     getPrimerConfig()
       .then(config => {
-        if (!cancelled) setBlastTool(config.blast_tool ?? null);
+        if (!cancelled) {
+          setBlastTool(config.blast_tool ?? null);
+          setBuildFastaLocal(config.fasta_local);
+        }
         return syncPrimerConfigFromStorage(config);
       })
       .then(result => {
@@ -107,6 +112,7 @@ export function usePrimerBlastConfig() {
     blastSetupMessage,
     blastWarning,
     blastTool,
+    buildFastaLocal,
     buildBlastDbFromFasta,
     handlePickBlast,
     selectBlastDb,

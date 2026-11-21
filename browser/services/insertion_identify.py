@@ -186,6 +186,7 @@ def parse_blast_tab(text: str) -> list[dict]:
                 "sstart": min(ss, se) - 1, "send": max(ss, se),
                 "strand": "+" if ss <= se else "-",
                 "evalue": float(cols[8]), "bitscore": float(cols[9]), "slen": int(cols[10]),
+                **({"qlen": int(cols[11]), "nident": int(cols[12])} if len(cols) > 12 else {}),
             })
         except ValueError:
             continue
@@ -220,13 +221,15 @@ def _write_query(seq: str, directory: str) -> str:
 
 
 def run_blastn(seq: str, db: str, *, task: str, runner: _Runner, evalue: float, max_target_seqs: int,
-               max_hsps: Optional[int] = None, perc_identity: Optional[float] = None) -> list[dict]:
+               max_hsps: Optional[int] = None, perc_identity: Optional[float] = None, dust: str = "yes") -> list[dict]:
     with tempfile.TemporaryDirectory(prefix="fb_identify_") as tmp:
         query = _write_query(seq, tmp)
         out = os.path.join(tmp, "hits.tsv")
         from services.primer_blast_runtime import blast_thread_count
-        cmd = [tool_path("blastn") or "blastn", "-task", task, "-query", query, "-db", db, "-outfmt", f"6 {BLAST_FIELDS}",
-               "-evalue", str(evalue), "-dust", "yes", "-max_target_seqs", str(max_target_seqs),
+        from services.primer_config import blast_path_arg
+        cmd = [tool_path("blastn") or "blastn", "-task", task, "-query", query, "-db", blast_path_arg(db),
+               "-outfmt", f"6 {BLAST_FIELDS}",
+               "-evalue", str(evalue), "-dust", dust, "-max_target_seqs", str(max_target_seqs),
                "-num_threads", str(blast_thread_count()), "-out", out]
         if max_hsps:
             cmd += ["-max_hsps", str(max_hsps)]
@@ -275,7 +278,8 @@ def genome_blast_db(state, *, runner: Optional[_Runner] = None, progress: Option
             and (not primer_fasta or os.path.abspath(primer_fasta) == os.path.abspath(fasta))
             and blast_db_source_matches(primer_db, fasta)):
         return primer_db
-    prefix = default_blast_db_prefix(state, fasta)
+    # A paired reference's snapshot carries a prefix of its own (sequence_search.SearchReference.blast_states).
+    prefix = getattr(state, "blast_db_prefix", None) or default_blast_db_prefix(state, fasta)
     if blast_db_exists(prefix) and blast_db_source_matches(prefix, fasta):
         return prefix
     if not build:
@@ -286,15 +290,42 @@ def genome_blast_db(state, *, runner: Optional[_Runner] = None, progress: Option
     with _build_lock:
         if blast_db_exists(prefix) and blast_db_source_matches(prefix, fasta):
             return prefix
+        with open(fasta, "rb") as probe:
+            if probe.read(2) == b"\x1f\x8b":
+                raise IdentifyError(f"{os.path.basename(fasta)} is gzip-compressed; BLAST needs a plain FASTA "
+                                    "to build its database. Decompress it (gunzip -k) and open the .fa file.")
         if progress:
             progress("Indexing the genome for BLAST (once; a few minutes for a large genome)", 0.1)
         os.makedirs(os.path.dirname(prefix), exist_ok=True)
-        (runner or _Runner()).run([tool_path("makeblastdb") or "makeblastdb", "-in", fasta, "-dbtype", "nucl", "-parse_seqids", "-out", prefix],
-                                  timeout=3600)
-        if not blast_db_exists(prefix):
-            raise IdentifyError(f"makeblastdb finished but wrote no database at {prefix}")
+        _build_blast_db(fasta, prefix, runner or _Runner())
         record_blast_db_source(prefix, fasta)
     return prefix
+
+
+def _build_blast_db(fasta: str, prefix: str, runner: _Runner) -> None:
+    """makeblastdb into a staging folder, then its files moved to ``prefix``: a build that is stopped
+    (Cancel) or fails leaves nothing at ``prefix`` that a later search would take for a database.
+    makeblastdb can't write to a path with whitespace, so a staging folder there is a temporary one."""
+    import shutil
+    parent = os.path.dirname(prefix)
+    staging = tempfile.mkdtemp(prefix=".blastdb-build-", dir=parent) if not any(c.isspace() for c in parent) \
+        else tempfile.mkdtemp(prefix="fiberbrowser-blastdb-")
+    try:
+        if any(c.isspace() for c in staging):
+            raise IdentifyError(f"BLAST+ can't write a database to a folder whose path contains spaces ({parent}).")
+        base = os.path.basename(prefix)
+        from services.primer_config import blast_db_exists, blast_path_arg
+        runner.run([tool_path("makeblastdb") or "makeblastdb", "-in", blast_path_arg(fasta), "-dbtype", "nucl",
+                    "-parse_seqids", "-out", os.path.join(staging, base)], timeout=3600)
+        built = [name for name in os.listdir(staging) if name == base or name.startswith(base + ".")]
+        if not built:
+            raise IdentifyError(f"makeblastdb finished but wrote no database for {prefix}")
+        for name in built:
+            shutil.move(os.path.join(staging, name), os.path.join(parent, name))
+        if not blast_db_exists(prefix):
+            raise IdentifyError(f"makeblastdb finished but wrote no database at {prefix}")
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
 
 
 def _index_dir() -> str:
@@ -1643,16 +1674,18 @@ def start_job(kind: str, key: str, fn: Callable[[_Runner, ProgressFn], dict], *,
               cache_key: Optional[Callable[[], Optional[str]]] = None) -> dict:
     """Run ``fn`` in a background thread (one job per key at a time). A finished result is
     cached under ``key``, or under ``cache_key()`` when given (None: not cached), and only
-    when it finished before any Cancel."""
+    when it finished before any Cancel. On a lab server the job belongs to the member/workspace
+    that started it (services.runtime.lab_owner_key): only they see, share or cancel it."""
+    owner = _job_owner()
     with _jobs_lock:
         for job in _jobs.values():
-            if job["key"] == key and job["status"] in ("queued", "running"):
+            if job["key"] == key and job.get("owner") == owner and job["status"] in ("queued", "running"):
                 return job_view(job)
         job_id = uuid.uuid4().hex[:16]
         runner = _Runner()
         job = {"job_id": job_id, "key": key, "kind": kind, "status": "running", "message": "Starting",
                "progress": 0.0, "error": None, "result": None, "started": time.time(), "finished": None,
-               "_runner": runner}
+               "_runner": runner, "owner": owner}
         _jobs[job_id] = job
         while len(_jobs) > _JOB_KEEP:
             oldest = next(iter(_jobs))
@@ -1689,15 +1722,35 @@ def start_job(kind: str, key: str, fn: Callable[[_Runner, ProgressFn], dict], *,
     return job_view(job)
 
 
-def get_job(job_id: str) -> Optional[dict]:
+def _job_owner() -> Optional[str]:
+    from services.runtime import lab_owner_key
+    return lab_owner_key()
+
+
+def _visible_job(job_id: str, kinds: Optional[tuple] = None) -> Optional[dict]:
+    """The job when this request may see it: started by the same lab member/workspace (or both None
+    off the lab profile) and, when ``kinds`` is given, one of those kinds. Call under ``_jobs_lock``."""
+    job = _jobs.get(job_id)
+    if job is None or job.get("owner") != _job_owner():
+        return None
+    if kinds is not None and job.get("kind") not in kinds:
+        return None
+    return job
+
+
+# What the /api/insertions/identify/jobs routes may read or cancel (not, e.g., sequence-search jobs).
+IDENTIFY_JOB_KINDS = ("identify", "dfam")
+
+
+def get_job(job_id: str, kinds: Optional[tuple] = None) -> Optional[dict]:
     with _jobs_lock:
-        job = _jobs.get(job_id)
+        job = _visible_job(job_id, kinds)
     return job_view(job) if job else None
 
 
-def cancel_job(job_id: str) -> bool:
+def cancel_job(job_id: str, kinds: Optional[tuple] = None) -> bool:
     with _jobs_lock:
-        job = _jobs.get(job_id)
+        job = _visible_job(job_id, kinds)
         if not job or job["status"] not in ("queued", "running"):
             return False
         job["_runner"].abort.set()

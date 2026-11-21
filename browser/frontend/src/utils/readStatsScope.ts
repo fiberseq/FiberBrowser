@@ -189,7 +189,37 @@ export function summarizeByCluster(
   });
 }
 
+/** How many requested reads were not found (the server's missing ids; reads a filter hid are not among them). */
+export function readStatsMissingCount(missing: Record<string, readonly string[]> | null | undefined): number {
+  return Object.values(missing ?? {}).reduce((n, ids) => n + new Set(ids ?? []).size, 0);
+}
+
 /** "312 uncalled · 40 with < 5 footprints hidden": the reads Min footprints hid, by reason. */
 export function readStatsHiddenText(aggregate: Pick<ReadStatsAggregate, 'n_hidden_uncalled' | 'min_footprints' | 'n_hidden_min_footprints'>): string {
   return minFootprintsHiddenText(aggregate.n_hidden_uncalled ?? 0, aggregate.n_hidden_min_footprints ?? 0, aggregate.min_footprints ?? 0);
+}
+
+/** Which read filter hid which reads, by filter, as the read track applies them:
+ *  "Duplicates: 12 hidden · QC-fail: 3 hidden · Min footprints: 312 uncalled hidden · Quality filters: 2 reads hidden". */
+export function readStatsFilterParts(aggregate: Partial<ReadStatsAggregate>): string[] {
+  const n = (value: number) => value.toLocaleString();
+  const minFp = readStatsHiddenText({
+    n_hidden_uncalled: aggregate.n_hidden_uncalled, min_footprints: aggregate.min_footprints,
+    n_hidden_min_footprints: aggregate.n_hidden_min_footprints,
+  });
+  return [
+    aggregate.n_hidden_duplicate ? `Duplicates: ${n(aggregate.n_hidden_duplicate)} hidden` : '',
+    aggregate.n_hidden_qcfail ? `QC-fail: ${n(aggregate.n_hidden_qcfail)} hidden` : '',
+    minFp ? `Min footprints: ${minFp}` : '',
+    aggregate.n_hidden_quality ? `Quality filters: ${n(aggregate.n_hidden_quality)} reads with no calls left hidden` : '',
+  ].filter(Boolean);
+}
+
+/** The quality gates applied to the footprints counted: "nq ≥ 100 (nuc): 12 of 40 calls removed · footprint quality ≥ 50". */
+export function readStatsQualityText(aggregate: Partial<ReadStatsAggregate>): string {
+  const n = (value: number) => value.toLocaleString();
+  return [
+    ...(aggregate.quality_filters ?? []).map(f => `${f.label}: ${n(f.removed)} of ${n(f.calls)} calls removed`),
+    aggregate.min_fp_quality ? `footprint quality \u2265 ${aggregate.min_fp_quality}` : '',
+  ].filter(Boolean).join(' · ');
 }

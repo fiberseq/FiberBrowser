@@ -144,6 +144,8 @@ async def get_coacc_matrix_data(
     signal_type: str = Query('accessibility'),
     layer: Optional[str] = Query(None, description="Annotation layer name (e.g. 'fire', 'tf'). If set, overrides signal_type size heuristics."),
     sample_seed: Optional[str] = Query(None, description="Seed for reproducible backend working-set caps"),
+    sample_n: Optional[int] = Query(None, ge=1, description="Plots: a random N reads per dataset (stable keys)"),
+    sample_seed_int: int = Query(1, description="Plots: the seed of that sample"),
     state=Depends(get_state),
 ):
     """Return co-accessibility matrix as JSON (for Jupyter / programmatic use)."""
@@ -161,6 +163,10 @@ async def get_coacc_matrix_data(
     )
     if scope.region_width <= 0:
         return {"matrix": [], "coverage": [], "n_bins": 0, "n_reads": 0}
+    if sample_n:
+        from services.coaccessibility_endpoint import sampled_scope
+        scope = await asyncio.to_thread(sampled_scope, state, scope, sample_n, sample_seed_int, chrom=chrom, start=start, end=end, bin_size=bin_size,
+                                        dataset_ids=dataset_ids, layer=layer, sample_seed=sample_seed)
 
     def _compute():
         return get_coacc_matrix_data_payload(

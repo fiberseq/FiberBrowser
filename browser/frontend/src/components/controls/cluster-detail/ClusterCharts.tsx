@@ -11,7 +11,7 @@ import {
 } from '../../../utils/statistics';
 import { formatProfileChartTsv, formatTsv } from '../../../utils/analysisExport';
 
-function drawProfile(
+export function drawProfile(
   ctx: CanvasRenderingContext2D,
   width: number,
   height: number,
@@ -22,31 +22,39 @@ function drawProfile(
   ctx.clearRect(0, 0, width, height);
   if (!data || data.length === 0) return;
 
-  const max = Math.max(...data, 1);
+  // Missing bins (NaN: no tile or no read there, e.g. a regularity channel's uncovered edges) are gaps, never zero
+  // and never the scale: one NaN in Math.max would blank the whole chart.
+  const finite = data.filter(v => Number.isFinite(v));
+  if (!finite.length) return;
+  const max = Math.max(...finite, 1);
   const n = data.length;
   const padding = 2;
   const plotH = height - padding * 2;
+  const xOf = (i: number) => (i / Math.max(1, n - 1)) * width;
+  const yOf = (v: number) => height - padding - (v / max) * plotH;
+  const valueAt = (i: number) => data[isReversed ? (n - 1 - i) : i];
+  // runs of consecutive finite bins (screen order)
+  const runs: Array<[number, number]> = [];
+  for (let i = 0; i < n; i++) {
+    if (!Number.isFinite(valueAt(i))) continue;
+    if (runs.length && runs[runs.length - 1][1] === i - 1) runs[runs.length - 1][1] = i;
+    else runs.push([i, i]);
+  }
 
   ctx.beginPath();
-  ctx.moveTo(0, height - padding);
-  for (let i = 0; i < n; i++) {
-    const binIdx = isReversed ? (n - 1 - i) : i;
-    const x = (i / Math.max(1, n - 1)) * width;
-    const y = height - padding - (data[binIdx] / max) * plotH;
-    ctx.lineTo(x, y);
+  for (const [a, b] of runs) {
+    ctx.moveTo(xOf(a), height - padding);
+    for (let i = a; i <= b; i++) ctx.lineTo(xOf(i), yOf(valueAt(i)));
+    ctx.lineTo(xOf(b), height - padding);
+    ctx.closePath();
   }
-  ctx.lineTo(width, height - padding);
-  ctx.closePath();
   ctx.fillStyle = color + '33';
   ctx.fill();
 
   ctx.beginPath();
-  for (let i = 0; i < n; i++) {
-    const binIdx = isReversed ? (n - 1 - i) : i;
-    const x = (i / Math.max(1, n - 1)) * width;
-    const y = height - padding - (data[binIdx] / max) * plotH;
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
+  for (const [a, b] of runs) {
+    ctx.moveTo(xOf(a), yOf(valueAt(a)));
+    for (let i = a + 1; i <= b; i++) ctx.lineTo(xOf(i), yOf(valueAt(i)));
   }
   ctx.strokeStyle = color;
   ctx.lineWidth = 2;

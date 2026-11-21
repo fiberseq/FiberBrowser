@@ -130,6 +130,16 @@ export function ratioScale(m: SizeMatrix, s: ColormapChoice = {}): ColorScale {
   return withColormap({ kind: 'diverging', lo: -L, hi: L, mid: 0, loLabel: `-${log2Label(L)}`, midLabel: '0', hiLabel: `+${log2Label(L)}`, label: 'log2 ratio' }, s, true);
 }
 
+/** A − B of shares (each side over its own total): one symmetric linear scale centred on 0, its limit the 95th
+ *  percentile of |A − B| (a cell's share is small: labelled like 2.7e-5). */
+export function diffScale(m: SizeMatrix, s: ColormapChoice = {}): ColorScale {
+  const dist: number[] = [];
+  for (const row of m) for (const v of row) if (v != null && Number.isFinite(v)) dist.push(Math.abs(v));
+  const L = Math.max(quantile(dist, 0.95), 1e-6);
+  const f = (x: number) => (x >= 0.01 ? String(+x.toFixed(3)) : x.toExponential(1));
+  return withColormap({ kind: 'diverging', lo: -L, hi: L, mid: 0, loLabel: `−${f(L)}`, midLabel: '0', hiLabel: `+${f(L)}`, label: 'A − B (share of footprints)' }, s, true);
+}
+
 // Diverging blue <-> red with a neutral grey midpoint (light and dark surfaces), each arm 5 steps.
 const BLUE = ['#104281', '#1c5cab', '#3987e5', '#86b6ef', '#cde2fb'];
 const RED = ['#fbd3d0', '#f19c97', '#e34948', '#b8302f', '#8a1f1f'];

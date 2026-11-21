@@ -2,6 +2,7 @@ import { SidebarSubSection } from '../SidebarSubSection';
 import { useDatasetActions } from '../../../hooks/useDatasetActions';
 import { useBrowserStore } from '../../../stores/browserStore';
 import { GenomeSelector } from './genome/GenomeSelector';
+import { RecentGenomes } from './genome/RecentGenomes';
 import { ReferenceFilesSettings } from './genome/ReferenceFilesSettings';
 import { X } from '../../ui/Icons';
 
@@ -23,6 +24,18 @@ export function GenomeSection() {
         handleLoadGtf={handleLoadGtf}
         handleRemoveGtf={handleRemoveGtf}
       />
+
+      {!publicMode && (
+        <SidebarSubSection
+          id="genome.recent"
+          label="Recent genomes"
+          helpText="The genomes you loaded (your own FASTA and annotation pairs, online and catalog genomes): one click loads one with its annotation. Pin the ones you use most."
+          defaultOpen
+          persist
+        >
+          <RecentGenomes />
+        </SidebarSubSection>
+      )}
 
       {!publicMode && (
         <SidebarSubSection

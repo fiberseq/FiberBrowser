@@ -22,6 +22,16 @@ async function prepare(page: Page, baseUrl: string, region: { chrom: string; sta
   }, { region });
   await page.waitForFunction(() => Object.values(window.__FIBERBROWSER_STORE__!.getState().activeReadIds).some(ids => ids.length > 10 && ids.length <= 50));
 }
+/** Each result key's clusters as sets of read ids, without their numbers: a refit after a preview takes the
+ * preview's cluster numbers (Browser.tsx, utils/clusterLabelMatch), a full-only run keeps k-means' own, so the
+ * same partition can carry permuted numbers. */
+function partition(assignments: Record<string, Record<string, number>>) {
+  return Object.fromEntries(Object.entries(assignments).map(([key, byRead]) => {
+    const groups = new Map<number, string[]>();
+    for (const [id, cluster] of Object.entries(byRead)) groups.set(cluster, [...(groups.get(cluster) ?? []), id]);
+    return [key, [...groups.values()].map(ids => ids.sort().join('\n')).sort()];
+  }));
+}
 function gate() {
   let release!: () => void;
   return { promise: new Promise<void>(resolve => { release = resolve; }), release: () => release() };
@@ -59,7 +69,9 @@ test('displayed preview refines the original full scope; full-only rerun agrees'
   await page.evaluate(() => window.__FIBERBROWSER_STORE__!.setState({ clusterPreparationCount: null }));
   const rerun = page.waitForResponse(r => r.url().includes('/api/cluster_all') && r.ok());
   await page.getByTestId('cluster-run-button').click(); await rerun;
-  await expect.poll(() => page.evaluate(() => window.__FIBERBROWSER_STORE__!.getState().clusterAssignments)).toEqual(full.assignments);
+  // The same reads fall into the same clusters; the numbers may differ (the refit kept the preview's).
+  await expect.poll(async () => partition(await page.evaluate(() => window.__FIBERBROWSER_STORE__!.getState().clusterAssignments)))
+    .toEqual(partition(full.assignments));
 });
 test('sort previews displayed IDs, refines the full scope, and navigation cancels refinement', async ({ page, server }) => {
   test.setTimeout(45_000);

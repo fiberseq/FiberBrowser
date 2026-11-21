@@ -220,7 +220,9 @@ def test_analysis_filter_request_rejects_unknown_metric_and_operator():
         AnalysisFilterRequest(metric="unknown")
 
     with pytest.raises(ValidationError):
-        AnalysisFilterRequest(operator="between")
+        AnalysisFilterRequest(operator="within")
+    # 'between' (with threshold_max) and the 'value' metric of molecule metrics are accepted (nucleosome panel H3).
+    assert AnalysisFilterRequest(operator="between", threshold_max=3, metric="value", molecule_metric="nuc.nrl").operator == "between"
 
 
 def test_quality_filter_update_logs_only_when_enabled(capsys, monkeypatch):

@@ -2,9 +2,13 @@ import { useState, useCallback } from 'react';
 import { drawChartToSvgString, drawChartToPdf } from '../../utils/chartVectorExport';
 import type { ChartDrawFn } from '../../utils/chartVectorExport';
 import { Download } from '../ui/Icons';
+import { standaloneSvg, svgToCanvas } from '../../utils/svgChartExport';
 
 interface ChartSaveButtonProps {
-  canvasRef: React.RefObject<HTMLCanvasElement | null>;
+  canvasRef?: React.RefObject<HTMLCanvasElement | null>;
+  /** An inline-SVG chart instead of a canvas: SVG is the chart itself (colours resolved for print), PNG / PDF
+   * rasterise it (utils/svgChartExport). */
+  getSvg?: () => SVGSVGElement | null;
   filename?: string;
   inline?: boolean;
   /** Exact numeric input supplied to the chart, serialized as TSV. */
@@ -17,8 +21,11 @@ interface ChartSaveButtonProps {
   height?: number;
 }
 
+const NO_CANVAS = { current: null } as React.RefObject<HTMLCanvasElement | null>;
+
 export function ChartSaveButton({
-  canvasRef,
+  canvasRef = NO_CANVAS,
+  getSvg,
   filename = 'chart',
   inline = false,
   drawFn,
@@ -47,16 +54,39 @@ export function ChartSaveButton({
     return { w: canvas.width / dpr, h: canvas.height / dpr };
   }, [canvasRef, width, height]);
 
-  const savePNG = useCallback(() => {
-    const canvas = canvasRef.current;
+  const savePNG = useCallback(async () => {
+    const svg = getSvg?.();
+    if (svg) {
+      const drawn = await svgToCanvas(svg);
+      drawn?.toBlob(blob => { if (blob) downloadBlob(blob, `${filename}_${ts()}.png`); }, 'image/png');
+      setShowMenu(false);
+      return;
+    }
+    let canvas = canvasRef.current;
+    // No canvas on screen (a figure drawn only for export): draw it at 2x for the PNG.
+    if (!canvas && drawFn && width !== undefined && height !== undefined) {
+      canvas = document.createElement('canvas');
+      canvas.width = Math.round(width * 2);
+      canvas.height = Math.round(height * 2);
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      ctx.setTransform(2, 0, 0, 2, 0, 0);
+      drawFn(ctx, width, height);
+    }
     if (!canvas) return;
     canvas.toBlob(blob => {
       if (blob) downloadBlob(blob, `${filename}_${ts()}.png`);
     }, 'image/png');
     setShowMenu(false);
-  }, [canvasRef, filename, downloadBlob]);
+  }, [canvasRef, getSvg, filename, downloadBlob, drawFn, width, height]);
 
   const saveSVG = useCallback(async () => {
+    const inline = getSvg?.();
+    if (inline) {
+      downloadBlob(new Blob([standaloneSvg(inline).text], { type: 'image/svg+xml' }), `${filename}_${ts()}.svg`);
+      setShowMenu(false);
+      return;
+    }
     const dims = resolveCssDims();
     if (drawFn && dims) {
       try {
@@ -79,9 +109,21 @@ export function ChartSaveButton({
 </svg>`;
     downloadBlob(new Blob([svg], { type: 'image/svg+xml' }), `${filename}_${ts()}.svg`);
     setShowMenu(false);
-  }, [canvasRef, drawFn, filename, downloadBlob, resolveCssDims]);
+  }, [canvasRef, getSvg, drawFn, filename, downloadBlob, resolveCssDims]);
 
   const savePDF = useCallback(async () => {
+    const svg = getSvg?.();
+    if (svg) {
+      const drawn = await svgToCanvas(svg);
+      if (drawn) {
+        const { jsPDF } = await import('jspdf');
+        const pdf = new jsPDF({ orientation: drawn.width > drawn.height ? 'landscape' : 'portrait', unit: 'px', format: [drawn.width, drawn.height] });
+        pdf.addImage(drawn.toDataURL('image/png'), 'PNG', 0, 0, drawn.width, drawn.height);
+        pdf.save(`${filename}_${ts()}.pdf`);
+      }
+      setShowMenu(false);
+      return;
+    }
     const dims = resolveCssDims();
     if (drawFn && dims) {
       try {
@@ -103,7 +145,7 @@ export function ChartSaveButton({
     pdf.addImage(imgData, 'PNG', 0, 0, w, h);
     pdf.save(`${filename}_${ts()}.pdf`);
     setShowMenu(false);
-  }, [canvasRef, drawFn, filename, resolveCssDims]);
+  }, [canvasRef, getSvg, drawFn, filename, resolveCssDims]);
 
   const saveDataTsv = useCallback(() => {
     const content = typeof dataTsv === 'function' ? dataTsv() : dataTsv;
@@ -124,6 +166,7 @@ export function ChartSaveButton({
         onClick={(e) => { e.stopPropagation(); setShowMenu(!showMenu); }}
         className="w-5 h-5 flex items-center justify-center rounded bg-black/40 hover:bg-black/60 text-white text-[11px] leading-none"
         title="Save chart"
+        data-testid="chart-save"
       >
         <Download size={11} />
       </button>
@@ -135,7 +178,8 @@ export function ChartSaveButton({
           {(['PNG', 'SVG', 'PDF'] as const).map(fmt => (
             <button
               key={fmt}
-              onClick={fmt === 'PNG' ? savePNG : fmt === 'SVG' ? saveSVG : savePDF}
+              onClick={() => { void (fmt === 'PNG' ? savePNG() : fmt === 'SVG' ? saveSVG() : savePDF()); }}
+              data-testid={`chart-save-${fmt.toLowerCase()}`}
               className="block w-full text-left px-2 py-0.5 text-[11px] text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
             >
               {fmt}

@@ -167,6 +167,13 @@ def build_figure_envelope(req, state, dafc_state=None) -> dict:
             )
         viewport, frontend, layout = live["viewport"], live["frontend_state"], live["layout"]
 
+    # The current/session source names panels only after resolution. Refuse
+    # here before starting a worker, just as the headless read renderer does.
+    from services.lift.capability import require_for_ids
+    panel_ids = [p.get("datasetId") for p in frontend.get("panels", [])
+                 if isinstance(p, dict) and p.get("contentType") == "dataset" and p.get("datasetId")]
+    if panel_ids:
+        require_for_ids(state, panel_ids, "figure")
     viewport = dict(viewport)
     if req.region:
         viewport["chrom"], viewport["start"], viewport["end"] = parse_region(req.region)
@@ -196,6 +203,11 @@ def build_figure_envelope(req, state, dafc_state=None) -> dict:
     tracks = _orthogonal_tracks_for_render(state)
     if tracks:
         base_state["orthogonalTracks"] = tracks
+    # The user's saved default layer colours (the page reads them at startup; a session's own colours win).
+    from services.figure.layer_colours import saved_defaults
+    saved_colours = saved_defaults()
+    if saved_colours:
+        base_state["userLayerColors"] = saved_colours
 
     return {
         "viewport": {"width": width, "height": height},

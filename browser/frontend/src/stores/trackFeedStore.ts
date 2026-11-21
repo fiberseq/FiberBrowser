@@ -21,12 +21,16 @@ export interface ReadPanelFeed {
   linkedOffset: number;
   /** The reads drawn (the last settled view's; [] while zoomed out). */
   reads: CompactRead[];
+  /** Map correspondence for this view, independent of read sampling/terminal call gaps. */
+  liftCorrespondence?: number[] | null;
   /** The view the reads/SVs above belong to. */
   dataChrom: string;
   dataStart: number;
   dataEnd: number;
   /** SV clusters at the min size in the last settled view (null: none passes, no row). */
   sv: SvSummary | null;
+  /** A first paint: the SV summary waits for the rest of the view's reads (the row keeps its place, empty). */
+  svPending?: boolean;
   /** Past the read limit: the reads row shows coverage, these rows have nothing. */
   zoomedOut: boolean;
   /** The pan scope the read canvas follows ('main' or `panel:<key>`). */
@@ -43,7 +47,7 @@ interface TrackFeedState {
 
 const SHALLOW_KEYS: (keyof ReadPanelFeed)[] = [
   'datasetId', 'chrom', 'start', 'end', 'isReversed', 'sidebarWidth', 'linkedOffset', 'reads',
-  'dataChrom', 'dataStart', 'dataEnd', 'sv', 'zoomedOut', 'panScope', 'linked',
+  'dataChrom', 'dataStart', 'dataEnd', 'sv', 'zoomedOut', 'panScope', 'linked', 'liftCorrespondence',
 ];
 
 export function sameFeed(a: ReadPanelFeed | undefined, b: ReadPanelFeed): boolean {
@@ -68,8 +72,8 @@ export const useTrackFeedStore = create<TrackFeedState>((set, get) => ({
 
 /** The SV row has something to draw for this panel (its clusters are on the view's chromosome). */
 export function feedHasSv(feed: ReadPanelFeed | undefined): boolean {
-  return Boolean(feed && !feed.zoomedOut && feed.sv && feed.dataChrom === feed.chrom
-    && (feed.sv.clusters.length > 0 || feed.sv.clips.length > 0));
+  return Boolean(feed && !feed.zoomedOut && feed.dataChrom === feed.chrom
+    && (feed.svPending || (feed.sv && (feed.sv.clusters.length > 0 || feed.sv.clips.length > 0))));
 }
 
 /** The coverage row has reads to count. */

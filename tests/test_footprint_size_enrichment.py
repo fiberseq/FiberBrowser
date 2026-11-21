@@ -172,6 +172,23 @@ def test_all_reads_mode_needs_no_clusters(monkeypatch):
     assert client.post(URL, json={**BODY, "normalization": "raw"}).json()["data"] == {}
 
 
+@pytest.mark.parametrize("norm", ["raw", "row", "oe"])
+def test_pooled_sums_the_datasets_raw_counts_then_normalises_once(monkeypatch, norm):
+    """group_by="pooled" (Plots, Group by None): every dataset's reads in one matrix, as if they were one dataset."""
+    client, _ = _route(monkeypatch, {"d1": _reads(), "d2": _reads(40, 30, "x")})
+    body = client.post(URL, json={**BODY, "group_by": "pooled", "normalization": norm}).json()
+    assert body["success"]
+    assert list(body["data"]) == ["__pooled__"]
+    pooled = body["data"]["__pooled__"]["-1"]
+    assert pooled["group_by"] == "pooled" and pooled["n_reads"] == 125 and pooled["n_footprints"] == 125
+    # The same reads as one dataset give the same matrix.
+    client1, _ = _route(monkeypatch, {"one": _reads() + _reads(40, 30, "x")})
+    one = client1.post(URL, json={**BODY, "group_by": "all", "normalization": norm}).json()["data"]["one"]["-1"]
+    a = np.array(pooled["matrix"], dtype=float)
+    b = np.array(one["matrix"], dtype=float)
+    np.testing.assert_allclose(a, b, equal_nan=True)
+
+
 def test_dataset_ids_restrict_the_scope(monkeypatch):
     client, seen = _route(monkeypatch, {"d1": _reads(), "d2": _reads()})
     body = client.post(URL, json={**BODY, "group_by": "all", "dataset_ids": ["d2"]}).json()
@@ -258,9 +275,48 @@ def test_all_footprints_source_is_the_nuc_and_tf_layers(monkeypatch):
     assert nuc["n_footprints"] == 25 * 2
 
 
-def test_named_datasets_restrict_the_plots(monkeypatch):
-    client, seen = _route(monkeypatch, {"d1": _reads(), "d2": _reads()})
-    body = client.post(URL, json={**BODY, "group_by": "all", "dataset_ids": ["d2"]}).json()
-    assert body["success"] and list(body["data"]) == ["d2"] and seen["dataset_ids"] == ["d2"]
-    both = client.post(URL, json={**BODY, "group_by": "all"}).json()
-    assert sorted(both["data"]) == ["d1", "d2"] and seen["dataset_ids"] is None
+def test_named_lifted_datasets_are_left_out_not_an_error(monkeypatch):
+    import services.lift.capability as cap
+    client, seen = _route(monkeypatch, {"d1": _reads(), "lifted": _reads()})
+    monkeypatch.setattr(cap, "is_lifted", lambda ds: getattr(ds, "lifted", False))
+    import routers.clustering_visualization as cv
+    lifted = SimpleNamespace(cluster_assignments=None, lifted=True)
+    plain = SimpleNamespace(cluster_assignments=None, lifted=False)
+    client.app.dependency_overrides[cv.get_state] = lambda: SimpleNamespace(
+        get_dataset=lambda d: {"d1": plain, "lifted": lifted}.get(d), datasets={"d1": plain, "lifted": lifted})
+    body = client.post(URL, json={**BODY, "group_by": "all", "dataset_ids": ["d1", "lifted"]}).json()
+    assert body["success"] and list(body["data"]) == ["d1"] and seen["dataset_ids"] == ["d1"]
+    only = client.post(URL, json={**BODY, "group_by": "all", "dataset_ids": ["lifted"]}).json()
+    assert only == {"success": True, "data": {}, "sample_seed": None}
+
+
+def test_random_n_reads_by_the_stable_rule(monkeypatch):
+    # Plots' Random N reads per dataset: the reads with the smallest stable keys, whatever the order.
+    from services.stable_sample import sample_names
+    reads = {"d1": _reads(prefix="a")}
+    client, _ = _route(monkeypatch, reads)
+    body = client.post(URL, json={**BODY, "group_by": "all", "normalization": "raw", "sample_n": 10, "sample_seed_int": 3}).json()
+    entry = body["data"]["d1"]["-1"]
+    assert entry["n_reads"] == 10
+    rev = {"d1": list(reversed(_reads(prefix="a")))}
+    again = _route(monkeypatch, rev)[0].post(URL, json={**BODY, "group_by": "all", "normalization": "raw", "sample_n": 10, "sample_seed_int": 3}).json()
+    assert again["data"]["d1"]["-1"]["matrix"] == entry["matrix"]
+    other = client.post(URL, json={**BODY, "group_by": "all", "normalization": "raw", "sample_n": 10, "sample_seed_int": 4}).json()
+    assert other["data"]["d1"]["-1"]["n_reads"] == 10
+    assert len(sample_names([r["id"] for r in _reads(prefix="a")], 10, 3, "d1")) == 10
+
+
+def test_box_bootstrap_over_reads_is_seeded_and_answers_each_matrix(monkeypatch):
+    """Plots summaries: the box mean's Poisson bootstrap over reads (each read's own counts), the same for the same seed;
+    pooled answers one interval over every dataset's reads."""
+    client, _ = _route(monkeypatch, {"d1": _reads(), "d2": _reads(40, 30, "x")})
+    boot = {"size_from": 0, "size_to": 200, "pos_from": None, "pos_to": None, "resamples": 200, "seed": 5}
+    a = client.post(URL, json={**BODY, "group_by": "all", "normalization": "raw", "box_bootstrap": boot}).json()["data"]["d1"]["-1"]["box_ci"]
+    b = client.post(URL, json={**BODY, "group_by": "all", "normalization": "raw", "box_bootstrap": boot}).json()["data"]["d1"]["-1"]["box_ci"]
+    assert a == b and a["units"] == 55 and a["lo"] <= a["hi"]
+    other = client.post(URL, json={**BODY, "group_by": "all", "normalization": "raw", "box_bootstrap": {**boot, "seed": 6}}).json()["data"]["d1"]["-1"]["box_ci"]
+    assert other != a
+    pooled = client.post(URL, json={**BODY, "group_by": "pooled", "normalization": "raw", "box_bootstrap": boot}).json()["data"]["__pooled__"]["-1"]["box_ci"]
+    assert pooled["units"] == 125
+    # Without it, no interval is computed.
+    assert "box_ci" not in client.post(URL, json={**BODY, "group_by": "all", "normalization": "raw"}).json()["data"]["d1"]["-1"]

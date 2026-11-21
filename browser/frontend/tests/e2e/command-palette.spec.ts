@@ -10,9 +10,15 @@ import type { Page } from '@playwright/test';
 import { existsSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const SHOTS = process.env.FB_PALETTE_SHOTS?.trim();
 const HG38_CACHED = existsSync(path.join(homedir(), '.fiberhmm', 'genomes', 'hg38.fa.fai'));
+const REPO_ROOT = process.env.FIBERBROWSER_TEST_DIR
+  ? path.resolve(process.env.FIBERBROWSER_TEST_DIR)
+  : path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
+// GENCODE transcripts around NAPA (committed for tests/test_region_labels.py).
+const NAPA_GTF = path.join(REPO_ROOT, 'tests', 'fixtures', 'region_labels', 'hg38_excerpt.gtf');
 
 const store = <T,>(page: Page, fn: (s: any) => T) =>
   page.evaluate(f => new Function('s', `return (${f})(s)`)((window as any).__FIBERBROWSER_STORE__.getState()), fn.toString()) as Promise<T>;
@@ -126,8 +132,15 @@ test.describe('genes', () => {
       test.setTimeout(180_000);
       expect((await (await page.request.post(`${server.baseUrl}/api/load_genome?genome_id=hg38`)).json()).success).toBe(true);
     }
-    const gene = await (await page.request.get(`${server.baseUrl}/api/gene_search?query=NAPA`)).json();
-    test.skip(!gene.found, 'the hg38 annotation has no NAPA here');
+    const search = async () => (await page.request.get(`${server.baseUrl}/api/gene_search?query=NAPA`)).json();
+    let gene = await search();
+    if (!gene.found) {
+      // A reference without its annotation (FIBERBROWSER_TEST_FASTA gives the sequence only): the GENCODE excerpt.
+      const loaded = await (await page.request.post(`${server.baseUrl}/api/load_gtf?path=${encodeURIComponent(NAPA_GTF)}`)).json();
+      expect(loaded.success, JSON.stringify(loaded)).toBe(true);
+      gene = await search();
+    }
+    expect(gene.found, 'NAPA in the hg38 annotation').toBe(true);
 
     await open(page, `${server.baseUrl}/?chrom=chr19&start=47000000&end=47004000`);
     await page.keyboard.press('ControlOrMeta+k');

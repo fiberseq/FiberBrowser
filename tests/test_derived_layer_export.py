@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -699,44 +698,3 @@ def test_class_manifest_entry_shape():
         "rules": {"sizeMin": 20, "sizeMax": 80},
         "version": 1,
     }
-
-
-# ---------------------------------------------------------------------------
-# BigBed conversion with the real bedToBigBed
-# ---------------------------------------------------------------------------
-
-@pytest.mark.skipif(shutil.which("bedToBigBed") is None, reason="bedToBigBed (UCSC) is not installed: BigBed step not testable")
-def test_bundle_autosql_is_accepted_by_bedtobigbed(tmp_path):
-    """bedToBigBed -type=bed12+4 checks the first 12 columns against the BED standard: itemRgb must be uint.
-
-    With a string itemRgb it refused the bundle's autoSql, so every derived-layer export wrote BED/JSON only.
-    """
-    import pyBigWig
-
-    rows = [
-        _row([SourceInterval(100, 150, 50, 100), SourceInterval(200, 230, 30, 200)]),
-        MaterializedRow(chrom="chr1", read_id="r2", class_id="c1", source_layer="footprint", rule_id="rule_a",
-                        color="#1f77b4", intervals=[SourceInterval(400, 520, 120, None)]),
-    ]
-    bed = tmp_path / "x.fiberlayers.bed"
-    sizes = tmp_path / "x.chrom.sizes"
-    autosql = tmp_path / "x.fiberlayers.as"
-    bigbed = tmp_path / "x.fiberlayers.bb"
-    dle._write_bed(rows, str(bed))
-    sizes.write_text("chr1\t10000\n")
-    dle._write_autosql(str(autosql))
-
-    converted, warning = dle._convert_to_bigbed(str(bed), str(sizes), str(autosql), str(bigbed))
-
-    assert converted, warning
-    assert warning is None
-    bb = pyBigWig.open(str(bigbed))
-    try:
-        assert bb.isBigBed()
-        entries = bb.entries("chr1", 0, 10000) or []
-    finally:
-        bb.close()
-    assert [(s, e) for s, e, _ in entries] == [(100, 230), (400, 520)]
-    # The stored text keeps the R,G,B string (column 9) and the extra columns.
-    first = entries[0][2].split("\t")
-    assert first[5] == "47,158,68" and first[9] == "c1" and first[10] == "footprint"

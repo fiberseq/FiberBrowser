@@ -127,18 +127,39 @@ def test_read_stats_say_which_filter_hid_what(bam, hide):
                                ReadStatsRequest(read_ids_by_dataset=ids, hide_uncalled=hide, min_footprints=5))
     rows = {row["read_id"]: row for row in stats["per_read"]}
     agg = stats["aggregate"]
-    if hide:
-        assert set(rows) == CALLED
-        assert agg["n_hidden_uncalled"] == 3
-        assert not stats["missing_read_ids_by_dataset"].get("ds")
-    else:
-        assert set(rows) == CALLED | UNCALLED
-        assert {name for name, row in rows.items() if row["call_status"] == "not called"} == UNCALLED
-        assert agg["n_hidden_uncalled"] == 0
+    # Owner, 20 Nov 2026: reads that fail Min footprints are left out of the listing (and the distributions), as the
+    # read track leaves them out; they are counted as hidden, by reason. Only the legacy read has 5+ footprints.
+    assert set(rows) == {"called_legacy"}
+    assert set(rows) == _compact(state, min_footprints=5, hide_uncalled=hide)[1]
+    assert not stats["missing_read_ids_by_dataset"].get("ds")
+    assert stats["found_count"] == 1 and agg["n_reads"] == 1
+    assert agg["n_hidden_uncalled"] == (3 if hide else 0)
     # Called reads with fewer than 5 footprints: MA with 2, and the two fully accessible ones;
     # with uncalled reads shown, Min footprints hides those too (0 calls), as the loaders do.
     assert agg["n_hidden_min_footprints"] == (3 if hide else 3 + len(UNCALLED))
     assert agg["min_footprints"] == 5
+
+
+@pytest.mark.parametrize("hide", [True, False])
+def test_read_stats_list_reads_that_pass_min_footprints(bam, hide):
+    """Min footprints 2: the MA read (2 footprints) and the legacy one pass and are listed with their footprints; the
+    fully accessible ones (0 footprints) are hidden and contribute nothing to the distributions. Uncalled reads follow
+    "All reads, including uncalled" as before: with Min footprints off they are listed exactly when shown."""
+    state = _state(bam)
+    ids = {"ds": sorted(CALLED | UNCALLED)}
+    stats = compute_read_stats(state, CHROM, 900, 1700, False,
+                               ReadStatsRequest(read_ids_by_dataset=ids, hide_uncalled=hide, min_footprints=2))
+    rows = {row["read_id"]: row for row in stats["per_read"]}
+    assert set(rows) == {"called_ma", "called_legacy"} == _compact(state, min_footprints=2, hide_uncalled=hide)[1]
+    assert stats["aggregate"]["n_hidden_min_footprints"] == (2 if hide else 2 + len(UNCALLED))
+    # The distributions hold only the listed reads: 2 and 6 footprints, none uncalled.
+    agg = stats["aggregate"]
+    assert agg["n_reads"] == 2 and agg["n_not_called"] == 0 and agg["mean_footprint_count"] == 4.0
+    assert sum(b["count"] for b in agg["hist_fp_count"]) == 2
+    off = compute_read_stats(state, CHROM, 900, 1700, False,
+                             ReadStatsRequest(read_ids_by_dataset=ids, hide_uncalled=hide, min_footprints=0))
+    assert {row["read_id"] for row in off["per_read"]} == (CALLED if hide else CALLED | UNCALLED)
+    assert off["aggregate"]["n_hidden_min_footprints"] == 0
 
 
 def test_read_stats_request_defaults_to_hide():
@@ -402,7 +423,7 @@ def _loader_exact_count(read, frame):
 
 
 SYNTHETIC = [
-    # (name, start, cigar, ns starts) – 100-bp footprints
+    # (name, start, cigar, ns starts[, nl lengths]) – 100-bp footprints unless given
     ("ins_inside", 1000, "500M200I500M", [520, 540, 560, 580, 600]),       # wholly inside the insertion
     ("ins_span", 3000, "500M200I500M", [10, 450, 650, 900, 1100]),
     ("clip_then_ins", 5000, "50S30I500M", [0, 40, 60, 200, 400]),          # clip next to an insertion
@@ -416,19 +437,27 @@ SYNTHETIC = [
     ("clip_skip_ins", 19000, "50S20N30I200M20D200M", [40, 100, 300]),
     ("clip_pad_ins", 21000, "50S20P30I200M20D200M", [40, 100, 300]),
     ("ins_only", 23000, "300I", [10, 150]),
+    # The original D/N/P regression: 20-bp footprints (a 100-bp one in the clip reaches aligned bases).
+    ("clip_del_ins_20", 24000, "50S20D30I200M20D200M", [10, 40, 100, 300], [20, 20, 20, 20]),
+    ("clip_skip_ins_20", 25000, "50S20N30I200M20D200M", [10, 40, 100, 300], [20, 20, 20, 20]),
+    ("clip_pad_ins_20", 26000, "50S20P30I200M20D200M", [10, 40, 100, 300], [20, 20, 20, 20]),
+    # Zero-length aligned ops beside a clip and an insertion (pysam accepts them).
+    ("zero_m", 27000, "50S0M20I200M", [40, 100], [20, 20]),
+    ("zero_eq", 27500, "50S0=20I200M", [40, 100], [20, 20]),
+    ("zero_x", 28000, "200M20I0X50S", [10, 215], [20, 20]),
 ]
 
 
 def _write_synthetic(path):
     header = {"HD": {"VN": "1.6", "SO": "coordinate"}, "SQ": [{"SN": CHROM, "LN": 30_000}]}
     with pysam.AlignmentFile(str(path), "wb", header=header) as out:
-        for name, start, cigar, starts in SYNTHETIC:
+        for name, start, cigar, starts, *lengths in SYNTHETIC:
             read = pysam.AlignedSegment(out.header)
             read.query_name, read.reference_id, read.reference_start, read.mapping_quality = name, 0, start, 60
             read.cigarstring = cigar
             read.query_sequence = "A" * read.infer_query_length()
             read.set_tag("ns", array("i", starts))
-            read.set_tag("nl", array("I", [100] * len(starts)))
+            read.set_tag("nl", array("I", lengths[0] if lengths else [100] * len(starts)))
             out.write(read)
     pysam.index(str(path))
     return str(path)
@@ -458,6 +487,8 @@ def test_footprint_count_is_the_loaders_mapped_count(tmp_path):
     with pysam.AlignmentFile(_write_synthetic(tmp_path / "s2.bam")) as handle:
         counts = {r.query_name: footprint_call_count(r) for r in handle.fetch()}
     assert counts["ins_inside"] == 5  # an insertion maps to its anchor: kept, as the loader keeps it
+    # Zero-length aligned ops take the exact mapper (the fast path counted 2 here; the loader places 1).
+    assert counts["zero_m"] == counts["zero_eq"] == 1
 
 
 @pytest.mark.parametrize("warm", [False, True])

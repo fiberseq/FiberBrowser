@@ -20,6 +20,7 @@ export interface ReadGroupsInput {
   /** Group names (group id -> "V1+V3", "N1 V2+ N2 V1−"): the read panels' legends, cluster detail and the cluster TSV's
    * group column show them (stores/svSlice.ts clusterGroupLabels). */
   labels?: Record<number, string>;
+  svEvidenceLevels?: import('../stores/svSlice').SvCarrierEvidence;
 }
 
 interface KeyStash {
@@ -28,6 +29,7 @@ interface KeyStash {
   focus: Set<number> | null | undefined;
   /** An SV allele split the groups replaced (its definition), put back by Clear. */
   svSplit?: SvSplitDef;
+  svEvidenceLevels?: import('../stores/svSlice').SvCarrierEvidence;
   /** The group names the replaced grouping had (an SV split's, or another named grouping's). */
   svLabels?: Record<number, string>;
 }
@@ -37,6 +39,8 @@ export interface GroupingStash {
   patterns: Record<number, number[]>;
   centroids: Record<number, number[]>;
   peakWidths: number[];
+  /** The replaced model's molecule metric cohort (older stashes: none). */
+  metricCohort?: import('../types').ClusterMetricCohort;
   peakRegions: { start: number; end: number; mode?: string; chrom?: string; genome?: string }[];
   dynamicClustering: boolean;
 }
@@ -82,11 +86,12 @@ export function applyReadGroups(input: ReadGroupsInput, stateKeyMap: Record<stri
   const stash: GroupingStash = {
     keys: Object.fromEntries(pairs.map(([key]) => [key, {
       assignments: before.clusterAssignments[key], order: before.clusterOrder[key], focus: before.clusterFocus[key],
-      svSplit: before.svSplits?.[key], svLabels: before.clusterGroupLabels?.[key],
+      svSplit: before.svSplits?.[key], svEvidenceLevels: before.svCarrierEvidence?.[key], svLabels: before.clusterGroupLabels?.[key],
     }])),
     patterns: before.clusterPatterns,
     centroids: before.clusterCentroids,
     peakWidths: before.clusterPeakWidths,
+    metricCohort: before.clusterMetricCohort,
     peakRegions: before.clusterPeakRegions,
     dynamicClustering: before.dynamicClustering,
   };
@@ -96,6 +101,7 @@ export function applyReadGroups(input: ReadGroupsInput, stateKeyMap: Record<stri
     store.setClusterAssignments(key, { ...assignments }, { mirror: false });
     store.setClusterOrder(key, input.order, { mirror: false });
     store.clearClusterSelection(key);
+    store.setSvCarrierEvidence(key, input.svEvidenceLevels);
   }
   // The groups' names, after the assignments (a non-SV write drops the key's previous names).
   if (input.labels && Object.keys(input.labels).length) setLabels(Object.fromEntries(pairs.map(([key]) => [key, { ...input.labels }])));
@@ -103,7 +109,7 @@ export function applyReadGroups(input: ReadGroupsInput, stateKeyMap: Record<stri
   // These groups are not peak patterns: never re-derive them on pan. The live fields only: the setters would
   // also write them into the active cluster-tree node (the user's clustering, kept as it was).
   useBrowserStore.setState({ dynamicClustering: false, clusterPatterns: input.patterns, clusterCentroids: {}, clusterPeakWidths: [],
-    clusterPeakRegions: input.regions });
+    clusterMetricCohort: {}, clusterPeakRegions: input.regions });
   store.pushSnapshot(label, { kind: 'clustering' });
   const after = useBrowserStore.getState();
   return { label, written: Object.fromEntries(pairs.map(([key]) => [key, after.clusterAssignments[key]])), stash };
@@ -146,9 +152,10 @@ export function restoreReadGroups(applied: AppliedGrouping, label = 'Clear read 
     store.clearClusterSelection(key);
     if (prev.svSplit) store.setSvSplit(key, prev.svSplit, prev.svLabels ?? null);
     else if (prev.svLabels) setLabels({ [key]: prev.svLabels });
+    store.setSvCarrierEvidence(key, prev.svEvidenceLevels);
   }
   setFocus(Object.fromEntries(Object.entries(stash.keys).map(([key, prev]) => [key, prev.focus ?? null])));
   useBrowserStore.setState({ clusterPatterns: stash.patterns, clusterCentroids: stash.centroids, clusterPeakWidths: stash.peakWidths,
-    clusterPeakRegions: stash.peakRegions, dynamicClustering: stash.dynamicClustering });
+    clusterMetricCohort: stash.metricCohort ?? {}, clusterPeakRegions: stash.peakRegions, dynamicClustering: stash.dynamicClustering });
   store.pushSnapshot(label, { kind: 'clustering' });
 }

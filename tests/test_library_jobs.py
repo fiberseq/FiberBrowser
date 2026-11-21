@@ -181,35 +181,6 @@ REVIEW_SETTINGS = {"dedup": "off", "snp_screen": "off", "prob_threshold": 200, "
                    "primary_only": False, "chimera_filter": False, "min_mapq": 40}
 
 
-def _records_chimera_mode():
-    from packaging.version import Version
-    fiberhmm = pytest.importorskip("fiberhmm")
-    return Version(fiberhmm.__version__) >= Version("3.0.3")
-
-
-def _records_chimera_mode_once():
-    """Probe the installed FiberHMM: 3.0.3 appended --chimeras to call_args even when they already named it;
-    3.0.4 records it once."""
-    import tempfile
-    parser_module = pytest.importorskip("fiberhmm.cli.pipeline")
-    with tempfile.TemporaryDirectory() as tmp:
-        argv = ["a.bam", "--reference", "ref.fa", "--enzyme", "dddb", "-o", tmp, "--call-args", "--chimeras flag"]
-        settings = parser_module.config_from_args(parser_module.parse_args(argv)).calling_settings()
-    return settings["call_args"].count("--chimeras") == 1
-
-
-def _names_chimeras(arguments):
-    return any(a == "--chimeras" or a.startswith("--chimeras=") for a in arguments)
-
-
-def _expected_call_args(arguments, mode="flag"):
-    # 3.0.2 only recorded the boolean; 3.0.3 also appends the effective DAF mode, every time;
-    # 3.0.4 appends it only when the call_args do not already name it.
-    if not _records_chimera_mode() or (_records_chimera_mode_once() and _names_chimeras(arguments)):
-        return list(arguments)
-    return [*arguments, "--chimeras", mode]
-
-
 def test_recall_carries_the_original_calling_settings(tmp_path, monkeypatch):
     # Review round 4 repro: these settings were recorded, and the submitted job had
     # options={} and none of their flags.
@@ -237,7 +208,7 @@ def test_recall_carries_the_original_calling_settings(tmp_path, monkeypatch):
 
 def test_recalled_settings_round_trip_through_the_real_pipeline_parser(tmp_path, monkeypatch):
     """What the re-call passes makes fiberhmm-pipeline record the same settings again."""
-    parser_module = pytest.importorskip("fiberhmm.cli.pipeline")
+    parser_module = _real_pipeline(tmp_path)
     mask = tmp_path / "snps.bed"
     mask.write_text("p\t1\t2\n")
     recorded = pipeline_settings("dddb", **REVIEW_SETTINGS, snp_mask=str(mask), min_read_length=500,
@@ -255,7 +226,7 @@ def test_recalled_settings_round_trip_through_the_real_pipeline_parser(tmp_path,
                             outdir=plan["outdir"], sample=plan["sample"], cores=plan["cores"], progress="p.jsonl",
                             regions=plan["regions"], extra=plan["extra"])
     config = parser_module.config_from_args(parser_module.parse_args(args))
-    assert config.calling_settings() == {**recorded, "call_args": _expected_call_args(recorded["call_args"], "keep")}
+    assert config.calling_settings() == recorded
 
 
 def _recalled_settings(tmp_path, plan, parser_module):
@@ -266,11 +237,23 @@ def _recalled_settings(tmp_path, plan, parser_module):
     return parser_module.config_from_args(parser_module.parse_args(args)).calling_settings()
 
 
-def _real_pipeline():
+def _records_chimeras_once(parser_module, tmp_path):
+    """FiberHMM 3.0.3 appended --chimeras to call_args even when they already named it, so a re-call's
+    settings could not round-trip; later FiberHMM records it once."""
+    argv = ["a.bam", "--reference", "ref.fa", "--enzyme", "dddb", "-o", str(tmp_path / "probe"),
+            "--call-args", "--chimeras flag"]
+    settings = parser_module.config_from_args(parser_module.parse_args(argv)).calling_settings()
+    return settings["call_args"].count("--chimeras") == 1
+
+
+def _real_pipeline(tmp_path=None):
     parser_module = pytest.importorskip("fiberhmm.cli.pipeline")
     from services import pipeline_inputs as pi
     if pi.pipeline_command().get("source") != "fiberhmm":
         pytest.skip("fiberhmm.cli.pipeline is not importable for --help")
+    if tmp_path is not None and not _records_chimeras_once(parser_module, tmp_path):
+        pytest.skip("this FiberHMM (3.0.3 or older) repeats --chimeras in recorded call_args; "
+                    "the round trip needs a FiberHMM that records it once")
     return parser_module
 
 
@@ -292,13 +275,12 @@ def _real_pipeline():
     dict(min_mapq=37),
 ])
 def test_fiberhmm_3_run_settings_round_trip_through_the_real_pipeline_parser(tmp_path, monkeypatch, changed):
-    parser_module = _real_pipeline()
+    parser_module = _real_pipeline(tmp_path)
     recorded = pipeline_settings("dddb", **changed)
     run = _run_with_settings(tmp_path, **{k: v for k, v in recorded.items() if k != "enzyme"})
     plan = jobs.plan_recall(_entry(run["called_bam"]), outdir=str(tmp_path / "recall"))
     assert plan["settings"]["changed_defaults"] == [] and plan["settings"]["rewrites"] == []
-    assert _recalled_settings(tmp_path, plan, parser_module) == {
-        **recorded, "call_args": _expected_call_args(recorded["call_args"])}
+    assert _recalled_settings(tmp_path, plan, parser_module) == recorded
     if changed.get("call_args") == ["--no-daf-mask-unaligned"]:
         assert "--no-daf-mask-unaligned" not in plan["extra"]  # carried in --call-args, not doubled
 
@@ -347,7 +329,7 @@ def test_a_run_from_before_the_3_0_defaults_lists_them_and_keeps_the_original_on
 
 
 def test_retired_options_in_the_recorded_call_args_are_dropped_and_listed(tmp_path, monkeypatch):
-    parser_module = _real_pipeline()
+    parser_module = _real_pipeline(tmp_path)
     run = _run_with_settings(tmp_path, call_args=["--phase-nrl", "auto", "--min-llr", "6",
                                                   "--nuc-recall-policy=topology"])
     plan = jobs.plan_recall(_entry(run["called_bam"]), outdir=str(tmp_path / "recall"))
@@ -356,38 +338,34 @@ def test_retired_options_in_the_recorded_call_args_are_dropped_and_listed(tmp_pa
          "why": "retired in FiberHMM 3.0: caused artifacts"},
         {"flag": "--call-args --nuc-recall-policy", "from": "topology", "to": None,
          "why": "retired in FiberHMM 3.0: caused artifacts"}]
-    assert _recalled_settings(tmp_path, plan, parser_module)["call_args"] == _expected_call_args(["--min-llr", "6"])
+    # The recorded chimera mode (FiberHMM 3.0.3 writes it in call_args for DAF) stays, once.
+    assert _recalled_settings(tmp_path, plan, parser_module)["call_args"] == ["--min-llr", "6", "--chimeras", "flag"]
 
 
 @pytest.mark.parametrize("mode", ["flag", "keep", "remove"])
 def test_chimera_mode_and_call_args_are_stable_across_three_recalls(tmp_path, mode):
-    parser_module = _real_pipeline()
-    if mode == "remove" and not _records_chimera_mode():
-        pytest.skip("FiberHMM 3.0.2 cannot record or replay the --chimeras remove mode")
+    """Port of the 3.0.2 test (733dd5978), with the fixtures recording the mode as FiberHMM >= 3.0.3 does."""
+    parser_module = _real_pipeline(tmp_path)
     base_args = ["--with-scores", "--min-llr", "6"]
     expected = base_args + (["--chimeras", "remove"] if mode == "remove" else [])
-    recorded = pipeline_settings("dddb", chimera_filter=mode != "keep",
-                                 call_args=_expected_call_args(expected, mode))
+    recorded = pipeline_settings("dddb", chimera_filter=mode != "keep", call_args=[*base_args, "--chimeras", mode])
     previous_args = None
     previous_recorded = recorded["call_args"]
     for generation in range(3):
         run = _run_with_settings(tmp_path / str(generation),
                                  **{k: v for k, v in recorded.items() if k != "enzyme"})
         plan = jobs.plan_recall(_entry(run["called_bam"]), outdir=str(tmp_path / f"recall-{generation}"))
-        settings = plan["settings"]
         assert plan["options"]["chimera_filter"] is (mode != "keep")
-        assert f"{mode} chimeras" in settings["labels"]
-        # Only remove needs a caller override; flag uses the default, keep the legacy boolean.
-        actual_args = [shlex.split(a.split("=", 1)[1]) for a in plan["extra"]
-                       if a.startswith("--call-args=")]
+        assert f"{mode} chimeras" in plan["settings"]["labels"]
+        # Only remove needs a caller override; flag is the default, keep the legacy boolean.
+        actual_args = [shlex.split(a.split("=", 1)[1]) for a in plan["extra"] if a.startswith("--call-args=")]
         assert actual_args == [expected]
         if previous_args is not None:
             assert actual_args == previous_args
         recorded = _recalled_settings(tmp_path, plan, parser_module)
         assert recorded["chimera_filter"] is (mode != "keep")
-        # For remove, FiberHMM records the override plus its own effective pair (two pairs).
-        assert recorded["call_args"] == _expected_call_args(expected, mode)
         assert recorded["call_args"] == previous_recorded
+        assert recorded["call_args"].count("--chimeras") == 1
         previous_args, previous_recorded = actual_args, recorded["call_args"]
 
 
@@ -411,8 +389,9 @@ def test_recorded_chimera_mode_uses_last_pair_and_overrides_boolean(mode, attach
 
 @pytest.mark.parametrize("enabled,mode", [(True, "flag"), (False, "keep")])
 def test_recorded_chimera_mode_falls_back_to_boolean(enabled, mode):
-    entry = {"pipeline": {"settings": pipeline_settings("dddb", chimera_filter=enabled)}}
-    result = jobs.recall_settings(entry, "dddb", None)
+    settings = pipeline_settings("dddb", chimera_filter=enabled)
+    settings["call_args"] = []  # as FiberHMM 3.0.2 recorded it: the boolean only
+    result = jobs.recall_settings({"pipeline": {"settings": settings}}, "dddb", None)
     assert f"{mode} chimeras" in result["labels"]
     assert not any(a.startswith("--call-args=") for a in result["extra"])
     assert ("--no-chimera-filter" in result["extra"]) is (not enabled)
@@ -428,8 +407,9 @@ def test_invalid_recorded_chimera_modes_are_refused(arguments):
 @pytest.mark.parametrize("changed", [dict(), dict(chimera_filter=False), dict(call_args=["--chimeras", "remove"]),
                                      dict(call_args=["--min-llr", "6"])])
 def test_a_recall_of_a_recall_plans_the_same_run(tmp_path, monkeypatch, changed):
-    """Re-call a run, record what that re-call would record, re-call again: the two plans are identical."""
-    parser_module = _real_pipeline()
+    """Re-call a run, record what that re-call would record, re-call again: the two plans are identical
+    (FiberHMM 3.0.3 appended --chimeras to the recorded call_args on every generation)."""
+    parser_module = _real_pipeline(tmp_path)
     first_run = _run_with_settings(tmp_path / "g1", **changed)
     first = jobs.plan_recall(_entry(first_run["called_bam"]), outdir=str(tmp_path / "recall"))
     recorded = _recalled_settings(tmp_path, first, parser_module)
@@ -438,8 +418,7 @@ def test_a_recall_of_a_recall_plans_the_same_run(tmp_path, monkeypatch, changed)
     assert second["extra"] == first["extra"]
     assert second["settings"]["labels"] == first["settings"]["labels"]
     assert _recalled_settings(tmp_path, second, parser_module) == recorded
-    if _records_chimera_mode_once():  # FiberHMM 3.0.4: the mode is recorded once
-        assert recorded["call_args"].count("--chimeras") == 1
+    assert recorded["call_args"].count("--chimeras") == 1
 
 
 def test_contradictory_or_unknown_3_0_settings_are_refused(tmp_path, monkeypatch):
@@ -504,6 +483,40 @@ def test_recall_carries_the_run_record_regions_and_options(tmp_path, monkeypatch
     entry = _entry(run["called_bam"], job=entry["job"])
     plan = jobs.plan_recall(entry, outdir=str(tmp_path / "o"))
     assert plan["settings"]["source"] == "run record" and "--dedup on" in plan["display_command"]
+
+
+def test_a_run_record_recall_keeps_the_recorded_mapq_exactly_once(tmp_path, monkeypatch):
+    """Audit (final 3.1.0, MED): a re-call from the run record passes the MAPQ its job options hold (FiberHMM 3.2.0
+    would use 0 otherwise); a record without one is left to FiberHMM, as its original run was."""
+    import json
+    monkeypatch.setenv("FIBERBROWSER_PIPELINE_COMMAND", "fiberhmm-pipeline")
+    run = make_pipeline_run(tmp_path / "runs" / "S1", sample="S1", plasmid_seq=seq(4))
+    folder = make_job(tmp_path / "jobs", "20260929-101010-cccccc", tmp_path / "runs" / "S1")
+    spec_path = os.path.join(folder, "spec.json")
+    spec = json.loads(open(spec_path).read())
+    spec.update(options={"dedup": "on", "min_mapq": 37})
+    with open(spec_path, "w") as handle:
+        json.dump(spec, handle)
+    jobs.import_finished_jobs()
+    entry = next(e for e in store.load()["entries"].values() if e["path"] == run["called_bam"])
+    outputs = os.path.join(os.path.dirname(run["called_bam"]), "outputs.json")
+    raw = json.loads(open(outputs).read())
+    raw.pop("settings")
+    with open(outputs, "w") as handle:
+        json.dump(raw, handle)
+    entry = _entry(run["called_bam"], job=entry["job"])
+    plan = jobs.plan_recall(entry, outdir=str(tmp_path / "o"))
+    assert plan["settings"]["source"] == "run record"
+    assert plan["extra"].count("--min-mapq") == 1
+    assert plan["extra"][plan["extra"].index("--min-mapq") + 1] == "37"
+    assert "--min-mapq 37" in plan["display_command"]
+    # A record without a MAPQ: nothing passed (its original run used FiberHMM's default of its time).
+    spec.update(options={"dedup": "on"})
+    with open(spec_path, "w") as handle:
+        json.dump(spec, handle)
+    plan = jobs.plan_recall(entry, outdir=str(tmp_path / "o"))
+    assert plan["settings"]["source"] == "run record"
+    assert "--min-mapq" not in plan["extra"]
 
 
 def test_recall_refuses_when_the_settings_cannot_be_recovered(tmp_path, monkeypatch):
@@ -858,10 +871,13 @@ def test_retargeting_a_link_between_folders_already_read_changes_the_identity(tm
     assert jobs._fiberhmm_identity(command, str(tmp_path / "out")) != before
 
 
-def test_the_frozen_apps_module_role_is_probed_with_its_own_import_path(tmp_path):
+def test_the_frozen_apps_module_role_is_probed_with_its_own_import_path(tmp_path, monkeypatch):
     """The Mac app's -m role puts its working folder first (frozen_entry.run); the probe
     runs the app's -c role, which must see the same path (here: a package in the output folder)."""
     import subprocess
+    # A frozen app has no PYTHONPATH: one in the test's environment (a FiberHMM checkout) would win over the stubs.
+    monkeypatch.delenv("PYTHONPATH", raising=False)
+    monkeypatch.delenv("FIBERHMM_SOURCE_DIR", raising=False)
     from pathlib import Path
     repo = Path(__file__).resolve().parents[1]
     bundled, out = tmp_path / "bundled", tmp_path / "output"

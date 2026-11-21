@@ -702,7 +702,7 @@ def _design_standard_primers_payload(req: PrimerDesignRequest, state):
             "pairs": top_pairs,
             "pair": top_pairs[0],
             "message": f"Found {len(top_pairs)} primer pair(s)" + (
-                f" on {chrom_key}, checked against {os.path.basename(runtime_config.blast_db_path)} for off-target binding"
+                f" on {chrom_key}, checked against {os.path.basename(runtime_config.blast_db_for(chrom_key))} for off-target binding"
                 + (" and against itself for a single binding site" if req.check_template_self else "")
                 if not runtime_config.expects_home_hit(chrom_key) else ""),
             "blast_db": runtime_config.blast_db_path,

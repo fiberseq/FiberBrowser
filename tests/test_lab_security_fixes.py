@@ -1008,3 +1008,56 @@ def test_motif_database_files_are_read_through_the_confined_open(lab):
     response = alice.post("/api/tracks/add_motif_file", json={"file_path": str(linked)})
     assert response.status_code == 403 or not response.json().get("success")
     assert "OUTSIDE" not in response.text
+
+
+def test_bed_readers_open_the_path_the_guard_checked_not_a_trailing_space_link(lab, monkeypatch):
+    """A link named ``sample.bed `` (trailing space) pointing outside the roots: the guard validates the stripped
+    ``sample.bed``; the BED readers must read that file too, never the link."""
+    from fastapi import HTTPException
+    from routers import meta_locus
+    from services.lab import paths as lab_paths
+    (lab.outside / "secret.bed").write_text("chrSecret\t1\t2\tsecret\n")
+    (lab.data / "sample.bed ").symlink_to(lab.outside / "secret.bed")
+    alice = member_client(lab)
+    trailing = f"{lab.data}/sample.bed "
+    missing = alice.post("/api/plots/bed_regions", json={"path": trailing})
+    assert missing.status_code == 404 and "chrSecret" not in missing.text
+    (lab.data / "inside.bed").write_text("chr1\t10\t20\tinside\n")
+    with monkeypatch.context() as patched:
+        patched.setattr(lab_paths, "enforcing", lambda: True)  # the meta-locus reader, as in a member's request
+        with pytest.raises(HTTPException) as denied:
+            meta_locus._read_bed(trailing)
+        assert denied.value.status_code == 404
+        (lab.data / "sample.bed").symlink_to(lab.data / "inside.bed")
+        regions, name = meta_locus._read_bed(trailing)
+        assert regions == [["chr1", 10, 20, ".", "inside"]] and name == "sample"
+    ok = alice.post("/api/plots/bed_regions", json={"path": trailing})
+    assert ok.status_code == 200 and ok.json()["regions"] == [["chr1", 10, 20, ".", "inside"]]
+    assert ok.json()["name"] == "sample"
+
+
+def test_sequence_search_track_references_pass_the_scan_but_nothing_else_does(lab, monkeypatch):
+    """Release audit 3.1.0: a hits track's ``seqsearch://<job id>`` cart entry (session bodies, /api/add_track) is a
+    virtual reference, not a path; look-alikes stay paths and are refused, and the readers still refuse it."""
+    from services.lab import paths as lab_paths
+    from services.lab.paths import PathDenied
+    monkeypatch.chdir(lab.outside)  # the app's folder is outside the data roots
+    ref = "seqsearch://0123456789abcdef"
+    assert lab_paths.scan_query(f"path={ref}") is None
+    assert lab_paths.scan_json_body(json.dumps({"catalog": [{"path": ref, "kind": "bigbed"}]}).encode()) is None
+    for bad in ("seqsearch://../secret.bed", "seqsearch://0123456789abcdef/../../x", "seqsearch://0123456789ABCDEF",
+                "seqsearch://0123456789abcdef0"):
+        assert lab_paths.scan_query(f"path={bad}") is not None, bad
+        assert lab_paths.scan_json_body(json.dumps({"path": bad}).encode()) is not None, bad
+    alice = member_client(lab)
+    added = alice.post("/api/add_track", params={"path": ref})
+    assert added.status_code == 200 and not added.json()["success"]  # the search is gone, but not refused as a path
+    exported = alice.post("/api/session/export", json={"catalog": [{"path": ref, "label": "hits"}]})
+    assert exported.status_code == 200, exported.text
+    imported = alice.post("/api/session/import", json={"session": {
+        "version": "2.0", "frontend_state": {"catalog": [{"path": ref, "label": "hits", "kind": "bigbed"}]}}})
+    assert imported.status_code == 200, imported.text
+    from services.runtime import lab_request_context
+    with lab_request_context(object()):
+        with pytest.raises(PathDenied):
+            lab_paths.confine(ref)

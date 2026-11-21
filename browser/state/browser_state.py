@@ -128,6 +128,9 @@ class BrowserState:
         'plasmid_sequences', 'plasmid_metadata', '_gtf_reference_lengths',
         # The registry genome whose download is the FASTA (services/genome_loading): shared with it.
         'registry_fasta',
+        # The command line's --fasta (server.py): a member's or workspace's fork inherits that reference, and with it
+        # the start-up precedence (/api/status startup_reference) that keeps a restore from replacing it.
+        'startup_fasta',
     })
 
     def __setattr__(self, name, value):
@@ -353,6 +356,12 @@ class BrowserState:
                 elif isinstance(value, (list, dict, set)):
                     value = type(value)(value)
                 object.__setattr__(self, name, value)
+            # A registry annotation waiting for a download confirmation goes with the reference it belongs to
+            # (services/genome_loading.pending_annotation): the copy's retry finishes it.
+            from services.genome_loading import pending_annotation
+            pending = pending_annotation(template)
+            if pending is not None:
+                object.__setattr__(self, 'pending_annotation', pending)
 
         # --- Shared / read-only refs that never change after startup.
         # These are safe to alias directly — no re-read via template needed.
@@ -760,7 +769,8 @@ class BrowserState:
         self.refresh_circular_chrom_flags()
 
     @staticmethod
-    def _download_fasta_to_cache(url, fai_url=None, fasta_urls=None, fai_urls=None, progress=None, errors=None):
+    def _download_fasta_to_cache(url, fai_url=None, fasta_urls=None, fai_urls=None, progress=None, errors=None,
+                                 stage=None):
         """Download a remote FASTA and its .fai index to the cache directory, one download at a time per
         cache file name (services/download_locks.py): a second request for it waits and then finds the cached
         file, or (another source of that name) takes a source-hashed name."""
@@ -774,11 +784,12 @@ class BrowserState:
         plain = os.path.abspath(os.path.join(cache_dir, _plain_fasta_basename(first)))
         with holding(f"fasta-cache:{plain}"):
             return BrowserState._download_fasta_to_cache_unlocked(
-                url, fai_url=fai_url, fasta_urls=fasta_urls, fai_urls=fai_urls, progress=progress, errors=errors)
+                url, fai_url=fai_url, fasta_urls=fasta_urls, fai_urls=fai_urls, progress=progress, errors=errors,
+                stage=stage)
 
     @staticmethod
     def _download_fasta_to_cache_unlocked(url, fai_url=None, fasta_urls=None, fai_urls=None, progress=None,
-                                          errors=None):
+                                          errors=None, stage=None):
         """Download a remote FASTA to the cache directory and index it there (ensure_verified_index).
 
         Supports fallback URL lists: tries each URL in order until one succeeds.
@@ -791,10 +802,12 @@ class BrowserState:
             progress: Optional ``progress(url, bytes_done, bytes_total)`` (total 0 when unknown), per chunk; it
                 may raise ``http_download.DownloadCancelled`` to stop: that propagates (no other mirror is tried).
             errors: Optional list; each mirror that fails appends ``{"url", "error"}`` (why it failed).
+            stage: Optional ``stage(name)`` called before ``decompressing`` and ``indexing`` (no byte progress
+                there); it may raise ``DownloadCancelled`` like ``progress``.
 
         Returns the local path to the cached .fa file, or None on failure.
         """
-        from services.http_download import DownloadCancelled
+        from services.http_download import DownloadCancelled, LargeDownload
         import urllib.request
         import hashlib
         import subprocess
@@ -829,10 +842,15 @@ class BrowserState:
                 record_fasta_source(local_fa, fa_urls[0])
 
         # Download .fa (can be large - show progress)
+        fresh = False
         if not os.path.exists(local_fa):
             downloaded = False
             published = False
             for fa_url in fa_urls:
+                # A cancel that arrived while the previous mirror's file was indexed (and its index then failed)
+                # stops here, before another mirror is opened: the hook raises DownloadCancelled.
+                if progress is not None:
+                    progress(fa_url, 0, 0)
                 print(f"  Downloading FASTA: {fa_url}")
                 try:
                     download_tmp = local_fa + '.download.tmp'
@@ -858,6 +876,8 @@ class BrowserState:
 
                     _http_fetch(fa_url, download_tmp, _progress)
                     if fa_url.split('?')[0].endswith('.gz'):
+                        if stage is not None:
+                            stage('decompressing')
                         print(f"  Decompressing FASTA: {os.path.basename(fa_url)}")
                         with gzip.open(download_tmp, 'rb') as src, open(local_fa + '.tmp', 'wb') as dst:
                             shutil.copyfileobj(src, dst)
@@ -871,10 +891,12 @@ class BrowserState:
                     record_fasta_source(local_fa, fa_url)
                     # Indexed before this mirror is accepted: a file that cannot be indexed (a mirror that sent
                     # something else beginning with '>') is removed and the next mirror is tried.
+                    if stage is not None:
+                        stage('indexing')
                     ensure_verified_index(local_fa)
                     size_mb = os.path.getsize(local_fa) / (1024 * 1024)
                     print(f"  FASTA saved: {local_fa} ({size_mb:.0f} MB)")
-                    downloaded = True
+                    downloaded = fresh = True
                     break
                 except BaseException as e:
                     leftovers = [local_fa + '.tmp', local_fa + '.download.tmp']
@@ -887,8 +909,10 @@ class BrowserState:
                             except OSError:
                                 pass
                     published = False
-                    if isinstance(e, DownloadCancelled) or not isinstance(e, Exception):
-                        raise   # the user cancelled (or the process is stopping): no other mirror
+                    if isinstance(e, (DownloadCancelled, LargeDownload)) or not isinstance(e, Exception):
+                        # The user cancelled, or a download over the size warning waits for confirmation (one
+                        # confirmation covers every mirror), or the process is stopping: no other mirror.
+                        raise
                     print(f"  Failed: {e}")
                     if errors is not None:
                         errors.append({"url": fa_url, "error": _download_error_text(e)})
@@ -903,6 +927,8 @@ class BrowserState:
         # The index is always built from the FASTA itself (a mirror's .fai can describe another file), once:
         # a verification stamp next to it lets later loads of the unchanged pair skip the work. A wrong index
         # that cannot be replaced (read-only cache) refuses the load.
+        if stage is not None and not fresh:
+            stage('indexing')   # a freshly downloaded file was indexed in the mirror loop
         ensure_verified_index(local_fa)
         return local_fa
 
@@ -1008,6 +1034,12 @@ class BrowserState:
             load_bigbed_marks=_load_bigbed_marks,
             stable_sampler=sample_stable_by_id,
         )
+        if self.__dict__.get('scan_registry'):
+            # fiberhmm-scan states as layers (tables-mode scans bound to this dataset), before the consensus
+            # projection so its receipt names the rows it returns. Rows the working set overlaid before its quality
+            # filters carry the overlay's receipt and are returned as they are (a filtered mark never comes back).
+            from services.scan.overlay import apply_to_working_set
+            working_set = apply_to_working_set(self, dataset_id, chrom, start, end, working_set)
         if self.__dict__.get('consensus_workflow_active'):
             from services.consensus_workflow import apply_overlays
             working_set = apply_overlays(self, dataset_id, chrom, start, end, working_set)
@@ -1067,13 +1099,17 @@ class BrowserState:
         """Translate chromosome name to dataset's actual name."""
         return translate_chrom(chrom, self.chrom_map)
     
-    def add_dataset(self, dataset_id: str, path, label: str = None) -> Dataset:
+    def add_dataset(self, dataset_id: str, path, label: str = None, *, data_type: str = None,
+                    configure=None, detect_chroms=None) -> Dataset:
         """Add a new dataset.
         
         Args:
             dataset_id: Unique identifier for the dataset
             path: Single path (str) or list of paths (list)
             label: Optional display label
+            data_type, configure, detect_chroms: a dataset type set rather than detected, a hook run before it
+                is published, and where an empty state's chromosomes come from instead of the BAM header (a
+                live-lift dataset: services/lift/registration.py)
         """
         # Loading a cached drag-and-drop upload counts as using it, and so do
         # the companion/derived-layer files found next to it.
@@ -1088,8 +1124,10 @@ class BrowserState:
             dataset_id,
             path,
             label,
-            detect_bam_chroms=detect_chroms_from_bam,
+            detect_bam_chroms=detect_chroms or detect_chroms_from_bam,
             detect_bigbed_chroms=self._detect_chroms_from_bigbed,
+            data_type=data_type,
+            configure=configure,
         )
         mark_uploads_used(dataset_file_paths(dataset))
         # A plasmid BAM: load the map its header names, and link its contigs to
@@ -1127,9 +1165,16 @@ class BrowserState:
             from services.file_handles import handles
             from services.upload_store import dataset_file_paths
             retained = {path for other in self.datasets.values() for path in dataset_file_paths(other)}
-            for path in dataset_file_paths(dataset):
-                if path not in retained:
-                    handles.discard(path)
+            gone = [path for path in dataset_file_paths(dataset) if path not in retained]
+            for path in gone:
+                handles.discard(path)
+            if gone:
+                # nucleosome regularity bookkeeping of files no dataset reads any more
+                try:
+                    from services.nuc.nucgeo import forget_paths
+                    forget_paths(gone)
+                except Exception:   # noqa: BLE001 - bookkeeping only
+                    pass
             # Its own reference goes with it once no other dataset uses it.
             from services.panel_genomes import prune
             prune(self)
@@ -1294,6 +1339,10 @@ class BrowserState:
     
     def get_reads(self, chrom, start, end, spanning=True, dataset_id=None):
         """Get reads from a specific dataset."""
+        if str(chrom).startswith("meta:"):
+            # A meta-locus contig: its view's reads as the same per-base table (services/meta_locus_jobs).
+            from services.meta_locus_jobs import meta_reads_dataframe
+            return meta_reads_dataframe(chrom, int(start), int(end), bool(spanning), self.resolve_dataset_id(dataset_id))
         # Translate chrom name to dataset's actual name
         chrom = self.translate_chrom(chrom)
         
@@ -1308,6 +1357,9 @@ class BrowserState:
                                  contig_links=contig_links(self, dataset_id=dataset.id))
     
     def _chrom_size_for(self, chrom: str) -> Optional[int]:
+        if str(chrom).startswith("meta:"):
+            from services.meta_locus_jobs import meta_chrom_size
+            return meta_chrom_size(chrom)
         def chrom_entry_name(entry) -> Optional[str]:
             if isinstance(entry, dict):
                 name = entry.get("name")
@@ -1803,6 +1855,7 @@ def _ensure_plain_cached_fasta(path: str) -> bool:
     import gzip
     import shutil
     import tempfile
+    import zlib
     if not os.path.exists(path):
         return False
     try:
@@ -1833,6 +1886,14 @@ def _ensure_plain_cached_fasta(path: str) -> bool:
             print(f"  WARNING: Failed to decompress cached FASTA {path}: {e}")
             if tmp_path and os.path.exists(tmp_path):
                 os.remove(tmp_path)
+            if isinstance(e, (EOFError, gzip.BadGzipFile, zlib.error)):
+                # A truncated or corrupt archive never becomes usable: removed, so the next download fetches it
+                # again (kept, it would look downloaded to the downloader and not to the verifier, forever).
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+                drop_index()
             return False
     if head.lstrip().startswith(b'<') or not head.startswith(b'>'):
         print(f"  WARNING: Removing invalid cached FASTA: {path}")

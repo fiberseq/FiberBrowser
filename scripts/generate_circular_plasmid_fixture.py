@@ -160,7 +160,7 @@ def _read_annotation_layout(chrom_len: int, phase_offset: int, read_index: int) 
     _add_interval(tfs, 8, 26, chrom_len, origin_tf)
     _add_interval(tfs, chrom_len - 34, 26, chrom_len, origin_tf)
 
-    parts: list[str] = ["v1"]
+    parts: list[str] = [str(chrom_len)]   # the read length (the spec MA head; FiberHMM rejects "v1")
     aq: list[int] = []
     names: list[str] = []
     legacy: dict[str, list[int]] = {"ns": [], "nl": [], "nq": [], "lq": [], "rq": [], "as": [], "al": [], "aq": []}

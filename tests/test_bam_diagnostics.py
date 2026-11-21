@@ -29,7 +29,7 @@ class FakeRead:
             ("al", [30]),
             ("aq", [250]),
             ("MM", "A+a?,0;C+m?,0;"),
-            ("MA", "v1;tf+:0;fp_v2.:0;"),
+            ("MA", "200;tf+:1-1;fp_v2.:1-1;"),
         ]
 
     def has_tag(self, tag):
@@ -82,7 +82,7 @@ class FakeRandomRead:
             ("al", [30]),
             ("aq", [250]),
             ("AQ", [80, 81, 82, 83]),
-            ("MA", "v1;nuc+Q:1-120;tf+QQQ:140-20;"),
+            ("MA", "200;nuc+Q:1-120;tf+QQQ:140-20;"),
         ]
 
     def has_tag(self, tag):
@@ -204,7 +204,7 @@ class FakeUntaggedRead:
 
 class FakeSparseTaggedRead(FakeUntaggedRead):
     def get_tags(self):
-        return [("ns", [10]), ("nl", [120]), ("as", [150]), ("al", [30]), ("MA", "v1;nuc+Q:1-120;")]
+        return [("ns", [10]), ("nl", [120]), ("as", [150]), ("al", [30]), ("MA", "200;nuc+Q:1-120;")]
 
 
 class FakeSparseBam:

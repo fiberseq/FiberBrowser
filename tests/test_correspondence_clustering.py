@@ -11,9 +11,9 @@ from services.clustering_features import extract_features_from_compact
 from state.browser_state import BrowserState
 
 
-def window(key, start=100, reverse=False, genome=None, dataset='d', blocks=None):
+def window(key, start=100, reverse=False, genome=None, dataset='d', blocks=None, **kw):
     return fc.RegionViewport(dataset_id=dataset, result_key=key, chrom='chr1', start=start, end=start+200,
-        genome=genome, reverse=reverse, blocks=blocks or [fc.FrameBlock(frame=(0, 100), genomic=(start, start+100))])
+        genome=genome, reverse=reverse, blocks=blocks or [fc.FrameBlock(frame=(0, 100), genomic=(start, start+100))], **kw)
 
 
 def request(views, **kwargs):
@@ -155,12 +155,27 @@ def test_wrapped_regions_require_the_whole_hull(state, monkeypatch):
                  dict(id='full', intervals=[[0, 200, 0]])]
         return WorkingSet(reads, total_overlapping=2, total_spanning=1, chrom=chrom, start=start, end=end)
     monkeypatch.setattr(BrowserState, 'build_working_set', working)
-    v = window('wrap', start=0, blocks=[fc.FrameBlock(frame=(0, 10), genomic=(190, 200)),
-                                      fc.FrameBlock(frame=(10, 100), genomic=(0, 90))])
+    v = window('wrap', start=0, wraps_origin=True, blocks=[fc.FrameBlock(frame=(0, 10), genomic=(190, 200)),
+                                                         fc.FrameBlock(frame=(10, 100), genomic=(0, 90))])
     result = fc.run(base, request([v]))['results']['wrap']
     assert result['eligible_read_count'] == 2
     assert result['peak_covering_read_count'] == 1
     assert set(result['assignments']) == {'full'}
+
+
+def test_mixed_orientation_blocks_do_not_require_the_hull_without_the_flag(state, monkeypatch):
+    """Graph primary G0: the hull is required only on an explicit ``wraps_origin``; blocks whose order merely looks
+    wrapped (an inverted block between forward ones, a graph window) need only their own spans covered."""
+    base, _ = state
+    def working(self, dataset_id, chrom, start, end, *args, **kwargs):
+        reads = [dict(id='split', intervals=[[0, 90, 0], [190, 200, 0]]),
+                 dict(id='full', intervals=[[0, 200, 0]])]
+        return WorkingSet(reads, total_overlapping=2, total_spanning=1, chrom=chrom, start=start, end=end)
+    monkeypatch.setattr(BrowserState, 'build_working_set', working)
+    v = window('mixed', start=0, blocks=[fc.FrameBlock(frame=(0, 10), genomic=(190, 200), reverse=True),
+                                       fc.FrameBlock(frame=(10, 100), genomic=(0, 90))])
+    result = fc.run(base, request([v]))['results']['mixed']
+    assert result['peak_covering_read_count'] == 2
 
 
 @pytest.mark.parametrize('method', ['graph', 'kmeans'])
@@ -287,3 +302,33 @@ def test_loads_only_layers_used_by_mapped_features(state, monkeypatch, mode, lay
     monkeypatch.setattr(fc.AnalysisReadQuery, 'build_working_set', working)
     req = request([window('a'), window('b')]); req.peak_regions[0].mode = mode
     fc.run(base, req)
+
+
+def test_nucleosome_modes_load_the_nuc_groups_with_their_class_bytes(monkeypatch):
+    """Review C-2: a nuc.size mode loads nucsz with its quality bytes; without them every read gives no feature."""
+    base = BrowserState(None)
+    base.current_genome = 'main-ref'
+    base.datasets = {'d': SimpleNamespace()}
+    base.dataset_order = ['d']
+    seen = {}
+
+    def working(self, dataset_id, chrom, start, end, spanning=False, min_footprints=0, **kwargs):
+        seen.update(kwargs)
+        quals = bool(kwargs.get('include_layer_qualities'))
+        reads = []
+        for i in range(8):
+            mono = i % 2 == 0
+            layer = dict(intervals=[[0, 147, 147]] if mono else [[0, 20, 20]], quality_names=['coarse', 'named', 'posterior', 'z'],
+                         **({'qualities': [[2, 0, 200, 128]] if mono else [[17, 0, 200, 128]]} if quals else {}))
+            reads.append(dict(id=f'r{i}', intervals=[[0, end - start, 0]], layers={'nucsz': layer}))
+        return WorkingSet(reads, total_overlapping=8, total_spanning=8, chrom=chrom, start=start, end=end)
+
+    monkeypatch.setattr(BrowserState, 'build_working_set', working)
+    req = fc.RegionClusterRequest(viewports=[window('a')], peak_regions=[PeakRegion(start=0, end=100, mode='nuc.size.mono')],
+                                  method='kmeans', k=2)
+    result = fc.run(base, req)
+    assert 'nucsz' in (seen.get('requested_layers') or [])
+    assert seen.get('include_layer_qualities') is True
+    labels = result['results']['a']['assignments']
+    assert len({labels[f'r{i}'] for i in range(0, 8, 2)}) == 1
+    assert {labels[f'r{i}'] for i in range(0, 8, 2)} != {labels[f'r{i}'] for i in range(1, 8, 2)}

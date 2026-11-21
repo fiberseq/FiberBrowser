@@ -4,6 +4,7 @@ import { useBrowserStore } from '../stores/browserStore';
 import { applyImportedState, collectFrontendState } from '../api/session';
 import { DEFAULT_METAPROFILE_ID } from '../types/dataset';
 import type { CompositeTrack } from '../types/dataset';
+import { resolveProfileChannels } from './clusterViewChannels';
 import { defaultMetaprofileToggles, layerToggleOn } from './defaultMetaprofile';
 
 const DATASET = {
@@ -33,8 +34,7 @@ function sourceId(store: Parameters<typeof defaultTrack>[0], ruleId: string): st
 }
 
 function clusterDefaultChannels(state: ReturnType<Store['getState']>): string[] {
-  // 3.0.x has no cluster channel picker: the cluster profiles show the default metaprofile's toggles.
-  return Object.entries(defaultMetaprofileToggles(state)).filter(([, v]) => v).map(([k]) => k).sort();
+  return resolveProfileChannels(null, defaultMetaprofileToggles(state)).sort();
 }
 
 let store: Store;

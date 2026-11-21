@@ -326,7 +326,7 @@ def score_primer_specificity(seq_groups, runtime_config, *, templates=None, chec
             continue
         expect_home = runtime_config.expects_home_hit(chrom)
         passing, counts, cached, blasted, stderr_text = blast_and_score_cached(
-            seqs, runtime_config.blast_db_path, check_three_prime=check_three_prime,
+            seqs, runtime_config.blast_db_for(chrom), check_three_prime=check_three_prime,
             expect_home_hit=expect_home)
         n_cached += cached
         n_blasted += blasted
@@ -338,7 +338,7 @@ def score_primer_specificity(seq_groups, runtime_config, *, templates=None, chec
             # the error (a primer another batch passed must not pass unchecked here).
             label = f" on {chrom}" if chrom else ""
             detail = stderr_text or (f"blastn exited with an error while checking {len(missing):,} primer(s){label} "
-                                     f"against {os.path.basename(runtime_config.blast_db_path)}.")
+                                     f"against {os.path.basename(runtime_config.blast_db_for(chrom))}.")
             return set(), {}, n_cached, n_blasted, ' '.join(dict.fromkeys(stderrs + [detail]))
         if not expect_home:
             template = templates.get(chrom)

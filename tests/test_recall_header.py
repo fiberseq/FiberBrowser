@@ -600,7 +600,8 @@ def _daf_reads(path, n_reads=30, read_length=1500, length=40_000):
     return str(path)
 
 
-@pytest.mark.slow
+# Not marked slow (~13 s): the only FiberBrowser test that runs a real fiberhmm-call through the job manager, so the
+# local `-m "not slow"` check must keep it (test coverage audit, item 4).
 def test_a_header_recall_runs_and_joins_the_library(tmp_path):
     from fiberhmm import __version__ as current
     from services import pipeline_jobs

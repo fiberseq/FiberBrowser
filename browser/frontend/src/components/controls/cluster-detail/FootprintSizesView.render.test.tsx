@@ -135,7 +135,7 @@ describe('FootprintSizesView', () => {
     const more = [...container.querySelectorAll('button[aria-expanded]')].find(b => /More settings/.test(b.textContent ?? '')) as HTMLButtonElement;
     act(() => more.click());
     const select = () => q('footprint-sizes-colormap')!.querySelector('select') as HTMLSelectElement;
-    expect([...select().options].map(o => o.value)).toEqual(['magma', 'viridis', 'inferno', 'plasma', 'cividis', 'greys', 'rdbu_r']);
+    expect([...select().options].map(o => o.value)).toEqual(['magma', 'viridis', 'inferno', 'plasma', 'cividis', 'greys', 'rdbu_r', 'fall', 'hot', 'red', 'blues']);
     expect(select().value).toBe('magma');
     act(() => { select().value = 'cividis'; select().dispatchEvent(new Event('change', { bubbles: true })); });
     act(() => (q('footprint-sizes-colormap-reverse') as HTMLInputElement).click());

@@ -31,6 +31,7 @@ from typing import Any, Dict
 import numpy as np
 
 from services.analysis_query import AnalysisReadQuery
+from services.read_selection import read_matches_id_filter
 from services.clustering_features import extract_features_from_compact, resample_feature_blocks
 from services.clustering_inputs import (
     active_peak_regions,
@@ -68,20 +69,31 @@ def _feature_bits(raw: np.ndarray, widths: list[int], threshold: float, reverse:
     return bits[:, ::-1] if reverse else bits
 
 
-def _balanced_indices(groups: list[list[int]], rng: np.random.Generator) -> np.ndarray:
+def _balanced_indices(groups: list[list[int]], seed: int, ident) -> np.ndarray:
+    """Each group down to the smallest group's size by the stable sampling rule (services/stable_sample, 3.1.0):
+    the rows whose read names (``ident(row)``) have the smallest keys of (seed, group number, name)."""
+    from services.stable_sample import lowest_k, stable_key
     nonempty = [g for g in groups if g]
     if not nonempty:
         return np.array([], dtype=np.int64)
     target = min(len(g) for g in nonempty)
-    return np.sort(np.concatenate([rng.choice(np.asarray(g), size=target, replace=False) for g in nonempty]))
+    picked = []
+    for gi, g in enumerate(nonempty):
+        picked.extend(lowest_k(g, target, key=lambda i, gi=gi: stable_key(int(seed), str(gi), str(ident(i))), ident=lambda i: f"{ident(i)}#{i}"))
+    return np.sort(np.asarray(picked, dtype=np.int64))
 
 
-def _fit_predict(X: np.ndarray, fit_rows: np.ndarray, k: int, method: str, random_state: int) -> np.ndarray:
-    """K-means fitted on fit_rows, assigning every row; labels ordered by size (0 = largest)."""
+def _fit_predict(X: np.ndarray, fit_rows: np.ndarray, k: int, method: str, random_state: int,
+                 centers_out: dict | None = None) -> np.ndarray:
+    """K-means fitted on fit_rows, assigning every row; labels ordered by size (0 = largest). ``centers_out``
+    receives the fitted centres under the returned labels (graph primary G0: the model as fitted, never centres
+    recomputed from every assigned read)."""
     if X.shape[0] == 0:
         return np.zeros(0, dtype=np.int32)
     n_clusters = max(1, min(int(k), len(fit_rows)))
     if n_clusters == 1 or len(fit_rows) < 2:
+        if centers_out is not None and len(fit_rows):
+            centers_out[0] = X[fit_rows].mean(axis=0).astype(np.float64).tolist()
         return np.zeros(X.shape[0], dtype=np.int32)
     from sklearn.cluster import KMeans, MiniBatchKMeans
 
@@ -94,6 +106,9 @@ def _fit_predict(X: np.ndarray, fit_rows: np.ndarray, k: int, method: str, rando
     labels = model.predict(X).astype(np.int32)
     sizes = np.bincount(labels, minlength=n_clusters)
     rank = {int(old): new for new, old in enumerate(sorted(range(n_clusters), key=lambda c: (-sizes[c], c)))}
+    if centers_out is not None:
+        for old, new in rank.items():
+            centers_out[new] = model.cluster_centers_[old].astype(np.float64).tolist()
     return np.array([rank[int(label)] for label in labels], dtype=np.int32)
 
 
@@ -153,6 +168,8 @@ def run_matched_views_endpoint(*, state, req) -> Dict[str, Any]:
             raise ValueError(f"Comparison view {view.id!r} needs a region and at least one dataset")
 
     combinatorial = method in ("binary", "combinatorial")
+    from services.lift.capability import require_for_ids
+    require_for_ids(state, [p.dataset_id for view in req.views for p in view.panels], "clustering")  # P2b
     features = [_view_features(view, combinatorial) for view in req.views]
     feature_count = len(features[0][0])
     if feature_count == 0 or any(len(peaks) != feature_count for peaks, _ in features):
@@ -172,11 +189,13 @@ def run_matched_views_endpoint(*, state, req) -> Dict[str, Any]:
     row_views: list[str] = []
     metadata: dict[str, dict[str, Any]] = {}
 
+    pending = []
     phase_start = time.perf_counter()
     for view, (peaks, modes) in zip(req.views, features):
         strands = {p.dataset_id: p.strand for p in view.panels if p.strand}
         query = AnalysisReadQuery.from_request(
             state,
+            capability="clustering",
             chrom=view.chrom,
             start=view.start,
             end=view.end,
@@ -188,11 +207,11 @@ def run_matched_views_endpoint(*, state, req) -> Dict[str, Any]:
             requested_layers=cluster_modes_requested_layers(modes),
         )
         for panel in view.panels:
-            working_set = query.build_working_set(state, panel.dataset_id, read_ids=panel.read_ids)
+            working_set = query.build_working_set(state, panel.dataset_id, read_ids=panel.read_ids, lift_hap=panel.lift_hap, strand=panel.strand)
             reads = list(working_set.reads or [])
             if panel.read_ids is not None:
                 allowed = set(panel.read_ids)
-                reads = [read for read in reads if read.get("id") in allowed]
+                reads = [read for read in reads if read_matches_id_filter(read, allowed)]
             if panel.strand:
                 from services.read_strand import filter_reads_by_strand, strand_calls
                 reads = filter_reads_by_strand(reads, panel.strand, strand_calls(state, panel.dataset_id))
@@ -200,28 +219,39 @@ def run_matched_views_endpoint(*, state, req) -> Dict[str, Any]:
             reads = filter_reads_covering_regions(reads, peaks)
             covering = len(reads)
             reads = query.cap_reads(reads, namespace="matched_views", label=panel.result_key)
-            ids: list[str] = []
-            if reads:
-                prefixed = [prefix_compact_read(read, panel.result_key) for read in reads]
-                raw, prefixed_ids, widths, _ = extract_features_from_compact(
-                    prefixed, peaks, view.start, step=FEATURE_STEP,
-                    subnucleosomal_threshold=req.subnucleosomal_threshold, peak_modes=modes,
-                )
-                if len(prefixed_ids) and raw.ndim == 2 and raw.shape[1] > 0:
-                    rows.append(resample_feature_blocks(raw, widths, bins, reverse=view.reverse))
-                    bit_rows.append(_feature_bits(raw, widths, req.accessibility_threshold, view.reverse))
-                    ids = [read["_original_id"] for read in prefixed]
-            row_read_ids.extend(ids)
-            row_keys.extend([panel.result_key] * len(ids))
-            row_views.extend([view.id] * len(ids))
+            prefixed = [prefix_compact_read({**read, "_consensus_dataset_id": panel.dataset_id,
+                                                "_cluster_group": panel.result_key}, panel.result_key) for read in reads]
+            pending.append((view, panel, peaks, modes, prefixed))
             metadata[panel.result_key] = {
                 "view_id": view.id,
                 "dataset_id": panel.dataset_id,
                 "chrom": view.chrom,
                 "eligible_read_count": eligible,
                 "peak_covering_read_count": covering,
-                "analysis_read_count": len(ids),
+                "analysis_read_count": len(reads),
+                **({"cohort": working_set.lift_cohort} if getattr(working_set, "lift_cohort", None) else {}),
             }
+    from services.lift.joint import prepare_joint_cohort
+    joint_rows, joint_report = prepare_joint_cohort(state, [r for *_, cohort in pending for r in cohort],
+        {p.dataset_id for view in req.views for p in view.panels})
+    retained = {id(r): i for i, r in enumerate(joint_rows)}
+    # Feature extraction groups by panel; preserve canonical panel and row
+    # order rather than reconstructing the request order after joint prep.
+    for view, panel, peaks, modes, cohort in sorted(pending, key=lambda item: (item[0].id, item[1].result_key)):
+        prefixed = sorted((r for r in cohort if id(r) in retained), key=lambda r: retained[id(r)])
+        ids = []
+        if prefixed:
+            raw, prefixed_ids, widths, _ = extract_features_from_compact(
+                prefixed, peaks, view.start, step=FEATURE_STEP,
+                subnucleosomal_threshold=req.subnucleosomal_threshold, peak_modes=modes)
+            if len(prefixed_ids) and raw.ndim == 2 and raw.shape[1] > 0:
+                rows.append(resample_feature_blocks(raw, widths, bins, reverse=view.reverse))
+                bit_rows.append(_feature_bits(raw, widths, req.accessibility_threshold, view.reverse))
+                ids = [read["_original_id"] for read in prefixed]
+        row_read_ids.extend(ids)
+        row_keys.extend([panel.result_key] * len(ids))
+        row_views.extend([view.id] * len(ids))
+        metadata[panel.result_key]["analysis_read_count"] = len(ids)
     timings.add("feature_extraction", phase_start)
 
     response: Dict[str, Any] = {
@@ -232,6 +262,7 @@ def run_matched_views_endpoint(*, state, req) -> Dict[str, Any]:
         "sample_seed": sample_seed,
         "cluster_random_state": random_state,
         "total_reads": len(row_read_ids),
+        "joint_cohort": joint_report,
     }
     if not row_read_ids:
         results = {key: {**meta, "assignments": {}, "cluster_counts": {}} for key, meta in metadata.items()}
@@ -241,7 +272,6 @@ def run_matched_views_endpoint(*, state, req) -> Dict[str, Any]:
 
     phase_start = time.perf_counter()
     X = np.vstack(rows).astype(np.float32, copy=False)
-    rng = np.random.default_rng(random_state)
     cluster_patterns = None
     label_space = "shared"
 
@@ -251,7 +281,7 @@ def run_matched_views_endpoint(*, state, req) -> Dict[str, Any]:
         by_key: dict[str, list[int]] = {}
         for index in indices:
             by_key.setdefault(row_keys[index], []).append(index)
-        return _balanced_indices(list(by_key.values()), rng)
+        return _balanced_indices(list(by_key.values()), random_state, lambda i: row_read_ids[i])
 
     if combinatorial:
         labels, cluster_patterns = _pattern_labels(np.vstack(bit_rows))
@@ -265,7 +295,7 @@ def run_matched_views_endpoint(*, state, req) -> Dict[str, Any]:
         labels = np.zeros(len(row_read_ids), dtype=np.int32)
         fitted = 0
         offset = 0
-        for view in req.views:
+        for view in sorted(req.views, key=lambda view: view.id):
             indices = [i for i, view_id in enumerate(row_views) if view_id == view.id]
             if not indices:
                 continue

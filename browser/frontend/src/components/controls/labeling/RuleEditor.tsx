@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type DragEvent } from 'react';
 import type { ColorRule, Gene } from '../../../types';
 import { getLayerColor, getLayerLabel } from '../../../utils/layerColors';
+import { displayRuleColor } from '../../../utils/layerColourFollow';
 import {
   COLOR_RULE_GRADIENT_SCALE_OPTIONS,
   RECENT_RULE_COLORS_UPDATED_EVENT,
@@ -11,9 +12,12 @@ import {
 } from '../../../utils/ruleColors';
 import { ConditionEditor } from './ConditionEditor';
 import { QualityGateEditor } from './QualityGateEditor';
+import { CLEARED_NUC_CONDITIONS, NucConditionEditor, describeNucConditions } from './NucConditionEditor';
+import { ruleHasNucConditions } from '../../../utils/ruleMatching';
 import { AnalysisButton } from '../shared';
 import { DisclosureChevron } from '../../ui/Disclosure';
 import { Trash } from '../../ui/Icons';
+import { useLayerColorVersion } from '../../../features/layerColours/state';
 
 export interface OrthogonalTrackInfo {
   index: number;
@@ -53,6 +57,8 @@ function describeConditions(rule: ColorRule): string {
   }).filter(Boolean);
   const gates = rule.qualityGates?.length ?? 0;
   if (gates) parts.push(`${gates} quality gate${gates === 1 ? '' : 's'}`);
+  const nuc = describeNucConditions(rule);
+  if (nuc) parts.push(nuc);
   return parts.join(', ');
 }
 
@@ -70,7 +76,12 @@ export function RuleEditor({
   layerLabelByKey,
   defaultExpanded = false,
 }: RuleEditorProps) {
+  // Re-render when the user's layer colours change (Labels → Layer colours).
+  useLayerColorVersion();
   const [expanded, setExpanded] = useState(defaultExpanded);
+  // The nucleosome section shows once added, or whenever the rule sets a nucleosome condition.
+  const [nucOpen, setNucOpen] = useState(false);
+  const hasNuc = ruleHasNucConditions(rule);
   const isFireAliasPair = (a: string, b: string) =>
     (a === 'fire' && b === 'msp') || (a === 'msp' && b === 'fire');
   const targetIncludesLayer = (targets: string[], layer: string) =>
@@ -84,7 +95,8 @@ export function RuleEditor({
   };
   const opacity = Math.max(0, Math.min(1, rule.opacity ?? 1));
   const isHiddenByOpacity = opacity <= 0;
-  const baseColor = normalizeRuleHexColor(rule.color);
+  // A built-in rule at its stock colour shows (and is drawn in) its layer's colour from Labels → Layer colours.
+  const baseColor = normalizeRuleHexColor(displayRuleColor(rule));
   const isGradient = rule.colorMode === 'size_gradient';
   const gradient = normalizeRuleGradient(rule.gradient, baseColor, rule.sizeMin, rule.sizeMax);
   const pendingGradient = isGradient ? gradient : { ...gradient, startColor: baseColor };
@@ -514,8 +526,15 @@ export function RuleEditor({
       )}
 
       <div className="mt-1.5 ml-6 space-y-1">
-        {rule.conditions.length === 0 && (rule.qualityGates ?? []).length === 0 && (
+        {rule.conditions.length === 0 && (rule.qualityGates ?? []).length === 0 && !hasNuc && (
           <span className="text-[11px] text-gray-400">(no conditions — matches all)</span>
+        )}
+        {(hasNuc || nucOpen) && (
+          <NucConditionEditor
+            rule={rule}
+            onUpdate={onUpdate}
+            onRemove={() => { setNucOpen(false); onUpdate(CLEARED_NUC_CONDITIONS); }}
+          />
         )}
         {(rule.conditions ?? []).map((condition, conditionIndex) => (
           <ConditionEditor
@@ -553,6 +572,17 @@ export function RuleEditor({
           >
             + Add quality gate
           </AnalysisButton>
+          {!hasNuc && !nucOpen && (
+            <AnalysisButton
+              onClick={() => setNucOpen(true)}
+              theme="slate"
+              variant="soft"
+              title="Match nucleosome calls by size class or z, from a nucleosome scan's size marks"
+              data-testid="labeling-add-nuc-condition"
+            >
+              + Nucleosome class
+            </AnalysisButton>
+          )}
         </div>
       </div>
     </div>

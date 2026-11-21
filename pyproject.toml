@@ -50,7 +50,7 @@ dependencies = [
     "boto3>=1.26",
     "requests>=2.28",
     "packaging>=23.2",
-    "fiberhmm[consensus]>=3.0.3,<4",
+    "fiberhmm[consensus]>=3.2.0,<4",
     "pyjaspar>=3.0",
     "tomli>=1.1; python_version < '3.11'",
 ]
@@ -76,6 +76,9 @@ plots = ["matplotlib>=3.5", "seaborn>=0.11"]
 # "New DAF-seq run" aligns with minimap2: the minimap2 program (conda/brew) or,
 # without it, the mappy module this extra installs.
 pipeline = ["mappy>=2.24"]
+# The graph view's native helper (fiberbrowser-graph), a platform wheel built by packaging/graph-native/build_wheel.py.
+# Kept out of [all] until it is published for every platform (DESIGN_GRAPH_PANEL.md Gate G).
+graph = ["fiberbrowser-graph-native==0.5.0"]
 all = [
     "fiberbrowser[app,copilot,primers,contact-maps,s3,umap,plots,pipeline]",
 ]

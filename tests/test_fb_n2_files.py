@@ -221,6 +221,7 @@ def test_a_bigwig_on_another_assembly_is_told_by_its_lengths(api, hg38_with_dm6_
 
 # --- L12: a fresh window starts a panel on its own reference at its reads -------
 
+@pytest.mark.usefixtures("all_reads_including_uncalled")  # synthetic reads without footprint calls
 def test_a_later_window_learns_where_each_own_reference_panel_opens(client, standalone_app, tmp_path):
     """A window opened after "Open with dm6 in its own panel" (a fresh browser
     profile) started the dm6 panels at the first chromosome's 0-10,000 ("No

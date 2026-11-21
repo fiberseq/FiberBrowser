@@ -11,7 +11,13 @@ download, and the reference lock around it, forever. ``fetch``:
   once, and the download fails with ``DownloadTimeout`` (a DNS lookup is the one step it cannot interrupt);
 - counts the bytes against ``Content-Length`` and raises ``ContentTooShortError`` on a premature end, as
   urlretrieve did, before the caller publishes anything;
-- removes the partial file on any failure, so the caller can retry or fall back.
+- removes the partial file on any failure, so the caller can retry or fall back;
+- has no size cap, but warns above a size threshold (``warn_bytes``: the ``downloads.warn_bytes`` app setting,
+  ``FIBERBROWSER_DOWNLOAD_WARN_BYTES``, default 4 GB). A caller that can ask the user (the run wizard,
+  /api/load_genome) sets ``download_policy``: a download whose ``Content-Length`` is over it is then refused with
+  ``LargeDownload`` before any of the body is read unless it was confirmed. Every other caller (a FASTA URL opened
+  at start-up, from a session or a link, a panel genome) cannot ask: its large download goes ahead with a warning
+  line. One of unknown size that streams past it is reported once (``events``) and goes on.
 
 It keeps urlretrieve's progress-hook signature.
 """
@@ -23,11 +29,105 @@ import socket
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 READ_TIMEOUT = float(os.environ.get("FIBERBROWSER_DOWNLOAD_TIMEOUT", 60))          # connect, and each read (s)
 DEADLINE = float(os.environ.get("FIBERBROWSER_DOWNLOAD_DEADLINE", 4 * 3600))       # whole download (s)
 _CHUNK = 1 << 20
+# An HTTPS download never follows a redirect to a non-HTTPS URL (the transport protection would be lost silently);
+# FIBERBROWSER_DOWNLOAD_ALLOW_INSECURE_REDIRECT=1 allows plain HTTP (never ftp:).
+ALLOW_INSECURE_REDIRECT = os.environ.get("FIBERBROWSER_DOWNLOAD_ALLOW_INSECURE_REDIRECT", "") == "1"
+# Downloads larger than this ask first (Content-Length known) or warn once they pass it (unknown size); never a cap.
+# 4 GB: every catalog genome stays under it (the largest, hg19 and hg38, are about 3.2 GB as plain FASTA; the
+# gzipped ones and the GTFs are under 1 GB), so the usual genome loads never ask, while a file bigger than any
+# catalog genome (a custom URL, a wrong file, a multi-assembly FASTA) does. 0 turns the warning off.
+DEFAULT_WARN_BYTES = 4_000_000_000
+WARN_BYTES_ENV = "FIBERBROWSER_DOWNLOAD_WARN_BYTES"
+
+
+def warn_bytes() -> int:
+    """The size warning threshold in bytes (0: off): ``FIBERBROWSER_DOWNLOAD_WARN_BYTES``, else the
+    ``downloads.warn_bytes`` app setting (services/app_settings.py), else ``DEFAULT_WARN_BYTES``."""
+    raw = os.environ.get(WARN_BYTES_ENV, "").strip()
+    if raw:
+        try:
+            return max(0, int(float(raw)))
+        except ValueError:
+            pass
+    try:
+        from services import app_settings
+        value = (app_settings.load().get("downloads") or {}).get("warn_bytes")
+        if value is not None:
+            return max(0, int(value))
+    except Exception:   # noqa: BLE001 - an unreadable settings file means the default
+        pass
+    return DEFAULT_WARN_BYTES
+
+
+class LargeDownload(Exception):
+    """A download whose announced size (Content-Length) is over the warning threshold and was not confirmed.
+    Raised before any of the body is read; nothing is written. Callers that try mirrors in turn stop (one
+    confirmation covers every mirror)."""
+
+    def __init__(self, url: str, total: int, threshold: int):
+        super().__init__(f"{url} is {format_bytes(total)}, over the {format_bytes(threshold)} download warning size")
+        self.url, self.total, self.threshold = url, int(total), int(threshold)
+
+
+def format_bytes(n: int) -> str:
+    n = float(n)
+    for unit in ("bytes", "KB", "MB", "GB", "TB"):
+        if n < 1000 or unit == "TB":
+            return f"{int(n)} bytes" if unit == "bytes" else f"{n:.1f} {unit}"
+        n /= 1000
+    return f"{n:.1f} TB"
+
+
+# This request's or job's choice: whether a large download was confirmed, and where size events go.
+_policy: ContextVar = ContextVar("fiberbrowser_download_policy", default=None)
+
+
+@contextmanager
+def download_policy(confirmed: bool = False, events: list | None = None, threshold: int | None = None,
+                    on_large=None):
+    """Downloads started inside (``fetch``) by a caller that asked the user: ``confirmed`` lets one over the
+    threshold go ahead; ``events`` (a list) receives ``{"kind": "confirm" | "large_confirmed" |
+    "large_unknown_size", "url", "bytes", "threshold"}``; ``threshold`` overrides ``warn_bytes()``;
+    ``on_large(url, bytes, threshold)`` hears of a large download that goes ahead (confirmed, or of unknown
+    size once it passes the threshold)."""
+    token = _policy.set({"confirmed": bool(confirmed), "events": events, "threshold": threshold,
+                         "on_large": on_large})
+    try:
+        yield
+    finally:
+        _policy.reset(token)
+
+
+def confirmation_needed() -> dict | None:
+    """The download this request or job refused for want of confirmation (its ``confirm`` event), if any."""
+    events = (_policy.get() or {}).get("events") or []
+    return next((e for e in events if e.get("kind") == "confirm"), None)
+
+
+class InsecureRedirect(urllib.error.URLError):
+    """An HTTPS URL redirected to plain HTTP."""
+
+
+class _NoDowngradeRedirect(urllib.request.HTTPRedirectHandler):
+    def __init__(self, allow_insecure: bool):
+        super().__init__()
+        self.allow_insecure = allow_insecure
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if req.full_url.lower().startswith("https:"):
+            scheme = urllib.parse.urlsplit(newurl).scheme.lower()
+            # From HTTPS only HTTPS is followed (urllib would also follow ftp:); the escape hatch admits plain HTTP.
+            if scheme != "https" and not (self.allow_insecure and scheme == "http"):
+                raise InsecureRedirect(f"{req.full_url} redirected to non-HTTPS {newurl}: not followed")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 class DownloadTimeout(socket.timeout):
@@ -136,8 +236,9 @@ class _Watchdog:
                 self.sock.settimeout(timeout)
         return Watched
 
-    def opener(self):
+    def opener(self, allow_insecure_redirect: bool | None = None):
         watchdog = self
+        allow = ALLOW_INSECURE_REDIRECT if allow_insecure_redirect is None else bool(allow_insecure_redirect)
 
         class HTTP(urllib.request.HTTPHandler):
             def do_open(self, http_class, req, **kw):
@@ -146,11 +247,30 @@ class _Watchdog:
         class HTTPS(urllib.request.HTTPSHandler):
             def do_open(self, http_class, req, **kw):
                 return super().do_open(watchdog.connection_class(http_class), req, **kw)
-        return urllib.request.build_opener(HTTP, HTTPS)
+        return urllib.request.build_opener(HTTP, HTTPS, _NoDowngradeRedirect(allow))
 
 
-def fetch(url: str, dest: str, reporthook=None, *, timeout: float | None = None, deadline: float | None = None):
-    """Download ``url`` to ``dest`` (as urlretrieve; ``reporthook(block_num, block_size, total_size)``)."""
+def fetch(url: str, dest: str, reporthook=None, *, timeout: float | None = None, deadline: float | None = None,
+          allow_insecure_redirect: bool | None = None, warn_at: int | None = None, confirmed: bool | None = None,
+          on_large=None):
+    """Download ``url`` to ``dest`` (as urlretrieve; ``reporthook(block_num, block_size, total_size)``).
+    ``allow_insecure_redirect``: follow an HTTPS -> HTTP redirect (default: refused, InsecureRedirect).
+
+    Size warning (no cap): ``warn_at`` bytes (default: ``download_policy``'s threshold, else ``warn_bytes()``;
+    0 off). A ``Content-Length`` over it raises ``LargeDownload`` before the body unless ``confirmed`` (default:
+    ``download_policy``'s, else False). A body of unknown size that passes it calls ``on_large(url, bytes,
+    threshold)`` once and records a ``large_unknown_size`` event; the download goes on."""
+    asked = _policy.get()
+    policy = asked or {}
+    threshold = warn_at if warn_at is not None else policy.get("threshold")
+    threshold = warn_bytes() if threshold is None else max(0, int(threshold))
+    if confirmed is None:
+        # No caller that can ask (no download_policy): never refused, only warned about.
+        confirmed = True if asked is None else bool(policy.get("confirmed"))
+    else:
+        confirmed = bool(confirmed)
+    events = policy.get("events")
+    on_large = on_large if on_large is not None else policy.get("on_large")
     timeout = READ_TIMEOUT if timeout is None else timeout
     deadline = DEADLINE if deadline is None else deadline
     ends = time.monotonic() + deadline
@@ -167,10 +287,22 @@ def fetch(url: str, dest: str, reporthook=None, *, timeout: float | None = None,
 
     watchdog.start()
     try:
-        with watchdog.opener().open(url, timeout=min(timeout, remaining())) as response, open(dest, "wb") as out:
+        with watchdog.opener(allow_insecure_redirect).open(url, timeout=min(timeout, remaining())) as response, open(dest, "wb") as out:
             total = int(response.headers.get("Content-Length") or -1)
+            if threshold and total > threshold and not confirmed:
+                if events is not None:
+                    events.append({"kind": "confirm", "url": url, "bytes": total, "threshold": threshold})
+                raise LargeDownload(url, total, threshold)
+            if threshold and total > threshold:
+                print(f"  WARNING: large download, {format_bytes(total)} (over the {format_bytes(threshold)} download "
+                      f"warning size): {url}")
+                if events is not None:
+                    events.append({"kind": "large_confirmed", "url": url, "bytes": total, "threshold": threshold})
+                if on_large is not None:
+                    on_large(url, total, threshold)
             read = getattr(response, "read1", None) or response.read
             received = block = 0
+            warned = False
             if reporthook:
                 reporthook(block, _CHUNK, total)
             while True:
@@ -190,6 +322,14 @@ def fetch(url: str, dest: str, reporthook=None, *, timeout: float | None = None,
                 out.write(chunk)
                 received += len(chunk)
                 block += 1
+                if threshold and total < 0 and not warned and received > threshold:
+                    warned = True   # unknown size, now past the threshold: said once, never cancelled
+                    print(f"  WARNING: large download of unknown size, past {format_bytes(threshold)}: {url}")
+                    if events is not None:
+                        events.append({"kind": "large_unknown_size", "url": url, "bytes": received,
+                                       "threshold": threshold})
+                    if on_large is not None:
+                        on_large(url, received, threshold)
                 if reporthook:
                     reporthook(block, _CHUNK, total)
             remaining()            # a body cut short by the watchdog is not a complete body
@@ -209,3 +349,20 @@ def fetch(url: str, dest: str, reporthook=None, *, timeout: float | None = None,
     finally:
         watchdog.cancel()
     return dest, None
+
+
+def probe_size(url: str, *, timeout: float | None = None, allow_insecure_redirect: bool | None = None):
+    """The size the server announces for ``url`` (``Content-Length`` of a HEAD request, through the same
+    redirect rules and deadlines as ``fetch``), or None when it does not say or cannot be reached."""
+    timeout = min(READ_TIMEOUT if timeout is None else timeout, 30.0)
+    watchdog = _Watchdog(timeout)
+    watchdog.start()
+    try:
+        request = urllib.request.Request(url, method="HEAD")
+        with watchdog.opener(allow_insecure_redirect).open(request, timeout=timeout) as response:
+            length = response.headers.get("Content-Length")
+            return int(length) if length is not None and str(length).strip().isdigit() else None
+    except Exception:   # noqa: BLE001 - the size is optional information
+        return None
+    finally:
+        watchdog.cancel()

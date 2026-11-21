@@ -32,6 +32,7 @@ from contextvars import ContextVar
 
 decode_read_scope = ContextVar('decode_read_scope', default=None)
 prefetch_sample_level = ContextVar('prefetch_sample_level', default=None)
+from collections import OrderedDict
 from contextlib import contextmanager
 from typing import Optional
 
@@ -132,9 +133,10 @@ class SampledReads(list):
     """A broad load's kept reads, with the extents of the records it skipped."""
 
     def __init__(self, reads=(), *, level: int = 0, skipped_starts=None, skipped_ends=None,
-                 kept_starts=None, kept_ends=None):
+                 kept_starts=None, kept_ends=None, estimated: bool = False):
         super().__init__(reads)
         self.sample_level = int(level)
+        self.sampling_estimated = bool(estimated)
         as_array = lambda v: np.asarray(v if v is not None else [], dtype=np.int64)  # noqa: E731
         self.skipped_starts = as_array(skipped_starts)
         self.skipped_ends = as_array(skipped_ends)
@@ -165,7 +167,7 @@ def sampling_info(reads, start: int, end: int, kept_overlapping: int, kept_spann
     k_starts, k_ends = getattr(reads, "kept_starts", None), getattr(reads, "kept_ends", None)
     kept = _overlapping(k_starts, k_ends, start, end)
     kept_span = _overlapping(k_starts, k_ends, start, end, spanning=True)
-    return {
+    info = {
         "level": level,
         "fraction": fraction(level),
         "kept": kept,
@@ -175,6 +177,11 @@ def sampling_info(reads, start: int, end: int, kept_overlapping: int, kept_spann
         "loaded": int(kept_overlapping),
         "loaded_spanning": int(kept_spanning),
     }
+    if getattr(reads, "sampling_estimated", False):
+        # Target extents are counted before composing bodies and resolving
+        # primary haplotypes, so the target row counts are estimates.
+        info["estimated"] = True
+    return info
 
 
 def merge_sampling_info(parts) -> Optional[dict]:
@@ -296,8 +303,69 @@ def estimate_reads(bam_path: str, chrom: str, start: int, end: int, *, bam_handl
     return max(0.0, (hi - lo) / bytes_per_read)
 
 
-def estimate_dataset_reads(state, dataset, chrom: str, start: int, end: int) -> Optional[float]:
+_LIFTED_ESTIMATES: "OrderedDict[tuple, Optional[float]]" = OrderedDict()
+_LIFTED_ESTIMATES_MAX = 4096
+
+
+def clear_lifted_estimates() -> None:
+    with _bai_lock:
+        _LIFTED_ESTIMATES.clear()
+
+
+def _index_signature(path: str) -> Optional[tuple]:
+    index = _bai_path(path)
+    if index is None:
+        return None
+    try:
+        st = os.stat(index)
+    except OSError:
+        return None
+    return index, st.st_mtime_ns, st.st_size
+
+
+def _lift_estimate_context(dataset):
+    """Validate the files once for the neighboring depth probes of one sample-level decision."""
+    from services.lift.live_lift import lift_key
+    config = dataset.live_lift
+    handle = config.handle
+    return (handle, lift_key(handle, config.haplotypes, config.settings), tuple(map(str, dataset.paths)),
+            tuple(_index_signature(str(p)) for p in dataset.paths))
+
+
+def estimate_dataset_reads(state, dataset, chrom: str, start: int, end: int, *, _lift_context=None) -> Optional[float]:
     """Reads of a BAM dataset expected in ``[start, end)`` (None: unknown)."""
+    if str(chrom).startswith("meta:"):
+        # A meta-locus contig shows its view (services/meta_locus_jobs), which is already the sample (seeded,
+        # sized by the working-set control): never sampled again by name here.
+        return None
+    if getattr(dataset, "data_type", None) == "bam_livelift":
+        from services.lift.live_lift import LiftRefused, select_pieces, plan_fetch, estimate_lifted_reads
+        config = dataset.live_lift
+        handle, identity, paths, indexes = _lift_context or _lift_estimate_context(dataset)
+        if chrom not in handle.map.targets:
+            return 0.0
+        # A lifted estimate selects pieces and plans a fetch: the display's
+        # sample level asks for a dozen of them on every request. It depends
+        # only on the lift identity, the files' indexes and the range.
+        key = (identity, paths, indexes, chrom, int(start), int(end))
+        with _bai_lock:
+            if key in _LIFTED_ESTIMATES:
+                _LIFTED_ESTIMATES.move_to_end(key)
+                return _LIFTED_ESTIMATES[key]
+        try:
+            selection = select_pieces(handle, chrom, start, end, haplotypes=config.haplotypes,
+                                      settings=config.settings, key=identity)
+            value = estimate_lifted_reads(dataset.paths, plan_fetch(selection, config.settings, fetch_range=(start, end)))
+        except LiftRefused:
+            value = None
+        if value is None:
+            # Unknown (an unreadable file, a refused plan): never remembered, so a recovered file is estimated again.
+            return None
+        with _bai_lock:
+            _LIFTED_ESTIMATES[key] = value
+            while len(_LIFTED_ESTIMATES) > _LIFTED_ESTIMATES_MAX:
+                _LIFTED_ESTIMATES.popitem(last=False)
+        return value
     if dataset is None or getattr(dataset, "data_type", None) != "bam":
         return None
     total = 0.0
@@ -337,7 +405,11 @@ def sample_level(state, dataset, chrom: str, start: int, end: int) -> int:
     if target <= 0:
         return 0
     lo, hi = level_block(start, end)
-    in_block = estimate_dataset_reads(state, dataset, chrom, lo, hi)
+    estimate = estimate_dataset_reads
+    if getattr(dataset, 'data_type', None) == 'bam_livelift':
+        from functools import partial
+        estimate = partial(estimate, _lift_context=_lift_estimate_context(dataset))
+    in_block = estimate(state, dataset, chrom, lo, hi)
     if in_block is None:
         if getattr(state, 'performance', {}).get('effective') == 'low' and getattr(dataset, 'data_type', None) == 'bam':
             # CSI/remote indexes lack the BAI estimate. Count alignments in C
@@ -355,7 +427,7 @@ def sample_level(state, dataset, chrom: str, start: int, end: int) -> int:
     # The block's busiest view: its reads over the view's share of the block,
     # read off the densest view-wide stretch (targeted libraries are lumpy).
     total = max(in_block * width / (hi - lo),
-                max((estimate_dataset_reads(state, dataset, chrom, a, a + width) or 0.0)
+                max((estimate(state, dataset, chrom, a, a + width) or 0.0)
                     for a in range(lo, hi, max(1, width // 2))))
     if total <= target:
         return 0

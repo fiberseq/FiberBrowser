@@ -90,3 +90,40 @@ test('uncalled reads are hidden at every Min footprints; "All reads, including u
   await idle(page);
   await expect(status).not.toContainText('uncalled', { timeout: 30_000 });
 });
+
+test('the paths that read BAM records themselves follow the rule; signal filters stay hidden without bg/me tags', async ({ server, page }) => {
+  test.setTimeout(180_000);
+  await page.setViewportSize({ width: 1500, height: 950 });
+  await page.addInitScript(() => {
+    (window as any).__FIBERBROWSER_E2E_EXPOSE_STORE = true;
+    (window as any).__FIBERBROWSER_E2E_DISABLE_GENOME_AUTOLOAD = true;
+    localStorage.clear();
+    sessionStorage.clear();
+  });
+  await page.goto(server.baseUrl);
+  await page.waitForFunction(() => (window as any).__FIBERBROWSER_STORE__?.getState().datasets.length > 0);
+  const dataset = await page.evaluate(() => (window as any).__FIBERBROWSER_STORE__.getState().datasets[0]);
+  // The demo BAM carries no signal tags: the dataset says so and no signal filter is offered.
+  expect(dataset.signal_tags).toBe(false);
+  const view = { chrom: REGION.chrom, start: String(REGION.start), end: String(REGION.end), dataset_id: dataset.id };
+  const json = async (path: string, params: Record<string, string>) => {
+    const res = await page.request.get(`${server.baseUrl}${path}?${new URLSearchParams(params)}`);
+    expect(res.ok(), `${path} ${res.status()}`).toBe(true);
+    return res.json();
+  };
+  // Dense loader (/api/reads/info): the uncalled reads only with hide_uncalled=false.
+  const hidden = (await json('/api/reads/info', view)).count;
+  const shown = (await json('/api/reads/info', { ...view, hide_uncalled: 'false' })).count;
+  expect(shown - hidden).toBe(UNCALLED.length);
+  // Region detection answers under both settings.
+  for (const hide of [undefined, 'false']) {
+    const regions = await json('/api/reads/regions', { ...view, min_reads: '1', ...(hide ? { hide_uncalled: hide } : {}) });
+    expect(regions.success).not.toBe(false);
+  }
+  // The Read Filters section lists no signal filters.
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('fiberbrowser:open-sidebar-section', {
+    detail: { sectionId: 'view', subsectionId: 'view.advanced' } })));
+  await expect(page.locator('[data-setting-id="view.min-footprints"]').first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId('signal-filters')).toHaveCount(0);
+  await expect(page.getByTestId('signal-hide-background')).toHaveCount(0);
+});

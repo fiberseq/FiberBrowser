@@ -47,6 +47,16 @@ def reference_owner(state):
     return state
 
 
+def pending_annotation(state):
+    """The registry genome whose annotation waits for a download confirmation on this state's reference (kept
+    on ``reference_owner``: a panel view and its shared context, a forked session and its template, agree)."""
+    return getattr(reference_owner(state), "__dict__", {}).get("pending_annotation")
+
+
+def set_pending_annotation(state, genome_id) -> None:
+    object.__setattr__(reference_owner(state), "pending_annotation", genome_id)
+
+
 def reference_lock(state) -> threading.RLock:
     """The lock every replacement of a reference holds, for its whole length (clearing, FASTA, annotation,
     genome id, collection metadata): two at once would interleave them (hg38's annotation and id over mm10's
@@ -117,15 +127,31 @@ def _fasta_stem(path) -> str:
     return stem
 
 
-def genome_already_loaded(state, genome_id: str) -> bool:
-    """The state already has this genome, coherently: its id, a FASTA that is that genome's (the one a registry
-    load of it installed, or a user's FASTA named for it, ``--fasta hg38.fa``) and no other registry genome's
-    annotation. A mixed state (another genome's sequence or annotation under this id) is loaded again."""
+def genome_fasta_loaded(state, genome_id: str) -> bool:
+    """The state's sequence is this genome's: its id and a FASTA that is that genome's (the one a registry load of
+    it installed, or a user's FASTA named for it, ``--fasta hg38.fa``), with no annotation download pending for it.
+    Says nothing about the annotation (``genome_already_loaded`` does)."""
+    if pending_annotation(state) == genome_id:
+        # Its annotation waits for a download confirmation: the confirmed retry finishes it.
+        return False
+    return genome_sequence_loaded(state, genome_id)
+
+
+def genome_sequence_loaded(state, genome_id: str) -> bool:
+    """The state's sequence is this genome's (``genome_fasta_loaded`` without the pending-annotation condition): a
+    confirmed annotation download then loads only the annotation, never the registry FASTA over the user's own."""
     if getattr(state, "current_genome", None) != genome_id or getattr(state, "fasta", None) is None:
         return False
     fasta_path = getattr(state, "fasta_path", None)
     installed = getattr(state, "registry_fasta", None)
-    if not (installed == (genome_id, fasta_path) or _fasta_stem(fasta_path) == genome_id):
+    return installed == (genome_id, fasta_path) or _fasta_stem(fasta_path) == genome_id
+
+
+def genome_already_loaded(state, genome_id: str) -> bool:
+    """The state already has this genome, coherently: its id, a FASTA that is that genome's (the one a registry
+    load of it installed, or a user's FASTA named for it, ``--fasta hg38.fa``) and no other registry genome's
+    annotation. A mixed state (another genome's sequence or annotation under this id) is loaded again."""
+    if not genome_fasta_loaded(state, genome_id):
         return False
     gtf_path = getattr(state, "gtf_path", None)
     if gtf_path and os.path.dirname(os.path.abspath(gtf_path)) == _genome_cache_dir() \
@@ -151,18 +177,260 @@ def load_genome_blocking(state, genome_id: str, info: dict) -> dict:
     """Load a registered genome into the provided browser state.
 
     Nothing to do when the state already has it, coherently, with a FASTA (session restores ask for the saved
-    genome): the loaded FASTA, maybe the user's own, is never replaced by a download. One reference change per
-    state at a time (``reference_lock``): a second request waits for the first and then finds it loaded.
+    genome): the loaded FASTA, maybe the user's own, is never replaced by a download. Its annotation is loaded when
+    it is missing or another genome's (``annotation_needed``): ``--fasta dm6.fa`` on a fresh ~/.fiberhmm has no
+    genes, and asking for dm6 then answered "already loaded" with none, so dm6's genes came only after loading
+    another genome first (owner report, 3.1.0 RC). One reference change per state at a time (``reference_lock``):
+    a second request waits for the first and then finds it loaded.
     """
     # One reference change per state at a time, the no-op check under the same lock: a load never sees, or
     # leaves, another load's half-installed reference.
     with reference_lock(state):
-        if genome_already_loaded(state, genome_id):
+        if genome_sequence_loaded(state, genome_id):
+            # Its sequence (maybe the user's own --fasta) stays: only a missing or foreign annotation is loaded.
+            if annotation_needed(state, genome_id, info):
+                result = already_loaded_result(state, genome_id, info)
+                foreign = getattr(state, "gtf_data", None) is not None
+                _load_registry_annotation(state, genome_id, info, result)
+                result["gtf_loaded"] = bool(result.get("gtf_loaded"))
+                if result["gtf_loaded"]:
+                    result["message"] = "Genome already loaded; its annotation loaded"
+                elif foreign and not result.get("needs_confirmation"):
+                    # Another genome's genes never stay under this one (they would be drawn on its contigs).
+                    state.gtf_data = None
+                    state.gtf_path = None
+                return result
             return already_loaded_result(state, genome_id, info)
         result = _load_genome_unlocked(state, genome_id, info)
         if result.get("fasta_loaded") and getattr(state, "fasta", None) is not None:
             state.registry_fasta = (genome_id, getattr(state, "fasta_path", None))
         return result
+
+
+def registry_annotation_path(genome_id: str) -> str:
+    """Where a registry genome's annotation is cached (~/.fiberhmm/genomes/<id>.gtf)."""
+    return os.path.join(_genome_cache_dir(), f"{genome_id}.gtf")
+
+
+def registry_annotation_of(state) -> "str | None":
+    """The registry genome whose cached annotation is the loaded one, else None (none loaded, or the user's own)."""
+    gtf_path = getattr(state, "gtf_path", None)
+    if not gtf_path or getattr(state, "gtf_data", None) is None:
+        return None
+    path = os.path.abspath(str(gtf_path))
+    if os.path.dirname(path) != _genome_cache_dir() or not path.endswith(".gtf"):
+        return None
+    from services.genome_registry import GENOME_REGISTRY
+    stem = os.path.basename(path)[: -len(".gtf")]
+    return stem if stem in GENOME_REGISTRY else None
+
+
+def _alias_keys(name) -> set:
+    lower = str(name or "").lower()
+    stripped = lower[3:] if lower.startswith("chr") else lower
+    keys = {lower, stripped, f"chr{stripped}"}
+    if stripped in ("m", "mt"):
+        keys |= {"m", "mt", "chrm", "chrmt"}
+    return keys
+
+
+# At least this share of the annotation's transcripts must lie on the reference's contigs for it to belong to that
+# reference. A yeast annotation over dm6 shares only chrX and chrM (about 6% of its transcripts); an annotation of the
+# right assembly is near 100% (scaffolds a FASTA leaves out cost a little).
+ANNOTATION_FIT_SHARE = 0.5
+
+
+def annotation_fits(state) -> "bool | None":
+    """Whether the loaded annotation belongs to the loaded reference by contig names (its transcripts' contigs are
+    the reference's): None when either is missing."""
+    gtf = getattr(state, "gtf_data", None)
+    transcripts = gtf.get("transcripts") if isinstance(gtf, dict) else None
+    fasta = getattr(state, "fasta", None)
+    if transcripts is None or not len(transcripts) or "chrom" not in transcripts or fasta is None:
+        return None
+    try:
+        names = list(fasta.references)
+    except Exception:
+        return None
+    names += list((getattr(state, "plasmid_sequences", None) or {}).keys())
+    reference = set()
+    for name in names:
+        reference |= _alias_keys(name)
+    counts = transcripts["chrom"].value_counts()
+    total = int(counts.sum())
+    on_reference = sum(int(n) for chrom, n in counts.items() if _alias_keys(chrom) & reference)
+    if total > 0 and on_reference / total >= ANNOTATION_FIT_SHARE:
+        # Contig names alone don't tell mammals apart (mouse chr1-19, X, Y are all hg38 names). When the reference's
+        # contig lengths are a known whole assembly (its contigs are complete), transcripts running past their ends
+        # are another assembly's (a whole mouse GTF over hg38 has hundreds on chr13-19 and X). A partial reference
+        # (the first Mb of chr1 named hg38.fa) is never judged so: features beyond it are only out of view.
+        # Circular contigs are left out (a gene may wrap their origin).
+        complete = _complete_contigs(fasta)
+        if complete:
+            return not _transcripts_past_contig_ends(state, fasta, transcripts, on_reference, complete)
+        return True
+    # Few of its transcripts on the reference: another genome's annotation, or a reference that is part of a
+    # genome (chr3 of hg38 under a whole-genome GTF). The species of each side decides when both are known.
+    annotation_species = _species(_genome_from_names([str(c) for c in counts.index]))
+    reference_species = _species(_reference_genome(state, fasta, names))
+    if annotation_species and reference_species:
+        return annotation_species == reference_species
+    return total > 0 and on_reference / total >= ANNOTATION_FIT_SHARE
+
+
+def _complete_contigs(fasta) -> set:
+    """Alias keys of the reference's contigs known to be whole: its contig lengths identify a known assembly
+    (services/assembly_fingerprint) and the contig has that assembly's length exactly. A cropped contig beside
+    whole ones (chr1 whole, chr2's first Mb) is not among them."""
+    try:
+        from services.assembly_fingerprint import Contig, canonical_contigs, fingerprint
+        lengths = {str(n): int(fasta.get_reference_length(n)) for n in fasta.references}
+        fp = fingerprint([Contig(n, l) for n, l in lengths.items()])
+        if fp.kind != "genome" or not fp.assembly:
+            return set()
+        canonical = {}
+        for name, length in canonical_contigs(fp.assembly).items():
+            for key in _alias_keys(name):
+                canonical[key] = int(length)
+        complete = set()
+        for name, length in lengths.items():
+            keys = _alias_keys(name)
+            if any(canonical.get(k) == length for k in keys):
+                complete |= keys
+        return complete
+    except Exception:
+        return set()
+
+
+def _transcripts_past_contig_ends(state, fasta, transcripts, on_reference: int, complete: set) -> bool:
+    """At least ``max(2, 0.1%)`` of the transcripts on the reference end past their contig's length."""
+    try:
+        lengths = {}
+        for name in fasta.references:
+            for key in _alias_keys(name):
+                lengths[key] = int(fasta.get_reference_length(name))
+        circular = set()
+        for name in (getattr(state, "circular_chroms", None) or ()):
+            circular |= _alias_keys(name)
+        ends = transcripts.groupby("chrom")["end"]
+        past = 0
+        for chrom, chrom_ends in ends:
+            keys = _alias_keys(chrom)
+            if keys & circular or not keys & complete:
+                continue
+            length = next((lengths[k] for k in keys if k in lengths), None)
+            if length is not None:
+                past += int((chrom_ends > length).sum())
+        return past >= max(2, on_reference // 1000)
+    except Exception:
+        return False
+
+
+_SPECIES = {"hg38": "human", "hg19": "human", "mm39": "mouse", "mm10": "mouse", "dm6": "fly", "sacCer3": "yeast",
+            "ce11": "worm", "danRer11": "zebrafish", "rn7": "rat"}
+
+
+def _species(genome_id) -> "str | None":
+    return _SPECIES.get(genome_id, genome_id) if genome_id else None
+
+
+def _genome_from_names(names) -> "str | None":
+    from services.motifs import genome_from_chroms
+    return genome_from_chroms(names)
+
+
+def _reference_genome(state, fasta, names) -> "str | None":
+    """The reference's genome: its registry id, else its contig lengths' assembly, else its contig names'."""
+    current = getattr(state, "current_genome", None)
+    if current in _SPECIES:
+        return current
+    try:
+        from services.assembly_fingerprint import Contig, fingerprint
+        fp = fingerprint([Contig(str(n), int(fasta.get_reference_length(n))) for n in fasta.references])
+        if fp.kind == "genome" and fp.assembly:
+            return fp.assembly
+    except Exception:
+        pass
+    return _genome_from_names(names)
+
+
+def annotation_needed(state, genome_id: str, info: dict) -> bool:
+    """A loaded registry genome lacks its annotation: none is loaded, it waits for a download confirmation, or the
+    one loaded is another registry genome's or does not fit the reference's contigs. The user's own annotation that
+    fits is kept."""
+    if not info.get("gtf_url"):
+        return False
+    if getattr(state, "gtf_data", None) is None or pending_annotation(state) == genome_id:
+        return True
+    of = registry_annotation_of(state)
+    if of is not None:
+        return of != genome_id
+    return annotation_fits(state) is False
+
+
+@publishes_reference
+def load_genome_annotation_blocking(state, genome_id: str, info: dict) -> dict:
+    """The registry genome's default annotation in place of the loaded one ("Reset to dm6 genes"): from the cache,
+    else downloaded (with the download policy of a genome load). The FASTA is left alone. A reference of another
+    assembly is refused: its genes would not be on its contigs."""
+    result = {"success": False, "genome_id": genome_id, "name": info.get("name", genome_id)}
+    if not info.get("gtf_url"):
+        result["gtf_error"] = f"{genome_id} has no annotation to load"
+        return result
+    from services.genome_check import loaded_reference
+    reference = loaded_reference(state)
+    if reference["kind"] == "fasta" and reference["assembly"] and reference["assembly"] != genome_id:
+        result["gtf_error"] = f"The loaded reference is {reference['assembly']}, not {genome_id}: switch the genome instead"
+        return result
+    _load_registry_annotation(state, genome_id, info, result)
+    if result.get("gtf_loaded") and getattr(state, "fasta", None) is None and getattr(state, "current_genome", None) is None:
+        # Annotation only (no reference yet): the genome it is.
+        state.current_genome = genome_id
+    result["success"] = bool(result.get("gtf_loaded"))
+    return result
+
+
+def _load_registry_annotation(state, genome_id: str, info: dict, result: dict) -> None:
+    """The registry annotation (cached, else downloaded) into ``state``; outcome in ``result`` (gtf_loaded,
+    gene_count, gtf_error, needs_confirmation). Callers hold the reference lock."""
+    gtf_url = info.get("gtf_url")
+    if not gtf_url:
+        return
+    try:
+        cache_dir = os.path.join(os.path.expanduser("~"), ".fiberhmm", "genomes")
+        os.makedirs(cache_dir, exist_ok=True)
+        gtf_cache_path = os.path.join(cache_dir, f"{genome_id}.gtf")
+
+        from services.download_locks import holding
+
+        with holding(os.path.abspath(gtf_cache_path)):
+            _download_gtf(gtf_url, gtf_cache_path)
+
+        from services.gene_annotations import load_gtf
+
+        state.gtf_data = load_gtf(gtf_cache_path)
+        state.gtf_path = gtf_cache_path
+        gene_count = len(state.gtf_data.get("transcripts", [])) if state.gtf_data else 0
+        print(f"  GTF loaded: {gene_count} transcripts")
+        result["gtf_loaded"] = True
+        result["gene_count"] = gene_count
+        result.pop("gtf_error", None)
+        set_pending_annotation(state, None)
+    except Exception as exc:
+        from services.http_download import LargeDownload, confirmation_needed
+        if isinstance(exc, LargeDownload):
+            # The annotation is over the download warning size and was not confirmed: the sequence is loaded,
+            # the annotation waits. The caller asks the user; the confirmed retry is not "already loaded"
+            # (genome_already_loaded checks pending_annotation) and downloads it.
+            print(f"  GTF needs confirmation: {exc}")
+            result.update(needs_confirmation=True, download=dict(confirmation_needed() or {
+                "kind": "confirm", "url": exc.url, "bytes": exc.total, "threshold": exc.threshold}))
+            result["gtf_loaded"] = False
+            set_pending_annotation(state, genome_id)
+        else:
+            print(f"  ERROR loading GTF: {exc}")
+            result["gtf_error"] = str(exc)
+            result["gtf_loaded"] = False
 
 
 def _load_genome_unlocked(state, genome_id: str, info: dict) -> dict:
@@ -219,30 +487,16 @@ def _load_genome_unlocked(state, genome_id: str, info: dict) -> dict:
         result["fasta_error"] = str(exc)
         result["fasta_loaded"] = False
 
-    gtf_url = info.get("gtf_url")
-    if gtf_url:
-        try:
-            cache_dir = os.path.join(os.path.expanduser("~"), ".fiberhmm", "genomes")
-            os.makedirs(cache_dir, exist_ok=True)
-            gtf_cache_path = os.path.join(cache_dir, f"{genome_id}.gtf")
+    # The FASTA is over the download warning size and was not confirmed (services/http_download.py): nothing was
+    # downloaded and nothing changes (no annotation without its sequence); the caller asks the user first.
+    from services.http_download import confirmation_needed
+    pending = confirmation_needed()
+    if pending is not None and not result.get("fasta_loaded"):
+        result.update(needs_confirmation=True, download=dict(pending))
+        result.pop("fasta_error", None)
+        return result
 
-            from services.download_locks import holding
-
-            with holding(os.path.abspath(gtf_cache_path)):
-                _download_gtf(gtf_url, gtf_cache_path)
-
-            from services.gene_annotations import load_gtf
-
-            state.gtf_data = load_gtf(gtf_cache_path)
-            state.gtf_path = gtf_cache_path
-            gene_count = len(state.gtf_data.get("transcripts", [])) if state.gtf_data else 0
-            print(f"  GTF loaded: {gene_count} transcripts")
-            result["gtf_loaded"] = True
-            result["gene_count"] = gene_count
-        except Exception as exc:
-            print(f"  ERROR loading GTF: {exc}")
-            result["gtf_error"] = str(exc)
-            result["gtf_loaded"] = False
+    _load_registry_annotation(state, genome_id, info, result)
 
     result["success"] = result.get("gtf_loaded", False) or result.get("fasta_loaded", False)
     if result["success"]:

@@ -44,7 +44,7 @@ READONLY_MESSAGE = "That folder is read-only on this server; choose a folder in 
 # Keys whose string values are file or folder paths.
 _PATH_KEY = re.compile(
     r"(^|_)(path|paths|file|files|filename|filepath|dir|dirs|directory|folder|bam|bams|bigbed|bigwig|fasta|fa|gtf|"
-    r"gff|bed|cool|mcool|reads|reference|genbank|bundle|bundle_path|bundle_paths|session_path|catalog)$",
+    r"gff|bed|cool|mcool|reads|reference|genbank|bundle|bundle_path|bundle_paths|session_path|catalog|package|near|manifest)$",
     re.IGNORECASE)
 # Keys that name a place to write.
 _WRITE_KEY = re.compile(r"(^|_)(output|outdir|out_dir|output_dir|output_root|output_path|save_path|dest|destination|"
@@ -629,12 +629,17 @@ def _walk(value: Any, key: str, out: list, depth: int = 0) -> None:
                 raise _ScanLimit()
 
 
+# A sequence search's hits track (services/sequence_search.add_hits_track): a virtual reference to an in-memory
+# job, never opened as a file. Only the exact form passes the scan; anything else with that prefix is a path.
+_SEQSEARCH_REF = re.compile(r"seqsearch://[0-9a-f]{16}")
+
+
 def violations(pairs: Iterable[tuple[str, str]]) -> Optional[str]:
     """The first refusal message for (key, value) pairs, or None."""
     seen: set = set()
     for key, value in pairs:
         value = value.strip()
-        if not value:
+        if not value or _SEQSEARCH_REF.fullmatch(value):
             continue
         write = bool(_WRITE_KEY.search(key))
         path_key = write or bool(_PATH_KEY.search(key))

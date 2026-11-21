@@ -1,8 +1,12 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useBrowserStore } from '../../../../stores/browserStore';
 import { SidebarSubSection } from '../../SidebarSubSection';
 import { formatOpenErrors, openLocalPaths } from '../../../../utils/openFiles';
 import { defineSettings, inSidebar, settingAnchor } from '../../../../utils/settingsCatalog';
+import { SidebarSettingToggle } from '../shared/SidebarSetting';
+import { useGraphStatusStore } from '../../../../features/graphPanel/statusStore';
+import { useGraphSettings } from '../../../../features/graphPanel/handoff';
+import { nativeGraphOffered } from '../../../../features/graphPanel/openAsGraph';
 
 export const LOAD_PATH_SETTINGS = defineSettings({
   path: {
@@ -11,6 +15,14 @@ export const LOAD_PATH_SETTINGS = defineSettings({
     keywords: ['server path', 'open file', 'paste path', 'bam', 'bigbed', 'fasta'],
     location: inSidebar('file.loadpath'),
     hiddenReason: () => (useBrowserStore.getState().publicMode ? 'not on a public server' : null),
+  },
+  graph: {
+    id: 'file.load-by-path-graph',
+    label: 'Open in graph mode',
+    keywords: ['graph mode', 'pangenome', 'graph package', 'view as graph', 'open as graph'],
+    location: inSidebar('file.loadpath'),
+    hiddenReason: () => (useBrowserStore.getState().publicMode ? 'not on a public server'
+      : nativeGraphOffered() ? null : 'no registered graph package on this genome'),
   },
 });
 
@@ -22,6 +34,14 @@ export function LoadLocalFileSettings({ setError }: LoadLocalFileSettingsProps) 
   const [pathInput, setPathInput] = useState('');
   const [pathLoading, setPathLoading] = useState(false);
   const publicMode = useBrowserStore(s => s.publicMode);
+  // "Open in graph mode" (D3: off unless the Graph mode setting says otherwise), offered while a registered graph
+  // package's target is on this genome.
+  const nativeDefault = useGraphSettings(s => s.nativeOpenView === 'graph');
+  const [asGraph, setAsGraph] = useState<boolean | null>(null);
+  useGraphStatusStore(s => s.status);
+  useBrowserStore(s => s.currentGenome);
+  useEffect(() => { if (!publicMode) void useGraphStatusStore.getState().load(); }, [publicMode]);
+  const graphOffered = !publicMode && nativeGraphOffered();
 
   if (publicMode) {
     return null;
@@ -35,7 +55,7 @@ export function LoadLocalFileSettings({ setError }: LoadLocalFileSettingsProps) 
     setError('');
     try {
       // The same route as Load File and drag-and-drop (utils/openFiles).
-      const report = await openLocalPaths(paths);
+      const report = await openLocalPaths(paths, graphOffered ? { openAsGraph: asGraph ?? nativeDefault } : {});
       if (report.opened.length > 0) {
         useBrowserStore.getState().triggerRefresh();
         if (report.errors.length === 0) setPathInput('');
@@ -81,6 +101,16 @@ export function LoadLocalFileSettings({ setError }: LoadLocalFileSettingsProps) 
           {pathLoading ? '...' : 'Load'}
         </button>
       </div>
+      {graphOffered && (
+        <div className="mt-1" data-testid="load-by-path-graph">
+          <SidebarSettingToggle
+            setting={LOAD_PATH_SETTINGS.graph}
+            checked={asGraph ?? nativeDefault}
+            onChange={setAsGraph}
+            helpText="A BAM on this genome opens as a graph host when a registered graph package binds its contig (its reads on the reference path). Otherwise it opens linear. You can switch any time with the panel's Linear / Graph toggle."
+          />
+        </div>
+      )}
     </SidebarSubSection>
   );
 }

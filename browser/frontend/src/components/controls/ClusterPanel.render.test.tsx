@@ -73,6 +73,23 @@ describe('ClusterPanel toolbar groups', () => {
     await act(async () => { byId(id)!.dispatchEvent(new MouseEvent('pointerover', { bubbles: true, relatedTarget: document.body })); });
   };
 
+  it('says beside Scan when an automatic scan was stopped by its time budget (not while a scan runs)', async () => {
+    const note = 'Scan stopped after 60 s — press Scan to retry';
+    await act(async () => {
+      root.render(<ClusterPanel onCluster={vi.fn()} onSort={vi.fn()} onFilter={vi.fn()} onClearFilter={vi.fn()} onScanPeaks={vi.fn()} scanning={false} scanNote={note} />);
+    });
+    expect(byId('peak-scan-stopped')?.textContent).toBe(note);
+    // Beside Scan, on screen with the group folded (not in its hidden summary card).
+    expect(byId('peak-scan-stopped')!.closest('[data-toolbar-peek]')).toBeNull();
+    expect(byId('toolbar-group-peaks')?.getAttribute('data-open')).toBe('false');
+    await act(async () => {
+      root.render(<ClusterPanel onCluster={vi.fn()} onSort={vi.fn()} onFilter={vi.fn()} onClearFilter={vi.fn()} onScanPeaks={vi.fn()} scanning scanNote={note} />);
+    });
+    expect(byId('peak-scan-stopped')).toBeNull();
+    await renderPanel();
+    expect(byId('peak-scan-stopped')).toBeNull();
+  });
+
   it('lets the user choose a preview with full refinement or a full run only', async () => {
     await renderPanel();
     await click('toolbar-group-toggle-cluster');
@@ -157,6 +174,15 @@ describe('ClusterPanel toolbar groups', () => {
     expect(container.querySelector('[data-testid="toolbar-group-sort"] select')).toBeNull();
     // Layers starts open (its checkboxes in the row) until the user folds it.
     expect(byId('toolbar-group-toggle-layers')!.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('enables Cluster with no peaks and states whole view in the button tooltip', async () => {
+    useBrowserStore.setState({ selectedPeaks: new Set(), selectedFeatures: [],
+      panels: [{ id: 'p1', datasetId: 'ds1', contentType: 'dataset', subTracks: [], collapsed: false }] } as never);
+    await renderPanel();
+    const button = container.querySelector<HTMLButtonElement>('[data-testid="cluster-run-button"]')!;
+    expect(button.disabled).toBe(false);
+    expect(button.title).toContain('whole view (no peaks selected)');
   });
 
   // Audit M2: "Cluster [Cluster]", "Sort [Sort]": a group's name showed beside its own button.
@@ -362,6 +388,29 @@ describe('ClusterPanel toolbar groups', () => {
     expect(params.get('panel_genome')).toBe(genome);
     expect(JSON.parse(String(init.body)).peak_regions).toEqual([{ start: peak.start, end: peak.end, mode: 'nuc' }]);
     expect(useBrowserStore.getState().clusterAssignments.ds1).toEqual({ r1: 0, r2: 0 });
+  });
+
+  it('the toolbar merge is one undo step, also when it clears a focus (stabilize 3, item 2)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      results: { ds1: { assignments: { r1: 0, r2: 0 }, cluster_counts: { 0: 2 } } },
+      dissolved: [{ cluster: 1, count: 1, reason: 'small' }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+    useBrowserStore.setState({
+      clusterAssignments: { ds1: { r1: 0, r2: 1 } },
+      clusterOrder: { ds1: [0, 1] },
+      clusterFocus: { ds1: new Set([1]) },
+      clusterPeakRegions: [{ start: 150, end: 180, mode: 'nuc' }],
+      _historyStack: [], _historyPointer: -1, _lastRestoreTime: 0,
+    } as any);
+    useBrowserStore.getState().pushSnapshot('Cluster reads', { kind: 'clustering' });
+    await renderPanel();
+    await click('toolbar-group-toggle-cluster');
+    await click('cluster-auto-cull-button');
+    const s = useBrowserStore.getState();
+    expect(s._historyStack.map(x => x.label)).toEqual(['Cluster reads', 'Merge 1 cluster']);
+    s.undo();
+    expect(useBrowserStore.getState().clusterAssignments.ds1).toEqual({ r1: 0, r2: 1 });
+    expect([...(useBrowserStore.getState().clusterFocus.ds1 ?? [])]).toEqual([1]);
   });
 
   it('a merge answering after Clear clusters does not bring the old clusters back', async () => {

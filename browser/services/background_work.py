@@ -316,7 +316,9 @@ def _run(flight: _Flight, key, fn: Callable, args, kwargs, cache: Optional[Resul
         flight.future.set_result(result)
     finally:
         with _flights_lock:
-            if _flights.get(key) is flight:
+            # A finished job a hold still keeps (started before any client asked: start_held) stays joinable
+            # until its holds are released, so the request it was started for gets this result.
+            if _flights.get(key) is flight and not _holds.get(key):
                 del _flights[key]
 
 
@@ -326,7 +328,8 @@ def yield_to_foreground():
         checkpoint()
         yield_to_reads()
         with _flights_lock:
-            busy = bool(_flights)
+            # finished jobs kept joinable for their holds (start_held) are not work in progress
+            busy = any(not f.future.done() for f in _flights.values())
         if not busy and not reads_in_flight():
             return
         time.sleep(0.05)
@@ -337,7 +340,9 @@ def in_flight(key) -> bool:
         return key in _flights
 
 
-def _join(key, fn, args, kwargs, cache, wait_for_reads) -> _Flight:
+def _join(key, fn, args, kwargs, cache, wait_for_reads, hold: bool = False):
+    """The flight of ``key`` (joined, or started). ``hold``: also register a Hold for it under the same lock
+    (returns (flight, hold)), so a job that finishes at once is still held."""
     with _flights_lock:
         flight = _flights.get(key)
         if flight is None or flight.cancel.is_set():
@@ -351,6 +356,10 @@ def _join(key, fn, args, kwargs, cache, wait_for_reads) -> _Flight:
         else:
             stats["shared"] += 1
         flight.waiters += 1
+        if hold:
+            h = Hold(key, flight)
+            _holds.setdefault(key, []).append(h)
+            return flight, h
     return flight
 
 
@@ -371,24 +380,128 @@ async def _client_gone(request) -> None:
         await asyncio.Event().wait()
 
 
+def _job_key(key):
+    """A job's identity with the request's read rules: the signal filters and Min footprints' "All reads,
+    including uncalled" (hide_uncalled=false) never share a job with the default."""
+    from services.signal_evidence import read_policy_key, request_hide_uncalled, signal_filter_key
+    filters = signal_filter_key()
+    key = (key, "signal", filters) if any(filters) else key
+    key = key if request_hide_uncalled() else (key, "uncalled", "shown")
+    # The duplicate / QC-fail toggles (query parameters on the dense, DAF-C, autozoom and lift paths).
+    policy = read_policy_key()
+    return (key, "policy", policy) if policy else key
+
+
+class Hold:
+    """A started job's placeholder waiter: it keeps the job running until a client
+    joins it with ``run_background`` (which takes the hold over) or it is released."""
+
+    __slots__ = ("key", "flight", "released")
+
+    def __init__(self, key, flight: _Flight):
+        self.key, self.flight, self.released = key, flight, False
+
+    def release(self) -> None:
+        with _flights_lock:
+            if self.released:
+                return
+            self.released = True
+            holds = _holds.get(self.key)
+            if holds and self in holds:
+                holds.remove(self)
+                if not holds:
+                    del _holds[self.key]
+            if (self.flight.future.done() and not _holds.get(self.key)
+                    and _flights.get(self.key) is self.flight):
+                del _flights[self.key]     # a finished job kept for its holds: nobody is coming any more
+        _leave(self.key, self.flight)
+
+
+_holds: dict = {}
+
+
+def start_held(key: Hashable, fn: Callable, *args, wait_for_reads: bool = True, **kwargs) -> Hold:
+    """Start ``fn(*args, **kwargs)`` on the background pool before any client asks for it
+    (a view's full set while its first paint is decoded). The returned hold keeps it
+    going; a ``run_background`` call with the same ``key`` joins it and releases the hold.
+    Release it when no client will come (the request that started it was cancelled, or
+    a short grace after it answered): with no waiter left the job is cancelled."""
+    key = _job_key(key)
+    _flight, hold = _join(key, fn, args, kwargs, None, wait_for_reads, hold=True)
+    return hold
+
+
+class HoldGroup:
+    """The holds a request starts (``start_held``) while its workers run. Once the request is done with them
+    (``close``), a worker still running after the request left (a cancelled request does not wait for its threads)
+    starts no new held job: it would never be released, and its finished flight would stay registered."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._holds: list = []
+        self._closed = False
+
+    def add(self, start: Callable[[], "Hold"]) -> Optional["Hold"]:
+        """``start()`` (a ``start_held`` call) unless the group is closed; None when closed."""
+        with self._lock:
+            if self._closed:
+                return None
+            hold = start()
+            self._holds.append(hold)
+            return hold
+
+    def close(self) -> list:
+        """No more holds; returns the ones started (the caller releases them, now or after a grace)."""
+        with self._lock:
+            self._closed = True
+            out, self._holds = self._holds, []
+        return out
+
+    def release(self) -> None:
+        for hold in self.close():
+            hold.release()
+
+
+def _linger(key, flight: _Flight, seconds: float) -> None:
+    """Keep ``flight`` alive ``seconds`` more with a hold (a later run_background takes it over)."""
+    with _flights_lock:
+        if flight.future.done() or flight.cancel.is_set():
+            return
+        flight.waiters += 1
+        hold = Hold(key, flight)
+        _holds.setdefault(key, []).append(hold)
+    timer = threading.Timer(seconds, hold.release)
+    timer.daemon = True
+    timer.start()
+
+
+def _adopt_holds(key) -> None:
+    with _flights_lock:
+        holds = list(_holds.get(key) or ())
+    for hold in holds:
+        hold.release()
+
+
 async def run_background(request, key: Hashable, fn: Callable, *args,
-                         cache: Optional[ResultCache] = None, wait_for_reads: bool = True, **kwargs):
+                         cache: Optional[ResultCache] = None, wait_for_reads: bool = True,
+                         linger_s: float = 0.0, **kwargs):
     """``fn(*args, **kwargs)`` on the background pool, shared by identical ``key`` s.
 
     Returns its result, or raises ``Cancelled`` when this client went away
     (``request``: the route's Request; None never watches). With ``cache``,
-    a finished result is reused for the same key.
+    a finished result is reused for the same key. A job started with
+    ``start_held`` is joined, and its hold released. ``linger_s``: when this
+    client goes, the job keeps running that long for a client asking again
+    (a panel that re-renders and re-asks at once).
     """
-    from services.signal_evidence import signal_filter_key
-    filters = signal_filter_key()
-    if any(filters):
-        key = (key, "signal", filters)
+    key = _job_key(key)
     if cache is not None:
         hit = cache.get(key)
         if hit is not _MISS:
             stats["cached"] += 1
             return hit
     flight = _join(key, fn, args, kwargs, cache, wait_for_reads)
+    _adopt_holds(key)
     work = asyncio.wrap_future(flight.future)
     watcher = asyncio.ensure_future(_client_gone(request)) if request is not None else None
     try:
@@ -401,6 +514,8 @@ async def run_background(request, key: Hashable, fn: Callable, *args,
     finally:
         if watcher is not None:
             watcher.cancel()
+        if linger_s > 0 and not work.done():
+            _linger(key, flight, linger_s)
         _leave(key, flight)
         if not work.done():
             # Nobody awaits it here any more; keep its exception from being reported as unretrieved.
@@ -433,5 +548,8 @@ def dataset_identity(state, dataset_ids) -> tuple:
     for dataset_id in dataset_ids or ():
         dataset = state.get_dataset(dataset_id) if hasattr(state, "get_dataset") else None
         paths = list(getattr(dataset, "paths", None) or ([getattr(dataset, "path", None)] if getattr(dataset, "path", None) else []))
-        out.append((str(dataset_id), dataset_generation(state, dataset_id), file_identity(paths)))
+        from services.lift.reads import lift_identity
+        out.append((str(dataset_id), dataset_generation(state, dataset_id), file_identity(paths),
+                    *lift_identity(dataset), tuple(tuple(p) for p in getattr(dataset, "molecule_groups", [])),
+                    getattr(dataset, "joint_dedup", "off")))
     return tuple(out)

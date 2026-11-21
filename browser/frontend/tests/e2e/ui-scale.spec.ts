@@ -70,7 +70,7 @@ test('figure scaling preserves available space, axis hit coordinates and buttons
     },win);
     const reads=page.locator('canvas[data-copilot-track="reads"]').first();
     await expect(reads).toBeVisible();
-    // Ctrl-wheel ignores an empty read track, so wait until this window's reads are drawn.
+    // Wait until this window's reads are drawn before sizing rows with Shift-wheel.
     // (waitForLoadState('networkidle') resolves at once after the first page load, and a
     // lab BAM takes ~2 s to return this window.)
     await page.waitForTimeout(500);
@@ -85,11 +85,11 @@ test('figure scaling preserves available space, axis hit coordinates and buttons
     // even though elementFromPoint reports the reads canvas.
     const readsY=(b:{y:number;height:number})=>Math.min(b.y+b.height/2,3200-10);
     await page.mouse.move(rb.x+rb.width*.5,readsY(rb));
-    await page.keyboard.down('Control');
+    await page.keyboard.down('Shift');
     await page.mouse.wheel(0,-100);
     await page.waitForTimeout(200);
-    await page.keyboard.up('Control');
-    await expect.poll(()=>page.evaluate(()=>window.__FIBERBROWSER_STORE__!.getState().readRowHeight),{message:`Ctrl-wheel enlarges read rows at UI scale ${scale}`}).toBeGreaterThan(5);
+    await page.keyboard.up('Shift');
+    await expect.poll(()=>page.evaluate(()=>window.__FIBERBROWSER_STORE__!.getState().readRowHeight),{message:`Shift-wheel enlarges read rows at UI scale ${scale}`}).toBeGreaterThan(5);
     await reads.evaluate(el=>el.scrollIntoView({block:'start'}));
     await page.waitForTimeout(250);
     rb=(await reads.boundingBox())!;

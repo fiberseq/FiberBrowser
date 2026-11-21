@@ -50,7 +50,8 @@ export function PairDetail({ split, byId, mode, onGroup, onClear, onReapply, onC
   const toggleFocus = (id: number) => {
     const store = useBrowserStore.getState();
     const on = focus?.size === 1 && focus.has(id);
-    for (const key of focusKeys) store.setClusterFocus(key, on ? null : new Set([id]));
+    // One undo step for every panel it focuses (stabilize 3, item 2).
+    store.focusClustersIn(focusKeys, on ? null : new Set([id]));
   };
   const pair = split.pair ?? null;
   const verdict = pair ? VERDICT[pair.class] : null;

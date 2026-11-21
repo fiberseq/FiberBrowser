@@ -88,6 +88,8 @@ export interface PipelineOptions {
   prob_threshold: number | null;
   use_m5c: TriState;
   cpg_mask_policy: 'unmethylated-only' | 'methylated-only';
+  /** Minimum MAPQ, always passed to a new run as --min-mapq (owner, 20 Nov 2026): 0 unless changed. */
+  min_mapq: number;
 }
 
 export interface PipelineStatus {
@@ -121,6 +123,8 @@ export interface RunRequest {
   cores: number;
   options: PipelineOptions;
   auto_open: boolean;
+  /** The page that starts the run (utils/pipelineResults pageOpenerId): only it opens the result automatically. */
+  opener?: string;
   input_kind: InputKind;
   /** POD5 runs only. */
   basecall?: BasecallSettings;
@@ -219,6 +223,11 @@ export interface PipelineJob {
   group: string | null;
   command: string | null;
   auto_open: boolean;
+  /** The page that started it, when it asked to open the result (only that page opens it automatically). */
+  opener?: string | null;
+  /** When its result was first opened in a browser (server-side: holds for every profile, origin and restart). */
+  opened_at?: number | null;
+  opened_by?: 'auto' | 'user' | null;
   /** Who started it (lab servers, where every member sees every run). */
   user?: string | null;
   input_kind?: InputKind;
@@ -298,17 +307,40 @@ export function getPipelineStatus(refresh = false): Promise<PipelineStatus> {
 export interface GenomeDownload {
   genome_id: string;
   name?: string;
-  state: 'idle' | 'running' | 'done' | 'error' | 'cancelled';
+  /** confirm: over the download warning size and not confirmed (nothing downloaded; start it with confirmLarge). */
+  state: 'idle' | 'running' | 'done' | 'error' | 'cancelled' | 'confirm';
   url?: string | null;
   bytes?: number;
   total?: number;
   error?: string | null;
   errors?: { url: string; error: string }[];
   fasta?: string | null;
+  /** While running: downloading, then decompressing / indexing (no byte progress there). */
+  stage?: 'downloading' | 'decompressing' | 'indexing';
+  /** A cancel was asked and the download has not stopped yet. */
+  cancelling?: boolean;
+  /** The download warning size, with state confirm (total is then the download's size). */
+  threshold?: number;
+  /** A large download that went ahead (confirmed, or of unknown size past the warning size). */
+  warning?: string | null;
 }
 
-export function startGenomeDownload(genomeId: string): Promise<GenomeDownload> {
-  return fetchJson(`/api/pipeline/genome_download?genome_id=${encodeURIComponent(genomeId)}`, { method: 'POST' });
+/** What a catalog genome's download will be, before it starts (bytes null: the server did not say). */
+export interface GenomeDownloadSize {
+  genome_id: string;
+  url: string | null;
+  bytes: number | null;
+  threshold: number;
+  over: boolean;
+}
+
+export function getGenomeDownloadSize(genomeId: string): Promise<GenomeDownloadSize> {
+  return fetchJson(`/api/pipeline/genome_download/size?genome_id=${encodeURIComponent(genomeId)}`);
+}
+
+export function startGenomeDownload(genomeId: string, confirmLarge = false): Promise<GenomeDownload> {
+  const confirm = confirmLarge ? '&confirm_large=true' : '';
+  return fetchJson(`/api/pipeline/genome_download?genome_id=${encodeURIComponent(genomeId)}${confirm}`, { method: 'POST' });
 }
 
 export function getGenomeDownload(genomeId: string, options?: RequestInit): Promise<GenomeDownload> {
@@ -342,6 +374,14 @@ export function getJob(id: string): Promise<PipelineJob> {
 export async function getJobLog(id: string): Promise<string> {
   const res = await fetchApiResponse(`/api/pipeline/jobs/${encodeURIComponent(id)}/log`);
   return res.ok ? res.text() : `Could not read the log (${res.status}).`;
+}
+
+export interface OpenedClaim { claimed: boolean; opened_at: number | null; reason: string | null }
+
+/** Record that a run's result was opened. ``auto``: the automatic opening claims it (granted once, and only to
+ * the page that started the run); otherwise "Open in browser", which keeps it from opening automatically. */
+export function markJobOpened(id: string, body: { auto?: boolean; opener?: string } = {}): Promise<OpenedClaim> {
+  return fetchJson(`/api/pipeline/jobs/${encodeURIComponent(id)}/opened`, { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(body) });
 }
 
 export function cancelJob(id: string): Promise<PipelineJob> {

@@ -1,9 +1,34 @@
+import { useEffect, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
+import { isBamBacked } from '../../../utils/datasetKinds';
 import { useBrowserStore } from '../../../stores/browserStore';
 import { useConsensusViewStore } from '../../../stores/consensusViewStore';
-import { fireLayerTitle, getCanonicalLayerEntries, getLayerColor, getLayerLabel, getLayerTitle, getNucDisplayLabel, getNucDisplayTitle, isDerivedLayerName } from '../../../utils/layerColors';
+import { fireLayerTitle, getCanonicalLayerEntries, getLayerColor, getLayerColorOverride, getLayerLabel, getLayerTitle, getNucDisplayLabel, getNucDisplayTitle, isDerivedLayerName } from '../../../utils/layerColors';
 import { isStrandRescueLayer } from '../../../utils/strandRescue';
+import { NUC_GROUP_LAYERS, isNucScalarGroup } from '../../../utils/nucLayers';
 import { ChevronDown } from '../../ui/Icons';
+import { InsertionMarksControl } from '../../../features/differences/InsertionMarksControl';
+import { layerColorSource, resetLayerColor, setLayerColorOverride, useLayerColorVersion } from '../../../features/layerColours/state';
+
+/** The nucleosome scan layers, shown as one "Nucleosomes" group. */
+const NUC_GROUP_CONFIG: Record<string, { label: string; title: string }> = {
+  nucsz: {
+    label: 'Size classes',
+    title: 'Colour nucleosome calls by size class through colormap rules (Colormap: Add nucleosome size classes). Hover a call for its class, z and posterior.',
+  },
+  nucseg: {
+    label: 'Array segments',
+    title: 'A lane at the bottom of each read: regular (green), disordered (orange), undetermined (light grey), low information (dotted). Amber bars mark undersized footprint runs; triangles mark missing nucleosomes.',
+  },
+  nucpatch: {
+    label: 'Patches',
+    title: 'Regular patches on each read (regularity above the patch thresholds), coloured by the shared geometry they belong to; red: in no geometry. Set the thresholds and geometry settings in the Nucleosomes panel (Regularity → Patches and shared geometries).',
+  },
+  nucreg: {
+    label: 'Regularity',
+    title: 'A colour lane over each read: pale at the random-packing level of the dataset, deep blue at its most regular 5%. Set the window and signal in the Nucleosomes panel (Regularity).',
+  },
+};
 
 // MSP is an internal compatibility key for older BAM/BigBed outputs. The
 // user-facing control is always FIRE; aq filtering lives in Quality Filters.
@@ -24,7 +49,7 @@ function datasetHasLayer(dataset: any, type: string): boolean {
     return !!(dataset.available_layers?.fire || dataset.available_layers?.msp || dataset.layer_type === 'fire' || dataset.layer_type === 'msp');
   }
   if (dataset.available_layers) return !!dataset.available_layers[type];
-  if (dataset.data_type === 'bam') return type === 'footprint' || type === 'mod';
+  if (isBamBacked(dataset)) return type === 'footprint' || type === 'mod';
   return dataset.layer_type === type;
 }
 
@@ -40,6 +65,10 @@ interface LayerTogglesProps {
  *  auto-detected from dataset `available_layers`. Shared so the toolbar and
  *  any future surface render the same logic. */
 export function LayerToggles({ compact = false, wrap = true }: LayerTogglesProps) {
+  // Re-render when the user's layer colours change (Labels → Layer colours).
+  useLayerColorVersion();
+  // Right-click a layer's swatch or name: "Change colour…" (the same colour Labels → Layer colours sets).
+  const [colourMenu, setColourMenu] = useState<{ layerKey: string; label: string; x: number; y: number } | null>(null);
   const { enabledModTypes, toggleModType, datasets, modificationOverlays } = useBrowserStore(useShallow(s => ({
     enabledModTypes: s.enabledModTypes,
     toggleModType: s.toggleModType,
@@ -68,6 +97,8 @@ export function LayerToggles({ compact = false, wrap = true }: LayerTogglesProps
         && name !== 'msp'
         && name !== 'fire'
         && name !== 'deam_opportunity'
+        // Per-molecule scalar groups (nucmol, nfrmol) are values, not layers.
+        && !isNucScalarGroup(name)
         && !(name in MOD_TYPE_CONFIG)
       ) {
         customLayerSet.add(name);
@@ -93,7 +124,11 @@ export function LayerToggles({ compact = false, wrap = true }: LayerTogglesProps
     availableModTypes = availableModTypes.filter(t => t !== 'footprint');
   }
 
-  if (availableModTypes.length === 0 && !hasNativeLattice) return null;
+  // Nucleosome size classes and array segments render as one group.
+  const nucGroupTypes = NUC_GROUP_LAYERS.filter(type => availableModTypes.includes(type));
+  availableModTypes = availableModTypes.filter(type => !(NUC_GROUP_LAYERS as readonly string[]).includes(type));
+
+  if (availableModTypes.length === 0 && nucGroupTypes.length === 0 && !hasNativeLattice) return null;
 
   const textSize = compact ? 'text-[12px]' : 'text-[13px]';
   const gap = compact ? 'gap-2' : 'gap-3';
@@ -118,19 +153,24 @@ export function LayerToggles({ compact = false, wrap = true }: LayerTogglesProps
     const knownConfig = (MOD_TYPE_CONFIG as Record<string, { label: string; color: string; title: string }>)[modType];
     const isNucLayerEntry = modType === 'nuc' || (nucIsAlias && modType === 'nuc');
     const derivedMeta = datasets.find(d => d.derived_layers?.[modType])?.derived_layers?.[modType];
+    const nucGroupConfig = NUC_GROUP_CONFIG[modType];
     // The accessibility toggle is named for the loaded files: FIRE, Accessibility, or both.
     const label = isNucLayerEntry
       ? getNucDisplayLabel(datasets)
       : modType === 'fire' ? getLayerLabel('fire', datasets)
-      : (modType === 'tf_cr' ? 'Footprint classes' : modType === 'tf_rc' ? 'Footprint classes' : derivedMeta?.label ?? knownConfig?.label ?? getLayerLabel(modType));
+      : nucGroupConfig?.label
+        ?? (modType === 'tf_cr' ? 'Footprint classes' : modType === 'tf_rc' ? 'Footprint classes' : derivedMeta?.label ?? knownConfig?.label ?? getLayerLabel(modType));
     const title = isNucLayerEntry
       ? getNucDisplayTitle(datasets)
       : modType === 'fire' ? fireLayerTitle(datasets)
-      : (derivedMeta
+      : nucGroupConfig ? nucGroupConfig.title : (derivedMeta
         ? `Derived layer: ${derivedMeta.label ?? modType}${derivedMeta.source_layer ? ` (from ${getLayerLabel(derivedMeta.source_layer, datasets)})` : ''}`
         : (knownConfig?.title ?? getLayerTitle(modType)));
-    const colorStyle = knownConfig ? undefined : { color: derivedMeta?.color ?? getLayerColor(modType) };
-    const colorClass = knownConfig?.color ?? '';
+    // The user's layer colour (Labels → Layer colours) wins over a derived layer's own and the built-in colour.
+    const userColor = getLayerColorOverride(modType);
+    const swatchColor = userColor ?? derivedMeta?.color ?? getLayerColor(modType);
+    const colorStyle = knownConfig && !userColor ? undefined : { color: swatchColor };
+    const colorClass = userColor ? '' : (knownConfig?.color ?? '');
     const isAliasForFp = nucIsAlias && modType === 'nuc';
     const checked = modType === 'fire'
       ? !!(enabledModTypes.fire || enabledModTypes.msp)
@@ -141,6 +181,7 @@ export function LayerToggles({ compact = false, wrap = true }: LayerTogglesProps
         className={`flex items-center gap-1 ${textSize} cursor-pointer`}
         title={title}
         data-copilot-anchor={`layer-toggle-${modType}`}
+        onContextMenu={e => { e.preventDefault(); setColourMenu({ layerKey: modType, label, x: e.clientX, y: e.clientY }); }}
       >
         <input
           type="checkbox"
@@ -178,7 +219,7 @@ export function LayerToggles({ compact = false, wrap = true }: LayerTogglesProps
         <span
           aria-hidden="true"
           className="inline-block h-2.5 w-2.5 flex-shrink-0 rounded-sm"
-          style={{ backgroundColor: derivedMeta?.color ?? getLayerColor(modType) }}
+          style={{ backgroundColor: swatchColor }}
         />
         <span className={colorClass} style={colorStyle}>{label}</span>
       </label>
@@ -190,8 +231,30 @@ export function LayerToggles({ compact = false, wrap = true }: LayerTogglesProps
       className={`flex items-center ${gap} ${wrap ? 'flex-wrap' : 'flex-nowrap whitespace-nowrap'}`}
       data-testid="layer-toggle-group"
     >
+      {colourMenu && <LayerColourMenu {...colourMenu} onClose={() => setColourMenu(null)} />}
       {standardTypes.map(renderToggle)}
       {derivedTypes.filter(t => t === 'tf_rc' || t === 'tf_cr').map(renderToggle)}
+      {nucGroupTypes.length > 0 && (
+        <span
+          className="inline-flex items-center gap-2 rounded-md border border-green-300 bg-green-50/80 px-2 py-0.5 dark:border-green-800/70 dark:bg-green-950/25"
+          data-testid="nucleosome-layer-group"
+          title="Nucleosome scan outputs: size classes recolour the calls, array segments add a lane under each read."
+        >
+          <span className="text-[11px] font-semibold text-green-800 dark:text-green-300">
+            Nucleosomes
+          </span>
+          {nucGroupTypes.map(renderToggle)}
+          {nucGroupTypes.includes('nucreg') && enabledModTypes.nucreg && (
+            <label className="inline-flex items-center gap-1 text-[11px] text-green-800 dark:text-green-300"
+              title="Show the regularity lane over the whole read row instead of over the footprints">
+              <input type="checkbox" data-testid="nucreg-full-toggle" checked={!!(enabledModTypes as Record<string, boolean>).nucreg_full}
+                onChange={e => toggleModType('nucreg_full' as never, e.target.checked)} />
+              full row
+            </label>
+          )}
+        </span>
+      )}
+      <InsertionMarksControl compact={compact} />
       {(tfInferenceTypes.length > 0 || strandRescueTypes.length > 0 || derivedTypes.some(t => t !== 'tf_cr' && t !== 'tf_rc') || hasNativeLattice) && <details className="relative" data-testid="advanced-layers">
         <summary className={`${textSize} flex cursor-pointer list-none items-center gap-0.5 text-slate-500 dark:text-slate-400 [&::-webkit-details-marker]:hidden`}>
           Advanced layers
@@ -252,5 +315,46 @@ export function LayerToggles({ compact = false, wrap = true }: LayerTogglesProps
         </div>
       </details>}
     </div>
+  );
+}
+
+/** "Change colour…" for one layer (right-click on its toggle): a picker and Reset, the same colour as Labels → Layer colours. */
+function LayerColourMenu({ layerKey: layer, label, x, y, onClose }: { layerKey: string; label: string; x: number; y: number; onClose: () => void }) {
+  const source = useBrowserStore(s => layerColorSource(s, layer));
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  return (
+    <>
+      <div className="fixed inset-0 z-[199]" onMouseDown={onClose} onContextMenu={e => { e.preventDefault(); onClose(); }} />
+      <div
+        role="dialog"
+        aria-label={`${label} colour`}
+        data-testid="layer-colour-menu"
+        className="fixed z-[200] flex items-center gap-2 rounded-fb border border-line bg-white px-2 py-1.5 text-xs shadow-dropdown dark:border-white/10 dark:bg-dark-surface"
+        style={{ left: Math.min(x, window.innerWidth - 240), top: Math.min(y + 4, window.innerHeight - 48) }}
+      >
+        <span className="text-gray-600 dark:text-gray-300">Change colour…</span>
+        <input
+          type="color"
+          aria-label={`${label} colour`}
+          data-testid="layer-colour-menu-input"
+          value={getLayerColor(layer)}
+          className="h-5 w-7 cursor-pointer rounded border border-gray-300 bg-transparent p-0 dark:border-white/20"
+          onChange={e => setLayerColorOverride(layer, e.target.value)}
+        />
+        <button
+          type="button"
+          className="rounded px-1.5 py-0.5 text-gray-600 hover:bg-gray-100 disabled:opacity-40 dark:text-gray-300 dark:hover:bg-white/10"
+          disabled={source !== 'session'}
+          data-testid="layer-colour-menu-reset"
+          onClick={() => resetLayerColor(layer)}
+        >
+          Reset
+        </button>
+      </div>
+    </>
   );
 }

@@ -37,11 +37,20 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libcurl4-openssl-dev minimap2
+      - name: bedToBigBed
+        # UCSC's static binary: the real BigBed dataset and export tests (test_fire_formats and friends) skip without
+        # it. Fails the job if the download fails, rather than letting those tests skip.
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -fsSL -o "$RUNNER_TEMP/bin/bedToBigBed" https://hgdownload.soe.ucsc.edu/admin/exe/linux.x86_64/bedToBigBed
+          chmod +x "$RUNNER_TEMP/bin/bedToBigBed"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/bin/bedToBigBed" 2>&1 | head -1 || true
       - name: Install FiberHMM
         # The published FiberHMM 3 release from PyPI, as requirements.txt pins it.
         run: |
           python -m pip install --upgrade pip
-          pip install "fiberhmm[consensus]==3.0.4"
+          pip install "fiberhmm[consensus]>=3.2.0,<4"
       - name: Install FiberBrowser and test tools
         run: |
           grep -v -i '^fiberhmm' requirements.txt > "$RUNNER_TEMP/requirements-ci.txt"
@@ -54,6 +63,47 @@ jobs:
           python -c "import pyBigWig; assert pyBigWig.remote and pyBigWig.numpy, (pyBigWig.remote, pyBigWig.numpy)"
       - name: pytest
         run: python -m pytest tests -m "not integration" -q -p no:cacheprovider
+
+  pair-fiberhmm:
+    # FiberBrowser against the FiberHMM it ships with (coverage plan #3), not the PyPI release the backend job uses:
+    # FiberHMM installed from a pinned commit, then the cross-repo contract tests (recall settings, the real
+    # fiberhmm-call recall, the real pipeline's basecall flags, scan/nucleosome parity, the shared consensus engine).
+    # Bump FIBERHMM_PAIR_REF to the FiberHMM commit each FiberBrowser release is paired with; it must be a commit
+    # reachable on FIBERHMM_PAIR_REPO.
+    name: contract tests against pinned FiberHMM
+    runs-on: ubuntu-latest
+    env:
+      FIBERHMM_PAIR_REPO: https://github.com/fiberseq/FiberHMM
+      FIBERHMM_PAIR_REF: 00e511c7488b0e737fbc4bc1dcc4b1926a0b0e51
+      FIBERHMM_NO_UPDATE_CHECK: "1"
+      FIBERBROWSER_NO_OPEN: "1"
+      OPENBLAS_NUM_THREADS: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: System libraries and tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libcurl4-openssl-dev minimap2 samtools
+      - name: Install FiberHMM at the pinned commit
+        run: |
+          python -m pip install --upgrade pip
+          pip install "fiberhmm[consensus] @ git+${FIBERHMM_PAIR_REPO}@${FIBERHMM_PAIR_REF}"
+          python -c "import fiberhmm, sys; print('FiberHMM', fiberhmm.__version__, fiberhmm.__file__)"
+      - name: Install FiberBrowser and test tools
+        run: |
+          grep -v -i '^fiberhmm' requirements.txt > "$RUNNER_TEMP/requirements-ci.txt"
+          pip install -r "$RUNNER_TEMP/requirements-ci.txt" -r requirements-dev.txt
+      - name: Contract tests
+        # No -m filter: test_recall_header is marked slow and must run here. -rs lists every skip.
+        run: |
+          python -m pytest -q -rs -p no:cacheprovider \
+            tests/test_library_jobs.py tests/test_recall_header.py tests/test_scan_parity.py \
+            tests/test_nuc_equivalence.py tests/test_consensus_shared_engine.py
+          python -m pytest -q -rs -p no:cacheprovider tests/test_pipeline_pod5.py -k real
 
   frontend:
     runs-on: ubuntu-latest
@@ -76,17 +126,46 @@ jobs:
         run: |
           npx vite build --outDir /tmp/dist --emptyOutDir
           diff -r /tmp/dist dist
+      # Figure export in real Chromium, on every push (coverage plan #9): the backend job renders through a fake
+      # worker, so only these tests catch a blank or failed PDF/PNG export. They need Python, the server's
+      # requirements, Chromium and the committed dist/ checked above.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install FiberHMM and FiberBrowser for the render tests
+        working-directory: .
+        env:
+          FIBERHMM_NO_UPDATE_CHECK: "1"
+        run: |
+          python -m pip install --upgrade pip
+          pip install "fiberhmm[consensus]>=3.2.0,<4"
+          grep -v -i '^fiberhmm' requirements.txt > "$RUNNER_TEMP/requirements-ci.txt"
+          pip install -r "$RUNNER_TEMP/requirements-ci.txt" -r requirements-dev.txt
+      - name: Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Headless-render tests (Chromium)
+        working-directory: .
+        env:
+          FIBERBROWSER_RUN_PLAYWRIGHT_RENDER: "1"
+          FIBERHMM_NO_UPDATE_CHECK: "1"
+          FIBERBROWSER_NO_OPEN: "1"
+          OPENBLAS_NUM_THREADS: "1"
+        # -rs lists every skip; a render test that skips here (e.g. dist/ or the demo BAM missing) is a wiring error.
+        run: python -m pytest tests/test_playwright_render.py tests/test_figure_render.py -q -rs -p no:cacheprovider
 
   e2e:
     # Optional: nightly and on demand (Actions > CI > Run workflow), not on every push.
     # A real FiberBrowser server on the tracked demo BAM driven by Chromium
-    # (npm run test:e2e:release, ~5 min), plus the gated headless-render tests.
+    # (npm run test:e2e:release). The headless-render tests moved to the frontend job (every push).
     name: browser end-to-end (nightly)
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       FIBERHMM_NO_UPDATE_CHECK: "1"
+      # nucleosomes / feature-hub* fail (not skip) when FiberHMM's modules are missing (coverage plan #10).
+      FIBERBROWSER_E2E_REQUIRE_FIBERHMM: "1"
       FIBERBROWSER_NO_OPEN: "1"
       OPENBLAS_NUM_THREADS: "1"
     steps:
@@ -99,15 +178,18 @@ jobs:
         # The published FiberHMM 3 release from PyPI.
         run: |
           python -m pip install --upgrade pip
-          pip install "fiberhmm[consensus]==3.0.4"
+          pip install "fiberhmm[consensus]>=3.2.0,<4"
       - name: Install FiberBrowser and test tools
         run: |
           grep -v -i '^fiberhmm' requirements.txt > "$RUNNER_TEMP/requirements-ci.txt"
           pip install -r "$RUNNER_TEMP/requirements-ci.txt" -r requirements-dev.txt
       - name: Build pyBigWig with libcurl
+        # minimap2: daf-run-pod5, the only wizard spec that runs the real fiberhmm-pipeline, skips without it
+        # (coverage plan #11).
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libcurl4-openssl-dev
+          sudo apt-get install -y --no-install-recommends libcurl4-openssl-dev minimap2
+          minimap2 --version
           pip install --force-reinstall --no-deps --no-cache-dir --no-binary pyBigWig pyBigWig
           python -c "import pyBigWig; assert pyBigWig.remote and pyBigWig.numpy, (pyBigWig.remote, pyBigWig.numpy)"
       - uses: actions/setup-node@v4
@@ -123,10 +205,6 @@ jobs:
       - name: Release end-to-end specs
         working-directory: browser/frontend
         run: npm run test:e2e:release
-      - name: Gated headless-render tests
-        env:
-          FIBERBROWSER_RUN_PLAYWRIGHT_RENDER: "1"
-        run: python -m pytest tests/test_playwright_render.py tests/test_figure_render.py -q -p no:cacheprovider
       - name: Keep Playwright reports
         if: failure()
         uses: actions/upload-artifact@v4

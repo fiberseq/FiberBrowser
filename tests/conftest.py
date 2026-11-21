@@ -41,6 +41,10 @@ os.environ.setdefault("FIBERBROWSER_LIBRARY_NO_STARTUP_SCAN", "1")
 if "FIBERBROWSER_PREFERENCES" not in os.environ:
     import tempfile as _tempfile
     os.environ["FIBERBROWSER_PREFERENCES"] = os.path.join(_tempfile.mkdtemp(prefix="fiberbrowser-test-prefs-"), "analysis_preferences.json")
+# Recent and pinned genomes go to a scratch file, never ~/.fiberhmm/recent_genomes.json.
+if "FIBERBROWSER_RECENT_GENOMES" not in os.environ:
+    import tempfile as _tempfile
+    os.environ["FIBERBROWSER_RECENT_GENOMES"] = os.path.join(_tempfile.mkdtemp(prefix="fiberbrowser-test-recent-"), "recent_genomes.json")
 # Saved regions (the Regions panel's catalog) go to a scratch folder, never ~/.fiberhmm/regions.
 if "FIBERBROWSER_REGION_CATALOG_DIR" not in os.environ:
     import tempfile as _tempfile
@@ -109,6 +113,18 @@ def _restore_browser_state():
         srv.state = saved_server
 
 
+@pytest.fixture(autouse=True, scope="module")
+def _meta_locus_decode_workers_joined():
+    """A ready meta-locus pool warms the decode workers (services/meta_locus_decode.py); join them at the end of
+    each module, or later files that assert no child processes (test_reconstruction_budget,
+    test_nuc_audit_r2) see them."""
+    yield
+    import sys
+    md = sys.modules.get("services.meta_locus_decode")
+    if md is not None:
+        md.shutdown_workers(wait=True)
+
+
 import hardware_floor as _hardware_floor  # noqa: E402  (tests/ is on sys.path: pytest.ini)
 
 _hardware_floor.install()  # at import, before session fixtures build any state
@@ -134,6 +150,22 @@ def _tour_genome_not_on_disk(monkeypatch):
     has cached; the ones about it say what is on disk (test_sandbox.py)."""
     import services.demo_data as demo_data
     monkeypatch.setattr(demo_data, "_registry_genome_on_disk", lambda genome_id: False)
+
+
+@pytest.fixture(autouse=True)
+def _no_leaked_count_helper():
+    """The nucleosome record-count helper process (services/nuc/record_count.py) is off in tests (counts run in
+    the test process, the same numbers); a test that turns it on gets it shut down and reaped afterwards, so no
+    worker process outlives its test (tests assert ``multiprocessing.active_children()`` is empty)."""
+    from services.nuc import record_count
+    saved = record_count.USE_HELPER
+    record_count.USE_HELPER = False
+    try:
+        yield
+    finally:
+        record_count.USE_HELPER = saved
+        if record_count._POOL is not None:
+            record_count.shutdown(True)
 
 
 @pytest.fixture(autouse=True)
@@ -441,3 +473,13 @@ def loaded_client(loaded_app):
 
 # (In port_list.py, so a test can import them whichever conftest module is loaded: lab_tests has its own.)
 from port_list import bind_test_port, free_test_port  # noqa: E402,F401
+
+
+@pytest.fixture
+def all_reads_including_uncalled(monkeypatch):
+    """Min footprints' "All reads, including uncalled" for a test whose synthetic reads carry no footprint calls:
+    every path hides such reads by default (bam_tags.record_passes_call_rule, FiberBrowser 3.1), so in-process calls
+    and HTTP requests without an explicit hide_uncalled show them, as before."""
+    from services import signal_evidence
+    real = signal_evidence.request_hide_uncalled
+    monkeypatch.setattr(signal_evidence, "request_hide_uncalled", lambda default=True: real(default=False))

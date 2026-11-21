@@ -39,7 +39,7 @@ async function wholeInRow(el: Locator, scroller: Locator): Promise<boolean> {
   return a.x >= b.x - 2 && a.x + a.width <= b.x + b.width + 2;
 }
 
-const SIDE = ['cluster-detail', 'footprint-analysis', 'co-accessibility'];
+const SIDE = ['cluster-detail', 'footprint-analysis', 'read-stats'];
 
 test('B1: docking one pinned panel back keeps the row at its comfortable widths, scrolling; R1: chips over no panel', async ({ server, page }) => {
   test.setTimeout(150_000);
@@ -77,8 +77,8 @@ test('B1: docking one pinned panel back keeps the row at its comfortable widths,
   await page.mouse.move(5, 300);
 
   // Pin Co-accessibility to the side, then dock it back from the drawer.
-  await page.locator('[data-testid="panel-dock-toggle-co-accessibility"]:visible').first().click();
-  const drawerDock = page.locator('[data-testid="analysis-overlay"] [data-testid="panel-dock-toggle-co-accessibility"]:visible');
+  await page.locator('[data-testid="panel-dock-toggle-read-stats"]:visible').first().click();
+  const drawerDock = page.locator('[data-testid="analysis-overlay"] [data-testid="panel-dock-toggle-read-stats"]:visible');
   await expect(drawerDock).toHaveAttribute('aria-label', 'Dock beside the reads');
   await drawerDock.click();
   await expect(page.getByTestId('analysis-overlay')).toHaveCount(0);
@@ -91,10 +91,10 @@ test('B1: docking one pinned panel back keeps the row at its comfortable widths,
   // Closed and reopened: the same widths.
   await page.evaluate(() => {
     const s = (window as any).__FIBERBROWSER_STORE__.getState();
-    s.closeAnalysisPanel(s.panels.find((p: any) => p.contentType === 'co-accessibility').id);
+    s.closeAnalysisPanel(s.panels.find((p: any) => p.contentType === 'read-stats').id);
   });
-  await panelButton(page, 'co-accessibility').click();
-  await expect(page.locator('[data-panel-content-type="co-accessibility"]').first()).toBeVisible();
+  await panelButton(page, 'read-stats').click();
+  await expect(page.locator('[data-panel-content-type="read-stats"]').first()).toBeVisible();
   expect(await sideWidths(page, SIDE)).toEqual([420, 420, 420]);
   expect(await width(reads)).toBe(480);
 });
@@ -125,13 +125,13 @@ test('drag between the drawer and the row: out of the drawer at the drop, and in
   }
   const order = () => page.evaluate(() => (window as any).__FIBERBROWSER_STORE__.getState().panels
     .filter((p: any) => p.contentType !== 'dataset').map((p: any) => p.contentType));
-  await page.locator('[data-testid="panel-dock-toggle-co-accessibility"]:visible').first().click();
+  await page.locator('[data-testid="panel-dock-toggle-read-stats"]:visible').first().click();
   const drawer = page.getByTestId('analysis-overlay');
   await expect(drawer).toHaveCount(1);
   expect(await docks(page)).toEqual([null, null, 'side']);
 
   // Drawer -> row: drop on the left half of Cluster detail (before it).
-  const grip = drawer.locator('[data-testid="analysis-panel-header-co-accessibility"] [title="Drag panel"]');
+  const grip = drawer.locator('[data-testid="analysis-panel-header-read-stats"] [title="Drag panel"]');
   const target = (await page.locator('[data-panel-content-type="cluster-detail"]').first().boundingBox())!;
   await dragGrip(page, grip, { x: target.x + 30, y: target.y + 200 }, async () => {
     const line = page.getByTestId('panel-drop-indicator');
@@ -142,7 +142,7 @@ test('drag between the drawer and the row: out of the drawer at the drop, and in
   });
   await expect(drawer).toHaveCount(0);
   expect(await docks(page)).toEqual([null, null, null]);
-  expect(await order()).toEqual(['co-accessibility', 'cluster-detail', 'footprint-analysis']);
+  expect(await order()).toEqual(['read-stats', 'cluster-detail', 'footprint-analysis']);
   const reads = page.locator('[data-panel-id]').first();
   await expect(page.getByTestId('panel-row-scroll')).toHaveCount(1);
   expect(await width(reads)).toBe(480);
@@ -178,7 +178,8 @@ test('R2: a set inserted left of the view lands whole (B8); the chip where the w
   const footprints = page.locator('[data-panel-content-type="footprint-analysis"]');
   const scroller = page.getByTestId('panel-row-scroll');
   await expect.poll(() => wholeInRow(footprints, scroller), { timeout: 5_000 }).toBe(true);
-  await expect(page.getByTestId('panel-row-more-left')).toHaveAttribute('data-pulse', 'true');
+  // The pulse lasts 2.4 s (it may be over by the time a loaded machine looks): the chip counts its pulses.
+  await expect.poll(async () => Number(await page.getByTestId('panel-row-more-left').getAttribute('data-pulses'))).toBeGreaterThan(0);
 
   // Work in Footprints, then two read panels arrive together at the row's left (a split's set): both show.
   await footprints.click({ position: { x: 200, y: 160 } });
@@ -194,7 +195,7 @@ test('R2: a set inserted left of the view lands whole (B8); the chip where the w
     await expect.poll(() => wholeInRow(page.locator(`[data-panel-id="${id}"]`), scroller), { timeout: 5_000 }).toBe(true);
   }
   // Footprints could not stay beside them: its chip, on the right, pulses.
-  await expect(page.getByTestId('panel-row-more-right')).toHaveAttribute('data-pulse', 'true');
+  await expect.poll(async () => Number(await page.getByTestId('panel-row-more-right').getAttribute('data-pulses'))).toBeGreaterThan(0);
 });
 
 test('B3: Skip to panels with no side panel open goes to the panel launchers', async ({ server, page }) => {

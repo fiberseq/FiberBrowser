@@ -64,9 +64,11 @@ describe('analysis panel launchers in the sidebar rail', () => {
     const settings = q('[data-testid="settings-rail-analysis"]')!;
     expect(settings.compareDocumentPosition(rail) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     const labels = tiles().map(t => t.getAttribute('aria-label'));
-    for (const name of ['Clusters', 'Footprints', 'Transcription', 'Read Stats', 'Co-accessibility', 'Tracks', 'Labeling', 'Rules', 'Layout', 'Regions', 'Library']) {
+    for (const name of ['Clusters', 'Footprints', 'Transcription', 'Read Stats', 'Tracks', 'Labeling', 'Rules', 'Layout', 'Regions', 'Library']) {
       expect(labels).toContain(name);
     }
+    // Co-accessibility moved into Plots (3.1.0): no tile.
+    expect(labels).not.toContain('Co-accessibility');
     // Compatibility-only panels and Contacts without a contact map stay out (as in the strip).
     expect(labels).not.toContain('Peak Detection');
     expect(labels).not.toContain('Contacts');

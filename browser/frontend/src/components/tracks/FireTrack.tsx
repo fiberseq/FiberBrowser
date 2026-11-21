@@ -1,4 +1,7 @@
+import { effectiveReadLimit } from '../../features/metaLocus/metaLocusStore';
+import { referenceCanvasX } from '../../features/differences/referenceCanvas';
 import { openRegionPanels } from '../../utils/regionPanels';
+import { isBamBacked } from '../../utils/datasetKinds';
 import { matchedGroupLabel, removeMatchedGroups } from '../../utils/matchedGroupActions';
 import { isScannedRule } from '../../utils/matchedRegions';
 import { crosshairBottomAt, logicalOffset } from '../../utils/scaledCoordinates';
@@ -68,7 +71,7 @@ export function FireTrack({ width, height, scanning, spanningOnly, sidebarWidth 
   // dataset's locus, another genome) shows no scanned peaks, only drawn ones.
   // (Zoomed out past read level no reads are fetched: the peaks still show.)
   const panelHasReads = useBrowserStore(s => readsKey == null || (s.activeReadIds[readsKey]?.length ?? 0) > 0
-    || (overrideEnd ?? s.end) - (overrideStart ?? s.start) > s.maxRegionForReads);
+    || (overrideEnd ?? s.end) - (overrideStart ?? s.start) > effectiveReadLimit(s.chrom, s.maxRegionForReads));
   const selectedPeaks = useBrowserStore(s => s.selectedPeaks);
   const peakDrawMode = useBrowserStore(s => s.peakDrawMode);
   const peakDrawStartAny = useBrowserStore(s => s.peakDrawStart);
@@ -89,7 +92,7 @@ export function FireTrack({ width, height, scanning, spanningOnly, sidebarWidth 
   // Check if any dataset has footprints (determines default peak mode)
   const hasFootprints = datasets.some(d =>
     d.available_layers?.footprint || d.layer_type === 'footprint' ||
-    (d.data_type === 'bam' && !d.available_layers)
+    (isBamBacked(d) && !d.available_layers)
   );
 
   const [hoverPos, setHoverPos] = useState<number | null>(null);
@@ -358,7 +361,7 @@ export function FireTrack({ width, height, scanning, spanningOnly, sidebarWidth 
 
   const handleClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
-    const clickX = logicalOffset(e.clientX - rect.left, e.currentTarget.clientWidth, rect.width);
+    const clickX = referenceCanvasX(canvasRef.current, logicalOffset(e.clientX - rect.left, e.currentTarget.clientWidth, rect.width));
     const clickY = logicalOffset(e.clientY - rect.top, e.currentTarget.clientHeight, rect.height);
     const clickPos = screenToGenome(clickX);
 
@@ -422,7 +425,7 @@ export function FireTrack({ width, height, scanning, spanningOnly, sidebarWidth 
 
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
-    const x = logicalOffset(e.clientX - rect.left, e.currentTarget.clientWidth, rect.width);
+    const x = referenceCanvasX(canvasRef.current, logicalOffset(e.clientX - rect.left, e.currentTarget.clientWidth, rect.width));
     const genomePos = screenToGenome(x);
     const y = logicalOffset(e.clientY - rect.top, e.currentTarget.clientHeight, rect.height);
     const row = Math.floor((y - 14) / Math.max(1, Math.floor((height - 16) / numRows)));

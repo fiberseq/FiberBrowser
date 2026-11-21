@@ -11,6 +11,7 @@
  * - "Go to …": the search providers (utils/search/providers: coordinates,
  *   genes, saved regions, read names; the locus boxes ask the same ones).
  */
+import { PANEL_PLOTS, latestSuppliedCard, openPanelPlot, openPanelPlotCard } from '../features/plots/panelPlots';
 import { APP_COMMANDS, APP_COMMAND_INFO, hasAppCommand, runAppCommand, type AppCommandName } from './appCommands';
 import { KEYBOARD_SHORTCUTS, shortcutForCommand } from './shortcuts';
 import { allSettings } from './settingsRegistry';
@@ -68,7 +69,7 @@ function commandItems(): PaletteItem[] {
       kind: 'action',
       title: info.label,
       detail: info.detail,
-      tag: 'Action',
+      tag: info.preview ? 'Action · Preview' : 'Action',
       keywords: info.keywords,
       shortcut: shortcutForCommand(name as AppCommandName),
       ...(blocked ? { disabledReason: blocked } : {}),
@@ -149,7 +150,18 @@ function shortcutItems(showShortcuts: () => void): PaletteItem[] {
 
 /** Everything the palette can find, now (commands registered by mounted components, panels registered by plugins). */
 export function buildPaletteItems(showShortcuts: () => void = () => runAppCommand('keyboard-shortcuts')): PaletteItem[] {
-  return [...commandItems(), ...panelItems(), ...settingItems(), ...shortcutItems(showShortcuts)];
+  return [...commandItems(), ...panelItems(), ...panelPlotItems(), ...settingItems(), ...shortcutItems(showShortcuts)];
+}
+
+/** Plots that live in panels (features/plots/panelPlots): open the panel, or the newest card it sent to Plots. */
+function panelPlotItems(): PaletteItem[] {
+  return PANEL_PLOTS.flatMap(p => {
+    const card = latestSuppliedCard(p);
+    const panel: PaletteItem = { id: `panelplot:${p.id}`, kind: 'action', title: `${p.label} (${p.panelLabel} panel)`, detail: p.description, tag: 'Plot',
+      keywords: ['plot', p.panelLabel, p.label], run: () => openPanelPlot(p) };
+    return card ? [panel, { id: `panelplot-card:${p.id}`, kind: 'action' as const, title: `${p.label} in Plots`, detail: 'The newest card the panel sent to Plots', tag: 'Plot',
+      keywords: ['plot', 'gallery', p.label], run: () => { openPanelPlotCard(p); } }] : [panel];
+  });
 }
 
 /**

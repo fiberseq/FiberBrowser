@@ -2,17 +2,21 @@ import { useShallow } from 'zustand/react/shallow';
 import { useBrowserStore } from '../../../../stores/browserStore';
 import { CheckboxRow } from '../../shared/CheckboxRow';
 import { defineSettings, inSidebar, settingAnchor } from '../../../../utils/settingsCatalog';
-import { SIGNAL_TOOLTIP, signalCountText } from '../../../../utils/signalFilters';
+import { SIGNAL_TOOLTIP, datasetsCarrySignal, signalCountText } from '../../../../utils/signalFilters';
+
+/** The signal filters are offered only for datasets carrying bg/me/db signal tags. */
+const signalHiddenReason = () => (datasetsCarrySignal(useBrowserStore.getState().datasets)
+  ? null : 'with a dataset carrying signal tags (bg/me)');
 
 export const SIGNAL_FILTER_SETTINGS = defineSettings({
   background: { id: 'view.signal-background', label: 'Hide background-compatible reads',
-    keywords: ['signal', 'background', 'bg', 'untreated control'], location: inSidebar('view.advanced') },
+    keywords: ['signal', 'background', 'bg', 'untreated control'], location: inSidebar('view.advanced'), hiddenReason: signalHiddenReason },
   unscored: { id: 'view.signal-unscored', label: 'Exclude unscored reads',
-    keywords: ['signal', 'unscored', 'missing annotation'], location: inSidebar('view.advanced') },
+    keywords: ['signal', 'unscored', 'missing annotation'], location: inSidebar('view.advanced'), hiddenReason: signalHiddenReason },
   detectable: { id: 'view.signal-detectable', label: 'Require detectable signal',
-    keywords: ['signal', 'strict'], location: inSidebar('view.advanced') },
+    keywords: ['signal', 'strict'], location: inSidebar('view.advanced'), hiddenReason: signalHiddenReason },
   structure: { id: 'view.signal-structure', label: 'Require chromatin-structure evidence',
-    keywords: ['signal', 'structure', 'strict'], location: inSidebar('view.advanced') },
+    keywords: ['signal', 'structure', 'strict'], location: inSidebar('view.advanced'), hiddenReason: signalHiddenReason },
 });
 
 /** Producer-supplied signal gates, alongside the existing read filters. */
@@ -20,6 +24,7 @@ export function SignalReadFilters() {
   const { filters, setFilters, summaries, datasets } = useBrowserStore(useShallow(s => ({
     filters: s.signalFilters, setFilters: s.setSignalFilters, summaries: s.signalCounts, datasets: s.datasets,
   })));
+  if (!datasetsCarrySignal(datasets)) return null;
   const current = Object.values(summaries).filter(s => datasets.some(d => d.id === s.datasetId));
   const structureAvailable = current.some(s => s.counts.structure_scored > 0);
   return <div className="space-y-1 text-[12px] text-ink" data-testid="signal-filters">

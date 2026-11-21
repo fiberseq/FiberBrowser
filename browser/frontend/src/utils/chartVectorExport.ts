@@ -46,3 +46,20 @@ export async function drawChartToPdf(
   drawFn(renderer as unknown as CanvasRenderingContext2D, width, height);
   pdf.save(filename);
 }
+
+/** Several charts as one vector PDF, a page each (the Plots Gallery's "Export selected"). */
+export async function drawChartsToPdf(
+  pages: Array<{ drawFn: ChartDrawFn; width: number; height: number }>,
+  filename: string,
+): Promise<void> {
+  if (!pages.length) return;
+  const { jsPDF } = await import('jspdf');
+  const first = pages[0];
+  const pdf = new jsPDF({ orientation: first.width > first.height ? 'landscape' : 'portrait', unit: 'pt', format: [first.width, first.height] });
+  pages.forEach((page, i) => {
+    if (i > 0) pdf.addPage([page.width, page.height], page.width > page.height ? 'landscape' : 'portrait');
+    const renderer = new PdfRenderer(pdf, page.width, page.height);
+    page.drawFn(renderer as unknown as CanvasRenderingContext2D, page.width, page.height);
+  });
+  pdf.save(filename);
+}

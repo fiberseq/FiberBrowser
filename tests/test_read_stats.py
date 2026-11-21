@@ -276,9 +276,9 @@ def test_read_has_footprint_calls_recognises_ma_and_legacy_tags():
     assert not f(R({"ns": 3, "nl": 5}))                      # scalar tags of another pipeline
 
 
-def test_fully_accessible_called_read_is_called_and_empty_groups_are_not():
-    """A called read can be fully accessible: an msp interval and no nuc/tf intervals, or an empty nuc group next to
-    an msp group. It is 'called'. A read whose groups are all empty carries no calls."""
+def test_fully_accessible_called_reads_count_as_called_and_empty_groups_do_not():
+    """A called read can be fully accessible: an msp group only, or an empty nuc group beside an msp group. A read
+    whose groups are all empty has no calls."""
     from array import array
 
     class R:
@@ -289,28 +289,73 @@ def test_fully_accessible_called_read_is_called_and_empty_groups_are_not():
             return t in self.tags
 
         def get_tag(self, t):
-            if t not in self.tags:
-                raise KeyError(t)
             return self.tags[t]
 
     f = read_stats_service.read_has_footprint_calls
-    assert f(R({"MA": "2000;msp+Q:1-2000"}))                          # msp only: fully accessible, called
-    assert f(R({"MA": "2000;nuc+Q:;msp+Q:1-2000"}))                   # empty nuc group beside an msp group
-    assert f(R({"as": array("I", [0]), "al": array("I", [2000])}))    # legacy MSP covering the read
-    assert not f(R({"MA": "2000;nuc+Q:;msp+Q:;tf+QQQ:"}))             # only empty groups
-    assert not f(R({"ns": array("I", []), "nl": array("I", [])}))     # empty legacy arrays
-    assert not f(R({"ns": 48213}))                                    # Dorado's scalar ns:i, no nl
-    assert not f(R({"ns": "raw", "nl": "none"}))                      # strings are no calls (shared pair rule)
+    assert f(R({"MA": "2000;msp.:1-2000"}))                          # msp only: called, fully accessible
+    assert f(R({"MA": "2000;nuc.Q:;msp.:1-2000"}))                   # empty nuc group next to an msp group
+    assert f(R({"as": array("I", [0]), "al": array("I", [2000])}))   # legacy MSP pair only
+    assert not f(R({"MA": "2000;nuc.Q:;msp.:;tf.:"}))                # only empty groups: not called
+    assert not f(R({"ns": array("I", []), "nl": array("I", [])}))    # empty legacy arrays
+    assert not f(R({"ns": "raw", "nl": "none"}))                     # string tags (bam_tags.interval_tag_pair)
 
 
-def test_no_called_read_gives_null_means_not_zero():
-    """When no read in scope has footprint calls the footprint and accessibility means are None (NA), not 0."""
-    per_read = [{"read_id": "a", "footprint_count": None}, {"read_id": "b", "footprint_count": None}]
+def test_strandless_ma_groups_are_not_calls_as_in_fiberhmm():
+    """A section head without a strand character (``nuc:201-350``) is not spec MA. FiberHMM 3.2.0's
+    ``parse_ma_tag`` rejects the whole tag, so its scan, extract and peaks see no calls; the uncalled-read rule
+    agrees, value for value, with ``fiberhmm.io.legacy_tags.ma_has_footprint_groups`` wherever both see a non-empty
+    group (FiberBrowser alone treats a tag whose call groups are all empty as no calls)."""
+    from fiberhmm.io.legacy_tags import ma_has_footprint_groups
+
+    class R:
+        def __init__(self, tags):
+            self.tags = tags
+
+        def has_tag(self, t):
+            return t in self.tags
+
+        def get_tag(self, t):
+            return self.tags[t]
+
+    f = read_stats_service.read_has_footprint_calls
+    rejected = [
+        "4000;nuc:201-350,801-950;tf:1181-1210;msp:951-1800",   # every head strandless
+        "4000;nucQ:201-350",                                     # quality spec but no strand
+        "4000;nuc.:201-350;msp:951-1800",                        # one strandless section rejects the tag
+        "4000;nuc.:201-350;junk",                                # a section with no colon
+    ]
+    accepted = [
+        "4000;nuc.:201-350,801-950;tf.:1181-1210;msp.:951-1800",
+        "4000;nuc+QQQ:201-350",
+        "4000;tf-Q:1181-1210",
+        "4000;fp_x.:5-10;msp.:951-1800",
+        "4000;nuc.:201-350;;",                                   # empty sections are skipped, as FiberHMM does
+    ]
+    for value in rejected:
+        assert not f(R({"MA": value})), value
+        assert not f(R({"Ma": value})), value
+        assert ma_has_footprint_groups(value) is False, value
+    for value in accepted:
+        assert f(R({"MA": value})), value
+        assert ma_has_footprint_groups(value) is True, value
+    # A strandless MA beside a valid Ma (or legacy arrays) still leaves the read called by those.
+    assert f(R({"MA": rejected[0], "Ma": accepted[0]}))
+    assert f(R({"MA": rejected[0], "ns": [1, 200], "nl": [147, 147]}))
+
+
+def test_means_are_none_when_no_read_in_scope_is_called():
+    per_read = [dict(read_id="a", footprint_count=None, accessibility_pct=None),
+                dict(read_id="b", footprint_count=None, accessibility_pct=None)]
     agg = read_stats_service._build_aggregate(
         per_read=per_read, request=None, all_fp_sizes=[], all_acc_pcts=[], all_lengths=[2000, 2000],
         all_mapqs=[60, 60], all_methyl_pcts=[], strand_counts={"+": 2, "-": 0})
     assert agg["n_not_called"] == 2
     for key in ("mean_accessibility_pct", "mean_footprint_count", "mean_footprint_size", "median_footprint_size",
-                "hist_fp_count"):
+                "hist_accessibility", "hist_fp_count"):
         assert agg[key] is None, key
-    assert agg["hist_accessibility"] == [] and agg["mean_read_length"] == 2000.0
+    # A called read without footprints (fully accessible): accessibility is known, footprint size has no value.
+    called = per_read + [dict(read_id="c", footprint_count=0, accessibility_pct=100.0)]
+    agg = read_stats_service._build_aggregate(
+        per_read=called, request=None, all_fp_sizes=[], all_acc_pcts=[100.0], all_lengths=[2000] * 3,
+        all_mapqs=[60] * 3, all_methyl_pcts=[], strand_counts={"+": 3, "-": 0})
+    assert agg["mean_accessibility_pct"] == 100.0 and agg["mean_footprint_size"] is None and agg["n_not_called"] == 2

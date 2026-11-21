@@ -88,7 +88,8 @@ test.describe('an SV split into panels, away from its locus, and the Library aft
     await menu.getByRole('menuitem', { name: 'Split into panels by this SV' }).click();
     const dialog = page.getByTestId('split-panels-dialog');
     await expect(dialog.getByTestId('split-panels-row').first()).toBeVisible({ timeout: 30_000 });
-    await expect(dialog.getByTestId('split-panels-row').filter({ hasText: 'Carriers' })).toHaveCount(1);
+    // The carriers group is named by its evidence tiers (split panel titles keep the tier counts).
+    await expect(dialog.getByTestId('split-panels-row').filter({ hasText: 'Confirmed (9) + putative (0)' })).toHaveCount(1);
     await dialog.getByTestId('split-panels-open').click();
     await expect.poll(() => store(page, s => s.panels.filter((p: any) => p.readSubset).length)).toBe(2);
 

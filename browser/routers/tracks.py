@@ -168,6 +168,8 @@ async def load_gtf_endpoint(path: str = Query(...),
                 state.gtf_data = gtf_data
                 state.gtf_path = path
         await asyncio.to_thread(publish)
+        from services.recent_genomes import record
+        await asyncio.to_thread(record, state)   # the annotation now paired with the loaded FASTA
         gene_count = len(state.gtf_data.get("transcripts", [])) if state.gtf_data is not None else 0
         return {
             "success": True,

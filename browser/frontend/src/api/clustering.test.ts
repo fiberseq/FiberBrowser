@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { clusterAllReads, clusterMatchedViews, fetchClusterProjection, fetchClusterVPlot } from './clustering';
+import { assignToClusters, autoCullClusters, clusterAllReads, clusterMatchedViews, dissolveCluster, fetchClusterMolecules, fetchClusterProjection, fetchClusterVPlot } from './clustering';
+import { sortReads } from './readOperations';
 
 describe('clustering API client', () => {
   it('requests early preparation only when explicitly configured', async () => {
@@ -220,6 +221,89 @@ describe('clustering API client', () => {
   });
 });
 
+describe('dynamic assignment request', () => {
+  it('sends the fit\'s metric cohort with patterns or centroids, and nothing without one (Codex C2-1)', async () => {
+    const fetchMock = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => ({
+      ok: true, json: async () => ({ results: {} }),
+    }) as Response);
+    vi.stubGlobal('fetch', fetchMock);
+    const cohort = { 'nuc.nrl': { values: [180, 190, 200, 210], counts: [1, 1, 1, 1] } };
+    const peaks = [{ start: 0, end: 100, mode: 'cluster_rule:m' as const }];
+    await assignToClusters('chr1', 0, 100, peaks, { 0: [0], 1: [1] }, ['ds1'], false, 90, 0.5, { metricCohort: cohort });
+    await assignToClusters('chr1', 0, 100, peaks, {}, ['ds1'], false, 90, 0.5,
+      { centroids: { 0: [0.25], 1: [0.75] }, peakWidths: [1], metricCohort: cohort });
+    await assignToClusters('chr1', 0, 100, peaks, { 0: [0], 1: [1] }, ['ds1'], false, 90, 0.5, { metricCohort: {} });
+    const bodies = fetchMock.mock.calls.map(call => JSON.parse(String(call[1]?.body)));
+    expect(bodies[0].cluster_metric_cohort).toEqual(cohort);
+    expect(bodies[1].cluster_metric_cohort).toEqual(cohort);
+    expect(bodies[1].cluster_centroids).toEqual({ 0: [0.25], 1: [0.75] });
+    expect(bodies[2]).not.toHaveProperty('cluster_metric_cohort');
+  });
+});
+
+describe('merge and projection requests', () => {
+  it('send the fit\'s metric cohort when there is one, and nothing for an empty one', async () => {
+    const fetchMock = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => ({
+      ok: true, json: async () => ({ results: {}, dissolved: [] }),
+    }) as Response);
+    vi.stubGlobal('fetch', fetchMock);
+    const cohort = { 'nuc.nrl': { values: [180, 190, 200, 210], counts: [1, 1, 1, 1] } };
+    const peaks = [{ start: 0, end: 100, mode: 'cluster_rule:m' as const }];
+    const assignments = { ds1: { r1: 0, r2: 1 } };
+    for (const metricCohort of [cohort, {}]) {
+      await dissolveCluster('chr1', 0, 100, 1, assignments, peaks, ['ds1'], false, 90, 0.5, 'seed', [], null, { metricCohort });
+      await autoCullClusters('chr1', 0, 100, assignments, peaks, ['ds1'], false, 90, 0.5, 0.05, 0.95, 'seed', [], null,
+        undefined, { metricCohort });
+      await fetchClusterProjection('chr1', 0, 100, ['ds1'], peaks, 'pca', false, { clusterAssignments: assignments, metricCohort });
+    }
+    const calls = fetchMock.mock.calls.map(call => ({ path: new URL(String(call[0]), 'http://x').pathname, body: JSON.parse(String(call[1]?.body)) }));
+    expect(calls.map(c => c.path)).toEqual([
+      '/api/dissolve_cluster', '/api/auto_cull_clusters', '/api/cluster_projection',
+      '/api/dissolve_cluster', '/api/auto_cull_clusters', '/api/cluster_projection',
+    ]);
+    for (const call of calls.slice(0, 3)) expect(call.body.cluster_metric_cohort).toEqual(cohort);
+    for (const call of calls.slice(3)) expect(call.body).not.toHaveProperty('cluster_metric_cohort');
+    // Callers that pass no options send none either.
+    await dissolveCluster('chr1', 0, 100, 1, assignments, peaks, ['ds1'], false);
+    expect(JSON.parse(String(fetchMock.mock.calls.at(-1)?.[1]?.body))).not.toHaveProperty('cluster_metric_cohort');
+  });
+
+  it('Sort by projection sends the fit\'s metric cohort with the map settings, as the Projection tab does', async () => {
+    const fetchMock = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => ({
+      ok: true, json: async () => ({ results: {} }),
+    }) as Response);
+    vi.stubGlobal('fetch', fetchMock);
+    const cohort = { 'nuc.nrl': { values: [180, 190, 200, 210], counts: [1, 1, 1, 1] } };
+    const map = { peakRegions: [{ start: 0, end: 100, mode: 'cluster_rule:m' }], clusterAssignments: { ds1: { r1: 0, r2: 1 } } };
+    for (const metricCohort of [cohort, {}]) {
+      await sortReads('chr1', 0, 100, false, ['ds1'], 'projection', { projection: { ...map, metricCohort } });
+    }
+    const bodies = fetchMock.mock.calls.map(call => JSON.parse(String(call[1]?.body)));
+    expect(bodies[0].projection.cluster_metric_cohort).toEqual(cohort);
+    expect(bodies[1].projection).not.toHaveProperty('cluster_metric_cohort');
+  });
+});
+
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+describe('cluster molecules (map colours)', () => {
+  it('posts the projected datasets\' assignments, and the position only for the layer at a position', async () => {
+    const fetchMock = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => ({
+      ok: true, json: async () => ({ molecules: {}, layers: [], position: null }),
+    }) as Response);
+    vi.stubGlobal('fetch', fetchMock);
+    const assignments = { ds1: { r1: 0, r2: 1 } };
+    await fetchClusterMolecules('chr1', 0, 100, ['ds1'], true, { clusterAssignments: assignments, sampleSeed: 's', panelGenome: 'g1' });
+    await fetchClusterMolecules('chr1', 0, 100, ['ds1'], true, { clusterAssignments: assignments, position: 50 });
+    const [url, init] = fetchMock.mock.calls[0];
+    const parsed = new URL(String(url), 'http://fiberbrowser.test');
+    expect(parsed.pathname).toBe('/api/cluster_molecules');
+    expect(parsed.searchParams.get('spanning')).toBe('true');
+    expect(parsed.searchParams.get('panel_genome')).toBe('g1');
+    const body = JSON.parse(String(init?.body));
+    expect(body).toEqual({ dataset_ids: ['ds1'], sample_seed: 's', cluster_assignments: assignments });
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body)).position).toBe(50);
+  });
 });

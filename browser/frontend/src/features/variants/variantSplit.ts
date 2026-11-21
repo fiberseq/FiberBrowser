@@ -83,7 +83,9 @@ export function variantSplitGrouping(grouping: AlleleGrouping, datasetId: string
     groups: grouping.groups.filter(g => (reads.get(g.id)?.length ?? 0) > 0).map(g => ({
       key: String(g.id),
       label: svCols.length && g.kind === 'combo' ? `${g.label} (${(reads.get(g.id)?.length ?? 0).toLocaleString()})` : g.label,
-      ...(carried(g)?.length || allelesOf(g) ? { ruleExtras: {
+      ...(carried(g)?.length || allelesOf(g) || grouping.sv_evidence_levels ? { ruleExtras: {
+        ...(grouping.sv_evidence_levels ? { svEvidenceLevels: Object.fromEntries((reads.get(g.id) ?? []).flatMap(id =>
+          grouping.sv_evidence_levels![id] ? [[id, grouping.sv_evidence_levels![id]]] : [])) } : {}),
         ...(carried(g)?.length ? { carriedInsertions: carried(g) } : {}),
         ...(allelesOf(g) ? { splitAlleles: allelesOf(g) } : {}),
       } } : {}),
@@ -153,7 +155,7 @@ export function groupInPanel(grouping: AlleleGrouping, datasetId: string, stateK
   const order = grouping.groups.filter(g => present.has(g.id)).map(g => g.id);
   return applyReadGroups({
     byDataset: { [datasetId]: { ...grouping.assignments } },
-    order, patterns: {}, regions: [], labels,
+    order, patterns: {}, regions: [], labels, svEvidenceLevels: grouping.sv_evidence_levels,
   }, { [datasetId]: [stateKey] }, `Group by ${title}`);
 }
 

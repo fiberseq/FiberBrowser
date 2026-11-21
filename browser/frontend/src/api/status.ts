@@ -17,6 +17,8 @@ export interface StatusResponse {
   fasta_path?: string | null;
   fasta_error?: string | null;
   current_genome?: string | null;
+  /** The reference loaded now is the one given on the command line (--fasta). */
+  startup_reference?: boolean;
   has_fire?: boolean;
   public_mode?: boolean;
   /** Datasets that don't fit the loaded genome (then no initial_position is sent). */

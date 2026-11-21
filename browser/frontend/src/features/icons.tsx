@@ -19,3 +19,13 @@ export const InsertionLens = ({ size, ...p }: IconProps) => (
     <path d="M10.5 12h3" />
   </svg>
 );
+
+/** A graph view: a backbone with one path leaving it as a bubble and rejoining (the graph-view panel). */
+export const GraphView = ({ size, ...p }: IconProps) => (
+  <svg {...iconDefaults(size)} {...p}>
+    <path d="M2 16h20" />
+    <path d="M6 16c1.5-7 10.5-7 12 0" />
+    <circle cx="6" cy="16" r="1.6" fill="currentColor" stroke="none" />
+    <circle cx="18" cy="16" r="1.6" fill="currentColor" stroke="none" />
+  </svg>
+);

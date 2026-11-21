@@ -118,8 +118,11 @@ def test_compact_all_preserves_first_projection_and_skips_only_exact_second(
     _, payload = compact_all_dataset_result(**options)
     assert len(calls) == expected_passes and calls[0] == 2
     assert payload['working_count'] == 2 and payload['display_count'] == 1
-    assert payload['reads'][0]['id'] == 'u1'
-    assert payload['reads'][0]['layers']['tf_cr']['consensus_records'][0]['source_call_id'] == 'd:u1:0'
+    # The display sample is the stable sampling rule's (3.1.0): the read with the smaller key of (seed, dataset, name).
+    from services.stable_sample import seed_int, stable_key
+    picked = min(['u1', 'u2'], key=lambda n: (stable_key(seed_int('fixed'), 'd', n), n))
+    assert payload['reads'][0]['id'] == picked
+    assert payload['reads'][0]['layers']['tf_cr']['consensus_records'][0]['source_call_id'] == f'd:{picked}:0'
     # Real endpoint sort/profile/sample operations must not mutate any of the
     # borrowed source rows, including rows that were not selected for display.
     assert all(rows == snapshot for rows, snapshot in projected_snapshots)

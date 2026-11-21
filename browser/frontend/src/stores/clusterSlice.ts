@@ -1,4 +1,5 @@
-import { clusterSelectionKeys, type ClusterMatchedRun } from '../utils/clusterMatchedRun';
+import { capturePeakSelection, peakTransaction, projectPeakSelection } from '../features/hub/peakMigration';
+import { clusterSelectionKeys, type ClusterMatchedRun, type GraphRunObservation } from '../utils/clusterMatchedRun';
 import { matchedModeIndices, keepMatched } from '../utils/matchedRegions';
 import { loadPinnedMotifs, normalizePinnedMotifs, type PinnedMotifs } from '../utils/pinnedMotifs';
 import {
@@ -12,13 +13,17 @@ import { sameChrom } from '../utils/chromAliases';
 import { autoNameSuffix, sizeRangeName } from '../utils/footprintGroupNames';
 import type { BrowserState } from './browserStore';
 import { seedHistoryBaseline } from './historySlice';
+import { useTrackFeedStore } from './trackFeedStore';
+import { useGraphReadsStore } from '../features/graphPanel/graphReadsStore';
+import { isMoleculeRecordKey, recordKey } from '../utils/recordKeys';
 import { inGenomeLinkGroup } from '../utils/panelNavigation';
-import type { AnalysisFilterRule, AnalysisFilterRuleSet, AnalysisSortRule, AnalysisSortRuleSet, ClusterFeatureRule, ClusterFeatureRuleSet, ClusterTreeNode, FirePeak, Gene, PeakMode, SelectedFootprint, FootprintGroup, TranscriptionStateFilters, ReadStateInfo, SortMode, FilterMode, ModificationType, SavedCluster, PanelConfig, ClusterWindowPeaks } from '../types';
+import type { AnalysisFilterRule, AnalysisFilterRuleSet, AnalysisSortRule, AnalysisSortRuleSet, ClusterFeatureRule, ClusterFeatureRuleSet, ClusterTreeNode, FirePeak, Gene, PeakMode, SelectedFootprint, FootprintGroup, TranscriptionStateFilters, ReadStateInfo, SortMode, FilterMode, ModificationType, SavedCluster, PanelConfig, ClusterWindowPeaks, ClusterMetricCohort } from '../types';
 import { CLUSTER_RULE_MODE_PREFIX } from '../types';
 import type { ReadProjectionIndex } from '../utils/projectionExport';
 import { fetchApiResponse } from '../api/sharedFetch';
 import { isPublicServerPage } from '../utils/publicServerFlag';
 import { computeRuleOffset } from './peakRuleSlice';
+import { DEFAULT_CLUSTER_VIEW_SETTINGS, normalizeClusterViewSettings, type ClusterViewSettings } from '../utils/clusterViewSettings';
 import { DEFAULT_FOOTPRINT_SIZE_SETTINGS, normalizeFootprintSizeSettings, type FootprintSizeSettings } from '../utils/footprintSizeSettings';
 import {
   mergeLogStatus,
@@ -214,6 +219,114 @@ function sameAssignments(a: Record<string, number> | undefined, b: Record<string
   return keys.every(k => a[k] === b[k]);
 }
 
+/** A rebuilt tree node keeps the graph-run provenance of the panels whose labels did not change (another panel's
+ * clustering re-syncs the node; agy review, group B round 4), and which of those labels another grouping replaced. */
+function keptGraphProvenance(node: ClusterTreeNode | undefined, assignments: Record<string, Record<string, number>>):
+  Pick<ClusterTreeNode, 'graphProvenance' | 'graphLabelsReplaced'> {
+  const kept = Object.entries(node?.graphProvenance ?? {}).filter(([key]) => sameAssignments(node!.assignments[key], assignments[key]));
+  const replaced = kept.filter(([key]) => node!.graphLabelsReplaced?.[key]).map(([key]) => [key, true] as const);
+  return kept.length ? { graphProvenance: Object.fromEntries(kept), ...(replaced.length ? { graphLabelsReplaced: Object.fromEntries(replaced) } : {}) } : {};
+}
+
+/** A node whose labels for `key` a grouping other than a graph run replaced: they are no longer the run's own, even
+ * when the new labels equal the old; the run's record provenance stays, so pop-outs still split them by haplotype (a
+ * graph run clears the mark after writing; Codex post-merge review, group A rounds 2-3, #2). */
+function withGraphLabelsReplaced(node: ClusterTreeNode, key: string): ClusterTreeNode {
+  if (!node.graphProvenance?.[key] || node.graphLabelsReplaced?.[key]) return node;
+  return { ...node, graphLabelsReplaced: { ...(node.graphLabelsReplaced ?? {}), [key]: true } };
+}
+
+/** A drawn row whose molecule's haplotype is known: a lifted row follows its molecule's primary record. */
+export interface DrawnRow { rk: string; datasetId: string; haps: string[]; strand?: string | null }
+
+/** The rows drawn for a state key: its read track's (linear view) and the folded molecules its graph panels drew
+ * (graphReadsStore.rowHaps: their primary record's row, on its path's haplotype). */
+export function drawnRowsFor(key: string, panels: readonly PanelConfig[]): DrawnRow[] {
+  const out: DrawnRow[] = [];
+  const feed = useTrackFeedStore.getState().byStateKey[key];
+  for (const r of feed?.reads ?? []) {
+    const rk = recordKey(r.analysis_id);
+    const haps = [r.live_lift?.hap_label, r.live_lift?.hap].filter(Boolean).map(h => String(h).toUpperCase());
+    if (rk && haps.length) out.push({ rk, datasetId: feed!.datasetId, haps, strand: r.strand ?? null });
+  }
+  const rowHaps = useGraphReadsStore.getState().rowHaps;
+  for (const p of panels) {
+    if ((p.stateKey ?? p.datasetId) !== key) continue;
+    for (const r of rowHaps[p.id] ?? []) out.push({ rk: r.rk, datasetId: r.datasetId, haps: [r.hap.toUpperCase()], strand: r.strand ?? null });
+  }
+  return out;
+}
+
+type RunProvenance = { observations: GraphRunObservation[]; owned: Record<string, string[]> };
+
+/**
+ * A grouping's molecule-level records (`fold_molecule`: one record key for a molecule's records on both haplotypes)
+ * also belong to the graph-run observations of the haplotypes their drawn rows are on: a lifted row follows its
+ * molecule's primary record, which can be on another haplotype than the path whose observation labelled it, so a
+ * pop-out splitting the labels by provenance gives them to the panel that shows those rows (graph follow-ups item 5,
+ * agy review group B round 4, 2a). Returns the ownership to add to `runs` (null: none), only for records a run
+ * already knows; rows not drawn keep the runs' routing.
+ *
+ * `records`: record-level keys too, for a lifted pop-out (stabilize 3, item 1): a supplementary record is drawn on its
+ * own path but shown in the lifted panel of its primary's haplotype. Not for a source view, which shows each record on
+ * its own contig, as the run's path already routes it (a record label there is by QNAME: another haplotype's record
+ * would take its molecule's label on this one).
+ */
+export function drawnRowOwnership(runs: readonly RunProvenance[], labels: Record<string, number> | undefined,
+  rows: readonly DrawnRow[], options?: { records?: boolean }): RunProvenance | null {
+  if (!runs.length || !labels || !rows.length) return null;
+  const known = new Set(runs.flatMap(p => Object.values(p.owned).flat()));
+  const labelled = new Set(Object.keys(labels).filter(id => options?.records || isMoleculeRecordKey(id)).map(id => recordKey(id))
+    .filter((rk): rk is string => Boolean(rk) && known.has(rk!)));
+  if (!labelled.size) return null;
+  const observations = [...new Map(runs.flatMap(p => p.observations).map(o => [o.id, o])).values()];
+  // (Sets: with record-level keys every drawn row may be looked up.)
+  const ownedBy = new Map<string, Set<string>>();
+  for (const p of runs) for (const [oid, rks] of Object.entries(p.owned)) {
+    const set = ownedBy.get(oid) ?? new Set<string>();
+    for (const rk of rks) set.add(rk);
+    ownedBy.set(oid, set);
+  }
+  const owned: Record<string, string[]> = {};
+  const added = new Map<string, Set<string>>();
+  const used = new Map<string, GraphRunObservation>();
+  for (const r of rows) {
+    if (!labelled.has(r.rk)) continue;
+    const strand = r.strand === 'CT' || r.strand === 'GA' ? r.strand : null;
+    for (const o of observations) {
+      const oh = ((o.kind === 'linear' ? o.lift_hap : o.hap) ?? '').toUpperCase();
+      if (o.dataset_id !== r.datasetId || !r.haps.includes(oh) || (o.strand && strand && o.strand !== strand)) continue;
+      if (ownedBy.get(o.id)?.has(r.rk) || added.get(o.id)?.has(r.rk)) continue;
+      (owned[o.id] ??= []).push(r.rk);
+      (added.get(o.id) ?? added.set(o.id, new Set()).get(o.id)!).add(r.rk);
+      used.set(o.id, o);
+    }
+  }
+  return used.size ? { observations: [...used.values()], owned } : null;
+}
+
+/** A grouping's write on the active node: the drawn rows' routing of its molecule-level records (drawnRowOwnership)
+ * against the runs of the node's lineage (a subcluster's other rows are its parent run's, as pop-outs read them),
+ * stored on this node only, never in an ancestor's snapshot; a node given provenance this way keeps its labels marked
+ * as another grouping's. */
+function withDrawnRowHaps(node: ClusterTreeNode, key: string, assignments: Record<string, number>,
+  nodes: Record<string, ClusterTreeNode>, panels: readonly PanelConfig[]): ClusterTreeNode {
+  const lineage: RunProvenance[] = [];
+  for (let n: ClusterTreeNode | undefined = node, seen = 0; n && seen < 1000; n = n.parentId ? nodes[n.parentId] : undefined, seen++) {
+    const p = n.graphProvenance?.[key];
+    if (p?.observations && p.owned) lineage.push(p);
+  }
+  const extra = lineage.length ? drawnRowOwnership(lineage, assignments, drawnRowsFor(key, panels)) : null;
+  if (!extra) return node;
+  const own = node.graphProvenance?.[key];
+  const mine = own?.observations ?? [];
+  const owned = { ...(own?.owned ?? {}) };
+  for (const [oid, rks] of Object.entries(extra.owned)) owned[oid] = [...(owned[oid] ?? []), ...rks];
+  const entry = { ...own, observations: [...mine, ...extra.observations.filter(o => !mine.some(m => m.id === o.id))], owned };
+  return { ...node, graphProvenance: { ...node.graphProvenance, [key]: entry },
+    ...(own ? {} : { graphLabelsReplaced: { ...(node.graphLabelsReplaced ?? {}), [key]: true } }) };
+}
+
 function cloneAssignments(assignments: Record<string, Record<string, number>>): Record<string, Record<string, number>> {
   return Object.fromEntries(
     Object.entries(assignments)
@@ -305,11 +418,14 @@ function buildClusterTreeNodeFromState(
     accessibilityThreshold: state.accessibilityThreshold,
     clusterFeatureRules: normalizeClusterFeatureRules(state.clusterFeatureRules),
     peakRegions: state.clusterPeakRegions.map(region => ({ ...region })),
+    windowPeaks: state.clusterWindowPeaks,
+    peakSelection: capturePeakSelection(state.peaksByRule, state.chrom, state.selectedPeaks, state.peakModes, state.clusterPeakRegions),
     selectedPeakIndices: [...state.selectedPeaks],
     peakModes: { ...state.peakModes },
     patterns: { ...state.clusterPatterns },
     centroids: { ...state.clusterCentroids },
     peakWidths: [...state.clusterPeakWidths],
+    metricCohort: { ...state.clusterMetricCohort },
     dynamicClustering: state.dynamicClustering,
     assignments: cloneAssignments(state.clusterAssignments),
     order: normalizeClusterOrderRecord(state.clusterAssignments, state.clusterOrder),
@@ -321,6 +437,7 @@ function resolveClusterNodePeakSelection(
   state: BrowserState,
   node: ClusterTreeNode,
 ): { selectedPeaks: Set<number>; peakModes: Record<number, PeakMode> } {
+  if (node.peakSelection) return projectPeakSelection(state.peaksByRule, state.chrom, node.peakSelection);
   const allPeaks = state.getAllPeaks?.() ?? [];
   const selectedPeaks = new Set<number>();
   const peakModes: Record<number, PeakMode> = {};
@@ -353,7 +470,9 @@ export type ReadFilterSourceTarget =
   | 'analysis-filter'
   | 'cluster-detail'
   | 'footprint-cooccurrence'
-  | 'transcription-filters';
+  | 'transcription-filters'
+  /** The feature hub's "Use as filter" (features/hub). */
+  | 'feature-hub';
 
 export interface ReadFilterSource {
   target: ReadFilterSourceTarget;
@@ -390,6 +509,9 @@ export interface ClusterSlice {
   clusterPatterns: Record<number, number[]>;  // clusterId -> binary pattern (for combinatorial clustering)
   clusterCentroids: Record<number, number[]>;  // clusterId -> feature centroid (non-combinatorial dynamic reassignment)
   clusterPeakWidths: number[];  // per-peak feature-column widths (for centroid masking)
+  /** The fit's molecule metric cohort, kept with its patterns or centroids: dynamic assignment ranks a view's reads
+   * against it (Codex C2-1). Set by setClusterPatterns / setClusterCentroids with a non-empty model. */
+  clusterMetricCohort: ClusterMetricCohort;
   clusterPeakRegions: Array<{ start: number; end: number; mode?: string; chrom?: string; genome?: string }>;  // Peak regions used for clustering (chrom/genome: a panel at another locus or on another assembly)
   dynamicClustering: boolean;  // Whether to dynamically re-cluster as viewport changes
   /** Merge similar clusters: clusters under this share of reads are merged away first, */
@@ -405,6 +527,9 @@ export interface ClusterSlice {
   /** Set by a restore: its clusters belong to this view, so don't re-derive them here. */
   restoredClusterViewport: { chrom: string; start: number; end: number } | null;
   dynamicOverlapMode: 'conservative' | 'aggressive';  // Partial-overlap handling for centroid reassignment
+  /** Cluster views: the metaprofile channels, the map's colour and its input features (utils/clusterViewChannels). */
+  clusterViewSettings: ClusterViewSettings;
+  setClusterViewSettings: (patch: Partial<ClusterViewSettings>) => void;
   /** Footprint size plots (Clusters › Footprint sizes): view, bins, Gaussian sigmas, normalisation (saved with the session). */
   footprintSizeSettings: FootprintSizeSettings;
   setFootprintSizeSettings: (patch: Partial<FootprintSizeSettings>) => void;
@@ -502,8 +627,9 @@ export interface ClusterSlice {
   toggleClusterSelection: (datasetId: string, clusterId: number) => void;
   clearClusterSelection: (datasetId?: string) => void;
   mergeSelectedClusters: (datasetIds?: string[]) => number;
-  setClusterPatterns: (patterns: Record<number, number[]>) => void;
-  setClusterCentroids: (centroids: Record<number, number[]>, peakWidths: number[]) => void;
+  /** A non-empty model replaces the metric cohort with `metricCohort` (none: {}); an empty one leaves it. */
+  setClusterPatterns: (patterns: Record<number, number[]>, metricCohort?: ClusterMetricCohort) => void;
+  setClusterCentroids: (centroids: Record<number, number[]>, peakWidths: number[], metricCohort?: ClusterMetricCohort) => void;
   setClusterPeakRegions: (regions: Array<{ start: number; end: number; mode?: string; chrom?: string; genome?: string }>) => void;
   /**
    * A run over panels at several loci: each panel's own matched peaks (state
@@ -536,7 +662,8 @@ export interface ClusterSlice {
   setFootprintFilterKey: (key: string | null) => void;
   setActiveReadIds: (datasetId: string, ids: string[]) => void;
   setAutozoomDistance: (distance: number) => void;
-  setClusterFocus: (datasetId: string, clusters: Set<number> | null) => void;
+  /** `record: false`: part of a larger action that records its own undo step (Split by SV), not a step of its own. */
+  setClusterFocus: (datasetId: string, clusters: Set<number> | null, options?: { record?: boolean }) => void;
   /** Focus these clusters in several panels at once, as one undo step (the read map, its legend). */
   focusClustersIn: (stateKeys: string[], clusters: Set<number> | null, label?: string) => void;
   clearClusterFocus: () => void;
@@ -549,6 +676,9 @@ export interface ClusterSlice {
   // mutated, so going back up the tree restores it intact. resultsByKey maps
   // stateKey -> { readId -> new sub-cluster id } from the backend.
   commitSubcluster: (resultsByKey: Record<string, Record<string, number>>, options?: { sourceClusterIds?: number[]; sourceLabel?: string; name?: string; readScope?: Record<string, string[]> }) => string | null;
+  /** Graph primary §2.6 `refineWithinCarriers`: one child node of the active node in which the given reads take
+   * their refined labels and every other read keeps its parent label (shown, never sent to Unassigned). */
+  refineWithinCarriers: (resultsByKey: Record<string, Record<string, number>>, options: { name: string; sourceLabel: string; groupLabels?: Record<string, Record<number, string>> }) => string | null;
   /** keepSameSvSplits: the Clusters panel's automatic re-apply of the root after a split into panels cleared the
    * active branch; a branch the user picks always drops SV splits. */
   applyClusterTreeNode: (id: string, options?: { keepSameSvSplits?: boolean }) => void;
@@ -793,6 +923,7 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
   clusterPatterns: {},  // clusterId -> binary pattern for combinatorial clustering
   clusterCentroids: {},  // clusterId -> feature centroid for non-combinatorial dynamic reassignment
   clusterPeakWidths: [],  // per-peak feature-column widths (centroid masking)
+  clusterMetricCohort: {},  // the fit's molecule metric cohort (dynamic assignment ranks against it)
   clusterPeakRegions: [],  // Peak regions used for clustering
   clusterMatchedRun: null,
   clusterWindowPeaks: null,
@@ -804,6 +935,7 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
   clusterMergeLog: null,
   restoredClusterViewport: null,
   dynamicOverlapMode: 'aggressive',  // Default: a read is Unassigned only if it overlaps NO clustering peak; partial overlaps still get reassigned
+  clusterViewSettings: DEFAULT_CLUSTER_VIEW_SETTINGS,
   footprintSizeSettings: DEFAULT_FOOTPRINT_SIZE_SETTINGS,
   readSortOrder: {},
   filteredReadIds: {},
@@ -886,6 +1018,7 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
     clusterPatterns: {},
     clusterCentroids: {},
     clusterPeakWidths: [],
+    clusterMetricCohort: {},
     clusterPeakRegions: [],
     dynamicClustering: false,
     readSortOrder: {},
@@ -916,7 +1049,7 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
     }
 
     return keepMatched(state, {
-      peaksByRule: newPeaksByRule,
+      ...peakTransaction(state, newPeaksByRule),
       selectedPeaks: new Set(),
       peakModes: {},
     });
@@ -1034,7 +1167,7 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
       ...(genome ? { genome } : {}),
     };
     return {
-      peaksByRule: { ...state.peaksByRule, [customRuleId]: [...customPeaks, newPeak] },
+      ...peakTransaction(state, { ...state.peaksByRule, [customRuleId]: [...customPeaks, newPeak] }),
       peakDrawStart: null,
       peakDrawChrom: null,
     };
@@ -1042,12 +1175,10 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
   
   clearCustomPeaks: () => set(state => {
     const customRuleId = state.getCustomRuleId();
-    const customPeakIndices = new Set((state.peaksByRule[customRuleId] || []).map(p => p.index));
     const newPeaksByRule = { ...state.peaksByRule };
     delete newPeaksByRule[customRuleId];
     return {
-      peaksByRule: newPeaksByRule,
-      selectedPeaks: new Set([...state.selectedPeaks].filter(i => !customPeakIndices.has(i))),
+      ...peakTransaction(state, newPeaksByRule),
     };
   }),
   
@@ -1081,13 +1212,15 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
     const clusterAssignments = { ...state.clusterAssignments, [datasetId]: nextAssignments };
     const clusterOrder = { ...state.clusterOrder, [datasetId]: newOrder };
     // Another grouping replaces an SV allele split's groups: its names go too.
-    const dropSvSplit = !options?.svSplit && (datasetId in (state.svSplits ?? {}) || datasetId in (state.clusterGroupLabels ?? {}));
+    const dropSvSplit = !options?.svSplit && (datasetId in (state.svSplits ?? {}) || datasetId in (state.clusterGroupLabels ?? {}) || datasetId in (state.svCarrierEvidence ?? {}));
     const svReset = dropSvSplit ? (() => {
       const svSplits = { ...state.svSplits };
       const clusterGroupLabels = { ...state.clusterGroupLabels };
+      const svCarrierEvidence = { ...state.svCarrierEvidence };
+      delete svCarrierEvidence[datasetId];
       delete svSplits[datasetId];
       delete clusterGroupLabels[datasetId];
-      return { svSplits, clusterGroupLabels };
+      return { svSplits, clusterGroupLabels, svCarrierEvidence };
     })() : {};
     // Tree nodes are immutable snapshots. Navigation/dynamic passes must not
     // mirror their (partial, viewport-specific) results back into the active
@@ -1102,7 +1235,7 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
         clusterTreeNodes: {
           ...state.clusterTreeNodes,
           [activeNode.id]: {
-            ...activeNode,
+            ...(options?.merge ? activeNode : withDrawnRowHaps(withGraphLabelsReplaced(activeNode, datasetId), datasetId, nextAssignments, state.clusterTreeNodes, state.panels)),
             assignments: cloneAssignments(clusterAssignments),
             order: cloneOrder(clusterOrder),
           },
@@ -1142,6 +1275,7 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
       clusterPatterns: {},
       clusterCentroids: {},
       clusterPeakWidths: [],
+      clusterMetricCohort: {},
       clusterPeakRegions: [],
       dynamicClustering: false,
       readSortOrder: {},
@@ -1151,6 +1285,7 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
       activeClusterTreeNodeId: null,
       clusterProfiles: {},
       svSplits: {},
+      svCarrierEvidence: {},
       clusterGroupLabels: {},
     });
     get().pushSnapshot?.('Clear clusters', { kind: 'clustering' });
@@ -1282,38 +1417,60 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
     get().pushSnapshot?.('Merge selected clusters', { kind: 'clustering' });
     return mergedKeys;
   },
-  setClusterPatterns: (patterns) => set(state => ({
-    clusterPatterns: patterns,
-    ...(state.activeClusterTreeNodeId && state.clusterTreeNodes[state.activeClusterTreeNodeId] ? {
-      clusterTreeNodes: {
-        ...state.clusterTreeNodes,
-        [state.activeClusterTreeNodeId]: {
-          ...state.clusterTreeNodes[state.activeClusterTreeNodeId],
-          patterns: { ...patterns },
+  setClusterPatterns: (patterns, metricCohort) => set(state => {
+    // A new model brings its own metric cohort (none: {}); clearing the patterns leaves the cohort to the centroids.
+    const cohort = Object.keys(patterns).length > 0 ? { ...(metricCohort ?? {}) } : null;
+    return {
+      clusterPatterns: patterns,
+      ...(cohort ? { clusterMetricCohort: cohort } : {}),
+      ...(state.activeClusterTreeNodeId && state.clusterTreeNodes[state.activeClusterTreeNodeId] ? {
+        clusterTreeNodes: {
+          ...state.clusterTreeNodes,
+          [state.activeClusterTreeNodeId]: {
+            ...state.clusterTreeNodes[state.activeClusterTreeNodeId],
+            patterns: { ...patterns },
+            ...(cohort ? { metricCohort: cohort } : {}),
+          },
         },
-      },
-    } : {}),
-  })),
-  setClusterCentroids: (centroids, peakWidths) => set(state => ({
-    clusterCentroids: centroids,
-    clusterPeakWidths: peakWidths,
-    ...(state.activeClusterTreeNodeId && state.clusterTreeNodes[state.activeClusterTreeNodeId] ? {
-      clusterTreeNodes: {
-        ...state.clusterTreeNodes,
-        [state.activeClusterTreeNodeId]: {
-          ...state.clusterTreeNodes[state.activeClusterTreeNodeId],
-          centroids: { ...centroids },
-          peakWidths: [...peakWidths],
+      } : {}),
+    };
+  }),
+  setClusterCentroids: (centroids, peakWidths, metricCohort) => set(state => {
+    const cohort = Object.keys(centroids).length > 0 ? { ...(metricCohort ?? {}) } : null;
+    return {
+      clusterCentroids: centroids,
+      clusterPeakWidths: peakWidths,
+      ...(cohort ? { clusterMetricCohort: cohort } : {}),
+      ...(state.activeClusterTreeNodeId && state.clusterTreeNodes[state.activeClusterTreeNodeId] ? {
+        clusterTreeNodes: {
+          ...state.clusterTreeNodes,
+          [state.activeClusterTreeNodeId]: {
+            ...state.clusterTreeNodes[state.activeClusterTreeNodeId],
+            centroids: { ...centroids },
+            peakWidths: [...peakWidths],
+            ...(cohort ? { metricCohort: cohort } : {}),
+          },
         },
-      },
-    } : {}),
-  })),
+      } : {}),
+    };
+  }),
   setDynamicOverlapMode: (mode) => set({ dynamicOverlapMode: mode }),
+  // Display only: never re-clusters or reloads reads (a map feature mode refetches the map alone).
+  setClusterViewSettings: (patch) => set(state => ({
+    clusterViewSettings: normalizeClusterViewSettings({ ...state.clusterViewSettings, ...patch }),
+  })),
   // Display only: a new plot is fetched; reads and clusters are left as they are.
   setFootprintSizeSettings: (patch) => set(state => ({
     footprintSizeSettings: normalizeFootprintSizeSettings({ ...state.footprintSizeSettings, ...patch }),
   })),
-  setClusterWindowPeaks: (value) => set({ clusterWindowPeaks: value }),
+  setClusterWindowPeaks: (value) => set(state => ({
+    clusterWindowPeaks: value,
+    ...(state.activeClusterTreeNodeId && state.clusterTreeNodes[state.activeClusterTreeNodeId] ? {
+      clusterTreeNodes: { ...state.clusterTreeNodes, [state.activeClusterTreeNodeId]: {
+        ...state.clusterTreeNodes[state.activeClusterTreeNodeId], windowPeaks: value,
+      } },
+    } : {}),
+  })),
   setClusterPeakRegions: (regions) => set(state => ({
     clusterPeakRegions: regions,
     ...(state.activeClusterTreeNodeId && state.clusterTreeNodes[state.activeClusterTreeNodeId] ? {
@@ -1386,7 +1543,11 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
     } : {}),
   })),
   setReadSortOrder: (datasetId, order) => set(state => ({
-    readSortOrder: { ...state.readSortOrder, [datasetId]: order }
+    readSortOrder: { ...state.readSortOrder, [datasetId]: order },
+    panels: state.panels.map(p => {
+      if ((p.stateKey ?? p.datasetId) !== datasetId || !p.graphSiteSort) return p;
+      const { graphSiteSort: _sort, ...rest } = p; return rest;
+    }),
   })),
   clearReadSortOrder: () => set({ readSortOrder: {} }),
   setFilteredReadIds: (datasetId, ids, source) => set(state => {
@@ -1409,8 +1570,9 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
   })),
   setAutozoomDistance: (distance) => set({ autozoomDistance: distance }),
   
-  setClusterFocus: (datasetId, clusters) => {
-    ensureFilterBaseline();
+  setClusterFocus: (datasetId, clusters, options) => {
+    const record = options?.record !== false;
+    if (record) ensureFilterBaseline();
     set(state => {
       const clusterFocus = { ...state.clusterFocus };
       for (const key of clusterSelectionKeys(state, datasetId)) clusterFocus[key] = clusters ? new Set(clusters) : null;
@@ -1427,7 +1589,7 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
         } : {}),
       };
     });
-    pushFilterSnapshot('Set cluster focus', `cluster-focus:${datasetId}`);
+    if (record) pushFilterSnapshot('Set cluster focus', `cluster-focus:${datasetId}`);
   },
   focusClustersIn: (stateKeys, clusters, label) => {
     if (stateKeys.length === 0) return;
@@ -1480,14 +1642,17 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
     return {
       clusterTreeNodes: {
         ...state.clusterTreeNodes,
-        [id]: buildClusterTreeNodeFromState(state, {
-          id,
-          parentId: current.parentId,
-          name: current.name,
-          sourceClusterIds: current.sourceClusterIds,
-          sourceLabel: current.sourceLabel,
-          readScope: current.readScope,
-        }),
+        [id]: {
+          ...buildClusterTreeNodeFromState(state, {
+            id,
+            parentId: current.parentId,
+            name: current.name,
+            sourceClusterIds: current.sourceClusterIds,
+            sourceLabel: current.sourceLabel,
+            readScope: current.readScope,
+          }),
+          ...keptGraphProvenance(current, state.clusterAssignments),
+        },
       },
     };
   }),
@@ -1498,14 +1663,17 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
     const existingId = state.activeClusterTreeNodeId;
     const id = existingId ?? crypto.randomUUID();
     const existing = existingId ? state.clusterTreeNodes[existingId] : undefined;
-    const node = buildClusterTreeNodeFromState(state, {
-      id,
-      parentId: existing?.parentId ?? null,
-      name: options?.name ?? existing?.name ?? 'All reads',
-      sourceClusterIds: existing?.sourceClusterIds ?? [],
-      sourceLabel: existing?.sourceLabel,
-      readScope: existing?.readScope,
-    });
+    const node = {
+      ...buildClusterTreeNodeFromState(state, {
+        id,
+        parentId: existing?.parentId ?? null,
+        name: options?.name ?? existing?.name ?? 'All reads',
+        sourceClusterIds: existing?.sourceClusterIds ?? [],
+        sourceLabel: existing?.sourceLabel,
+        readScope: existing?.readScope,
+      }),
+      ...keptGraphProvenance(existing, state.clusterAssignments),
+    };
     set(current => ({
       clusterTreeNodes: { ...current.clusterTreeNodes, [id]: node },
       clusterTreeRootIds: node.parentId === null && !current.clusterTreeRootIds.includes(id)
@@ -1586,12 +1754,17 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
     if (Object.keys(childAssignments).length === 0) return null;
 
     const id = crypto.randomUUID();
-    const node: ClusterTreeNode = {
+    let node: ClusterTreeNode = {
       ...buildClusterTreeNodeFromState(state, { id, parentId, name, sourceClusterIds, sourceLabel, readScope: options?.readScope }),
       assignments: cloneAssignments(childAssignments),
       order: normalizeClusterOrderRecord(childAssignments, {}),
       focus: childFocus,
     };
+    // The rows drawn now route its molecule-level records against its parents' graph runs, stored on this node, as a
+    // grouping's write does (withDrawnRowHaps): a pop-out after the view moved still finds them (stabilize 3, item 1).
+    for (const sk of Object.keys(childAssignments)) {
+      node = withDrawnRowHaps(node, sk, childAssignments[sk], state.clusterTreeNodes, state.panels);
+    }
 
     // Single atomic write: create child, make it active, and project it into the
     // live (flat) state the renderer reads. No detach-to-null, so no React effect
@@ -1608,6 +1781,48 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
     return id;
   },
 
+  refineWithinCarriers: (resultsByKey, options) => {
+    const state = get();
+    const parentId = state.activeClusterTreeNodeId;
+    const parent = parentId ? state.clusterTreeNodes[parentId] : null;
+    if (!parent) return null;
+    const childAssignments: Record<string, Record<string, number>> = {};
+    for (const sk of new Set([...Object.keys(parent.assignments), ...Object.keys(resultsByKey)])) {
+      const merged: Record<string, number> = { ...(parent.assignments[sk] ?? {}) };
+      for (const [id, cluster] of Object.entries(resultsByKey[sk] ?? {})) merged[id] = cluster;
+      if (Object.keys(merged).length) childAssignments[sk] = merged;
+    }
+    if (!Object.keys(childAssignments).length) return null;
+    // Panels the refinement does not label keep their order, focus, names and graph provenance (agy post-merge
+    // review, group A, HIGH 3: a refined graph run of one host wiped every other panel's).
+    const untouched = (key: string) => !(key in resultsByKey);
+    const keptOrder = Object.fromEntries(Object.entries(state.clusterOrder).filter(([k]) => untouched(k)));
+    const keptFocus = Object.fromEntries(Object.entries(state.clusterFocus).filter(([k, f]) => untouched(k) && f && k in childAssignments));
+    const order = normalizeClusterOrderRecord(childAssignments, keptOrder);
+    const groupLabels = { ...Object.fromEntries([...Object.entries(parent.groupLabels ?? {}), ...Object.entries(state.clusterGroupLabels ?? {})]
+      .filter(([k]) => untouched(k) && k in childAssignments)), ...(options.groupLabels ?? {}) };
+    const id = crypto.randomUUID();
+    const node: ClusterTreeNode = {
+      ...buildClusterTreeNodeFromState(state, { id, parentId, name: options.name, sourceClusterIds: [], sourceLabel: options.sourceLabel }),
+      assignments: cloneAssignments(childAssignments),
+      order,
+      focus: serializeClusterFocus(keptFocus),
+      refinement: true,
+      ...(Object.keys(groupLabels).length ? { groupLabels } : {}),
+      ...keptGraphProvenance(parent, childAssignments),
+    };
+    set(current => ({
+      ...(options.groupLabels ? { clusterGroupLabels: { ...current.clusterGroupLabels, ...options.groupLabels } } : {}),
+      clusterTreeNodes: { ...current.clusterTreeNodes, [id]: node },
+      activeClusterTreeNodeId: id,
+      selectedClusters: {},
+      clusterAssignments: cloneAssignments(childAssignments),
+      clusterOrder: order,
+      clusterFocus: keptFocus,
+    }));
+    return id;
+  },
+
   applyClusterTreeNode: (id, options) => {
     const state = get();
     const node = state.clusterTreeNodes[id];
@@ -1619,19 +1834,23 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
     // (the Carriers never opened expanded with the Clusters panel open; integ/fb40, docking-policy e2e).
     const sameGroups = (key: string) => Boolean(options?.keepSameSvSplits)
       && sameAssignments(node.assignments[key], state.clusterAssignments[key]);
-    const kept = withoutSvSplits(state, [...Object.keys(state.svSplits ?? {}), ...Object.keys(state.clusterGroupLabels ?? {})]
+    const kept = withoutSvSplits(state, [...Object.keys(state.svSplits ?? {}), ...Object.keys(state.clusterGroupLabels ?? {}), ...Object.keys(state.svCarrierEvidence ?? {})]
       .filter(key => !sameGroups(key)));
     set({
       activeClusterTreeNodeId: id,
       svSplits: kept.svSplits,
-      clusterGroupLabels: kept.clusterGroupLabels,
+      svCarrierEvidence: kept.svCarrierEvidence,
+      // (A refinement's C<parent>.<j> names come back with it.)
+      clusterGroupLabels: node.groupLabels ? { ...kept.clusterGroupLabels, ...node.groupLabels } : kept.clusterGroupLabels,
       clusterAssignments: cloneAssignments(node.assignments),
       clusterOrder: normalizeClusterOrderRecord(node.assignments, node.order),
       clusterFocus: deserializeClusterFocus(node.focus),
       clusterPatterns: { ...node.patterns },
       clusterCentroids: { ...(node.centroids ?? {}) },
       clusterPeakWidths: [...(node.peakWidths ?? [])],
+      clusterMetricCohort: { ...(node.metricCohort ?? {}) },
       clusterPeakRegions: node.peakRegions.map(region => ({ ...region })),
+      clusterWindowPeaks: node.windowPeaks ?? null,
       dynamicClustering: node.dynamicClustering,
       clusterPreparationSamples: node.preparationSamples ?? {},
       clusterPreparationCount: node.preparationCount ?? null,
@@ -2160,12 +2379,15 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
       accessibilityThreshold: state.accessibilityThreshold,
       clusterFeatureRules: normalizeClusterFeatureRules(state.clusterFeatureRules),
       peakRegions: state.clusterPeakRegions.map(r => ({ ...r })),
-      customPeaks: (state.peaksByRule[state.getCustomRuleId()] || []).map(p => ({ start: p.start, end: p.end, ...(p.chrom ? { chrom: p.chrom } : {}) })),
+      customPeaks: (state.peaksByRule[state.getCustomRuleId()] || []).map(p => ({ ...p })),
+      peakSelection: capturePeakSelection(state.peaksByRule, state.chrom, state.selectedPeaks, state.peakModes, state.clusterPeakRegions),
       selectedPeakIndices: [...state.selectedPeaks],
       peakModes: { ...state.peakModes },
       assignments,
       order,
       patterns: { ...state.clusterPatterns },
+      ...(Object.keys(state.clusterPatterns).length && Object.keys(state.clusterMetricCohort ?? {}).length
+        ? { metricCohort: { ...state.clusterMetricCohort } } : {}),
       panelResults,
       // Each panel's own matched peaks (a run over panels at several loci), for its charts.
       ...(state.clusterWindowPeaks ? { windowPeaks: state.clusterWindowPeaks } : {}),
@@ -2227,11 +2449,12 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
       const customRuleIdx = now.peakRules.findIndex(r => r.id === customRuleId);
       const customOffset = customRuleIdx >= 0 ? computeRuleOffset(customRuleIdx) : 0;
       const restoredCustomPeaks = saved.customPeaks.map((p, i) => ({
-        start: p.start, end: p.end, index: customOffset + i, layer: 0, isCustom: true as const,
+        ...p, index: customOffset + i, layer: 0, isCustom: true as const,
         ruleId: customRuleId,
         ...(p.chrom ? { chrom: p.chrom } : {}),
       }));
 
+      const restoredPeaks = { ...now.peaksByRule, [customRuleId]: restoredCustomPeaks };
       set({
         ...restoredClusteringState(saved, now, newAssignments),
         clusterAssignments: newAssignments,
@@ -2239,9 +2462,8 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
         clusterPatterns: saved.patterns,
         clusterPeakRegions: saved.peakRegions,
         clusterWindowPeaks: saved.windowPeaks ?? null,
-        peaksByRule: { ...now.peaksByRule, [customRuleId]: restoredCustomPeaks },
-        selectedPeaks: new Set(saved.selectedPeakIndices),
-        peakModes: saved.peakModes as Record<number, PeakMode>,
+        ...peakTransaction(now, restoredPeaks),
+        ...projectPeakSelection(restoredPeaks, now.chrom, saved.peakSelection ?? capturePeakSelection(restoredPeaks, now.chrom, saved.selectedPeakIndices, saved.peakModes, saved.peakRegions)),
         clusterMethod: saved.clusterMethod,
         clusterK: saved.clusterK,
         clusterResolution: saved.clusterResolution ?? 1,
@@ -2305,16 +2527,18 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
  * its re-classification on pan.
  */
 export function withoutSvSplits(
-  state: Partial<Pick<BrowserState, 'svSplits' | 'clusterGroupLabels'>>,
+  state: Partial<Pick<BrowserState, 'svSplits' | 'clusterGroupLabels' | 'svCarrierEvidence'>>,
   keys: Iterable<string>,
-): Pick<BrowserState, 'svSplits' | 'clusterGroupLabels'> {
+): Pick<BrowserState, 'svSplits' | 'clusterGroupLabels' | 'svCarrierEvidence'> {
   let svSplits = state.svSplits ?? {};
+  let svCarrierEvidence = state.svCarrierEvidence ?? {};
   let clusterGroupLabels = state.clusterGroupLabels ?? {};
   for (const key of keys) {
+    if (key in svCarrierEvidence) { svCarrierEvidence = { ...svCarrierEvidence }; delete svCarrierEvidence[key]; }
     if (key in svSplits) { svSplits = { ...svSplits }; delete svSplits[key]; }
     if (key in clusterGroupLabels) { clusterGroupLabels = { ...clusterGroupLabels }; delete clusterGroupLabels[key]; }
   }
-  return { svSplits, clusterGroupLabels };
+  return { svSplits, clusterGroupLabels, svCarrierEvidence };
 }
 
 /**
@@ -2327,10 +2551,10 @@ export function withoutSvSplits(
  * Its merges come back with it (Unmerge, Split back; restoredMergeLog).
  */
 export function restoredClusteringState(
-  saved: Pick<SavedCluster, 'chrom' | 'start' | 'end' | 'mergeLog'>,
-  state: Pick<BrowserState, 'clusterAssignments' | 'clusterFocus' | 'selectedClusters' | 'clusterMergeLog' | 'clusterOrder' | 'svSplits' | 'clusterGroupLabels'>,
+  saved: Pick<SavedCluster, 'chrom' | 'start' | 'end' | 'mergeLog' | 'metricCohort'>,
+  state: Pick<BrowserState, 'clusterAssignments' | 'clusterFocus' | 'selectedClusters' | 'clusterMergeLog' | 'clusterOrder' | 'svSplits' | 'clusterGroupLabels' | 'svCarrierEvidence'>,
   newAssignments: Record<string, Record<string, number>>,
-): Pick<BrowserState, 'clusterFocus' | 'selectedClusters' | 'activeClusterTreeNodeId' | 'clusterCentroids' | 'clusterPeakWidths' | 'restoredClusterViewport' | 'clusterMergeLog' | 'svSplits' | 'clusterGroupLabels'> {
+): Pick<BrowserState, 'clusterFocus' | 'selectedClusters' | 'activeClusterTreeNodeId' | 'clusterCentroids' | 'clusterPeakWidths' | 'clusterMetricCohort' | 'restoredClusterViewport' | 'clusterMergeLog' | 'svSplits' | 'clusterGroupLabels' | 'svCarrierEvidence'> {
   const clusterFocus = { ...state.clusterFocus };
   const selectedClusters = { ...state.selectedClusters };
   const replaced: string[] = [];
@@ -2347,6 +2571,8 @@ export function restoredClusteringState(
     activeClusterTreeNodeId: null,
     clusterCentroids: {},
     clusterPeakWidths: [],
+    // The saved patterns' metric cohort comes back with them (older saves: none, ranked as before).
+    clusterMetricCohort: { ...(saved.metricCohort ?? {}) },
     restoredClusterViewport: { chrom: saved.chrom, start: saved.start, end: saved.end },
     clusterMergeLog: restoredMergeLog(saved, state, newAssignments),
   };

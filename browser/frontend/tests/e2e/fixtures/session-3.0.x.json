@@ -1,0 +1,1240 @@
+{
+ "version": "2.0",
+ "timestamp": "2026-10-26T13:46:15.568273+00:00",
+ "fiberbrowser_version": "3.0.1",
+ "fiberhmm_version": "3.0.2",
+ "viewport": {
+  "chrom": "chr3",
+  "start": 128650000,
+  "end": 128665000
+ },
+ "datasets": [
+  {
+   "id": "sample_alu_chr3_GRCh38",
+   "label": "GRCh38 fiber-seq",
+   "paths": [
+    "__NATIVE_BAM__"
+   ],
+   "color": "#3b82f6",
+   "data_type": "bam",
+   "is_remote": false,
+   "layer_type": "bam",
+   "available_layers": {
+    "footprint": true,
+    "m6a": true,
+    "m5c": true,
+    "deam": false,
+    "msp": true,
+    "fire": false,
+    "nuc": true,
+    "tf": true
+   },
+   "derived_layers": {}
+  }
+ ],
+ "overlays": [],
+ "orthogonal_tracks": [],
+ "gtf": {
+  "loaded": false,
+  "path": null,
+  "gene_count": 0
+ },
+ "reference": {
+  "genome": null,
+  "fasta_path": "__FASTA__"
+ },
+ "frontend": {
+  "packs": {
+   "lab": {
+    "label": "Analysis features",
+    "panels": [
+     "accessibility",
+     "sync-regions"
+    ],
+    "tracks": [
+     "nfr-variants",
+     "sync-anchor"
+    ],
+    "features": [
+     "nfr",
+     "nfr-variant"
+    ],
+    "panelFields": [],
+    "panelOwners": [],
+    "stateKeys": [
+     "savedNfrVariants",
+     "nfrMotifSettings",
+     "chipAtlasSelections",
+     "comparisonFrames",
+     "activeComparisonFrameId"
+    ]
+   }
+  },
+  "datasets": [
+   {
+    "id": "sample_alu_chr3_GRCh38",
+    "label": "GRCh38 fiber-seq",
+    "paths": [
+     "__NATIVE_BAM__"
+    ],
+    "source_identity": "1e3b4c75cd8143544325a2f899e021589c865990bde90b85826bf1af8bc41e65",
+    "color": "#3b82f6",
+    "data_type": "bam",
+    "layer_type": "bam",
+    "available_layers": {
+     "footprint": true,
+     "m6a": true,
+     "m5c": true,
+     "deam": false,
+     "msp": true,
+     "fire": false,
+     "nuc": true,
+     "tf": true
+    },
+    "derived_layers": {}
+   }
+  ],
+  "currentGenome": null,
+  "fastaPath": "__FASTA__",
+  "referencePairs": null,
+  "primerConfigBlastDb": null,
+  "primerSavedPrimers": [],
+  "chrom": "chr3",
+  "start": 128650000,
+  "end": 128665000,
+  "isReversed": false,
+  "showRelativeCoords": false,
+  "relativeTSS": null,
+  "relativeGene": null,
+  "selectedPeaks": [],
+  "selectedClusters": {},
+  "peakModes": {},
+  "clusterK": 10,
+  "clusterResolution": 1,
+  "clusterMethod": "kmeans",
+  "clusterPeakMode": "fire",
+  "clusterFeatureRules": [],
+  "analysisSortRules": [],
+  "analysisFilterRules": [],
+  "clusterAssignments": {},
+  "svSplits": {},
+  "clusterGroupLabels": {},
+  "clusterOrder": {},
+  "clusterPatterns": {},
+  "clusterCentroids": {},
+  "clusterPeakWidths": [],
+  "clusterPeakRegions": [],
+  "clusterMatchedRun": null,
+  "clusterWindowPeaks": null,
+  "dynamicClustering": false,
+  "dynamicOverlapMode": "aggressive",
+  "clusterTreeNodes": {},
+  "clusterTreeRootIds": [],
+  "activeClusterTreeNodeId": null,
+  "readSortOrder": {},
+  "subnucleosomalThreshold": 90,
+  "accessibilityThreshold": 0.5,
+  "mergeMinFraction": 0.05,
+  "mergeMaxSimilarity": 0.95,
+  "mergeStrategy": "cosine",
+  "mergeThresholds": {},
+  "clusterMergeLog": null,
+  "filteredReadIds": {},
+  "readFilterSources": {},
+  "excludedReadIds": {},
+  "clusterFocus": {},
+  "readStateDetails": {},
+  "transcriptionStateFilters": {
+   "pause": false,
+   "pic": false,
+   "elongating": null,
+   "elongating_max": null
+  },
+  "peakRules": [
+   {
+    "id": "default-accessibility",
+    "name": "Accessibility",
+    "source": "accessibility",
+    "enabled": true,
+    "color": "#1d4ed8",
+    "opacity": 0.7,
+    "useGradient": true,
+    "smoothWidth": 100,
+    "thresholds": [
+     0.5,
+     0.3,
+     0.15,
+     0.08
+    ],
+    "minPeakWidth": 80,
+    "minReads": 5
+   },
+   {
+    "id": "default-custom",
+    "name": "Custom",
+    "source": "custom",
+    "enabled": true,
+    "color": "#f59e0b",
+    "opacity": 0.65,
+    "useGradient": false,
+    "smoothWidth": 100,
+    "thresholds": [
+     0.5,
+     0.3,
+     0.15,
+     0.08
+    ],
+    "minPeakWidth": 1,
+    "minReads": 1
+   }
+  ],
+  "peaksByRule": {
+   "default-accessibility": [
+    {
+     "start": 128650206,
+     "end": 128650330,
+     "index": 0,
+     "layer": 1,
+     "score": 0.324057936668396,
+     "threshold": 0.3,
+     "ruleId": "default-accessibility"
+    },
+    {
+     "start": 128650795,
+     "end": 128650957,
+     "index": 1,
+     "layer": 1,
+     "score": 0.4498465061187744,
+     "threshold": 0.3,
+     "ruleId": "default-accessibility"
+    },
+    {
+     "start": 128650355,
+     "end": 128650654,
+     "index": 2,
+     "layer": 2,
+     "score": 0.28246375918388367,
+     "threshold": 0.15,
+     "ruleId": "default-accessibility"
+    },
+    {
+     "start": 128650982,
+     "end": 128651062,
+     "index": 3,
+     "layer": 2,
+     "score": 0.2686566710472107,
+     "threshold": 0.15,
+     "ruleId": "default-accessibility"
+    },
+    {
+     "start": 128651110,
+     "end": 128651210,
+     "index": 4,
+     "layer": 2,
+     "score": 0.19552239775657654,
+     "threshold": 0.15,
+     "ruleId": "default-accessibility"
+    },
+    {
+     "start": 128653652,
+     "end": 128653901,
+     "index": 5,
+     "layer": 2,
+     "score": 0.24402984976768494,
+     "threshold": 0.15,
+     "ruleId": "default-accessibility"
+    },
+    {
+     "start": 128654191,
+     "end": 128654278,
+     "index": 6,
+     "layer": 2,
+     "score": 0.18868029117584229,
+     "threshold": 0.15,
+     "ruleId": "default-accessibility"
+    },
+    {
+     "start": 128663268,
+     "end": 128663450,
+     "index": 7,
+     "layer": 2,
+     "score": 0.2094285637140274,
+     "threshold": 0.15,
+     "ruleId": "default-accessibility"
+    },
+    {
+     "start": 128650080,
+     "end": 128650181,
+     "index": 8,
+     "layer": 3,
+     "score": 0.24710145592689514,
+     "threshold": 0.08,
+     "ruleId": "default-accessibility"
+    },
+    {
+     "start": 128653024,
+     "end": 128653120,
+     "index": 9,
+     "layer": 3,
+     "score": 0.09914066642522812,
+     "threshold": 0.08,
+     "ruleId": "default-accessibility"
+    },
+    {
+     "start": 128653155,
+     "end": 128653627,
+     "index": 10,
+     "layer": 3,
+     "score": 0.16820895671844482,
+     "threshold": 0.08,
+     "ruleId": "default-accessibility"
+    },
+    {
+     "start": 128653926,
+     "end": 128654166,
+     "index": 11,
+     "layer": 3,
+     "score": 0.13651514053344727,
+     "threshold": 0.08,
+     "ruleId": "default-accessibility"
+    },
+    {
+     "start": 128654368,
+     "end": 128654509,
+     "index": 12,
+     "layer": 3,
+     "score": 0.12358509004116058,
+     "threshold": 0.08,
+     "ruleId": "default-accessibility"
+    },
+    {
+     "start": 128654596,
+     "end": 128654934,
+     "index": 13,
+     "layer": 3,
+     "score": 0.11218749731779099,
+     "threshold": 0.08,
+     "ruleId": "default-accessibility"
+    },
+    {
+     "start": 128655057,
+     "end": 128655201,
+     "index": 14,
+     "layer": 3,
+     "score": 0.09939732402563095,
+     "threshold": 0.08,
+     "ruleId": "default-accessibility"
+    },
+    {
+     "start": 128655922,
+     "end": 128656011,
+     "index": 15,
+     "layer": 3,
+     "score": 0.0925000011920929,
+     "threshold": 0.08,
+     "ruleId": "default-accessibility"
+    },
+    {
+     "start": 128656074,
+     "end": 128656359,
+     "index": 16,
+     "layer": 3,
+     "score": 0.1513793021440506,
+     "threshold": 0.08,
+     "ruleId": "default-accessibility"
+    },
+    {
+     "start": 128656635,
+     "end": 128656725,
+     "index": 17,
+     "layer": 3,
+     "score": 0.10948275774717331,
+     "threshold": 0.08,
+     "ruleId": "default-accessibility"
+    },
+    {
+     "start": 128656808,
+     "end": 128657068,
+     "index": 18,
+     "layer": 3,
+     "score": 0.10929824411869049,
+     "threshold": 0.08,
+     "ruleId": "default-accessibility"
+    },
+    {
+     "start": 128657592,
+     "end": 128658535,
+     "index": 19,
+     "layer": 3,
+     "score": 0.14169231057167053,
+     "threshold": 0.08,
+     "ruleId": "default-accessibility"
+    },
+    {
+     "start": 128658578,
+     "end": 128658752,
+     "index": 20,
+     "layer": 3,
+     "score": 0.16469696164131165,
+     "threshold": 0.08,
+     "ruleId": "default-accessibility"
+    },
+    {
+     "start": 128659280,
+     "end": 128659734,
+     "index": 21,
+     "layer": 3,
+     "score": 0.1336764693260193,
+     "threshold": 0.08,
+     "ruleId": "default-accessibility"
+    },
+    {
+     "start": 128659904,
+     "end": 128660005,
+     "index": 22,
+     "layer": 3,
+     "score": 0.10884057730436325,
+     "threshold": 0.08,
+     "ruleId": "default-accessibility"
+    },
+    {
+     "start": 128660025,
+     "end": 128660207,
+     "index": 23,
+     "layer": 3,
+     "score": 0.12317705899477005,
+     "threshold": 0.08,
+     "ruleId": "default-accessibility"
+    },
+    {
+     "start": 128660241,
+     "end": 128660417,
+     "index": 24,
+     "layer": 3,
+     "score": 0.13979262113571167,
+     "threshold": 0.08,
+     "ruleId": "default-accessibility"
+    },
+    {
+     "start": 128660862,
+     "end": 128661057,
+     "index": 25,
+     "layer": 3,
+     "score": 0.11334702372550964,
+     "threshold": 0.08,
+     "ruleId": "default-accessibility"
+    },
+    {
+     "start": 128662668,
+     "end": 128662772,
+     "index": 26,
+     "layer": 3,
+     "score": 0.11514286696910858,
+     "threshold": 0.08,
+     "ruleId": "default-accessibility"
+    },
+    {
+     "start": 128663008,
+     "end": 128663117,
+     "index": 27,
+     "layer": 3,
+     "score": 0.10128571093082428,
+     "threshold": 0.08,
+     "ruleId": "default-accessibility"
+    },
+    {
+     "start": 128663891,
+     "end": 128664003,
+     "index": 28,
+     "layer": 3,
+     "score": 0.11014492809772491,
+     "threshold": 0.08,
+     "ruleId": "default-accessibility"
+    },
+    {
+     "start": 128664742,
+     "end": 128664991,
+     "index": 29,
+     "layer": 3,
+     "score": 0.1052054762840271,
+     "threshold": 0.08,
+     "ruleId": "default-accessibility"
+    }
+   ]
+  },
+  "peaksLocked": false,
+  "selectedGenes": [],
+  "viewMode": "sideBySide",
+  "sortMode": "position",
+  "sortSelection": null,
+  "filterMode": "either",
+  "spanningOnly": false,
+  "downsampleCount": null,
+  "readDisplayMode": "sample",
+  "allReadsDisplayCap": 2000,
+  "backgroundReadCap": 1000,
+  "clusterPreparationCount": 10000,
+  "clusterPreparationSamples": {},
+  "analysisSampleCount": null,
+  "analysisSampleSeed": "fiberbrowser-analysis",
+  "classRegionMode": "view",
+  "enabledModTypes": {
+   "mod": false,
+   "m6a": false,
+   "m5c": false,
+   "deam": false,
+   "fire": false,
+   "footprint": true,
+   "nuc": true,
+   "tf": true
+  },
+  "enabledMetaProfiles": {
+   "nuc": true,
+   "tf": true,
+   "fire": false,
+   "m6a": false,
+   "m5c": false,
+   "deam": false
+  },
+  "cachedLayerTypes": {},
+  "legacyLayerInference": true,
+  "legacyNucMinSize": 90,
+  "clickTargetLayer": null,
+  "footprintAnalysisLayer": null,
+  "fillSmallGaps": false,
+  "fillGapSize": 50,
+  "hideTerminalGaps": true,
+  "terminalGapThreshold": 500,
+  "hideShortEndFootprints": true,
+  "minFpQuality": 0,
+  "minFootprints": 5,
+  "minFootprintsAuto": true,
+  "signalFilters": {
+   "hideBackground": false,
+   "excludeUnscored": false,
+   "requireDetectable": false,
+   "requireStructure": false
+  },
+  "showDuplicateReads": false,
+  "enabledCigarTypes": {
+   "mismatches": false,
+   "insertions": false,
+   "deletions": false
+  },
+  "svDisplayEnabled": true,
+  "svMinLen": 50,
+  "svMinSupport": 3,
+  "darkMode": false,
+  "peakSettings": {
+   "smoothWidth": 100,
+   "thresholdStrong": 0.5,
+   "thresholdMedium": 0.3,
+   "thresholdWeak": 0.15,
+   "thresholdRare": 0.08
+  },
+  "activeColormap": {
+   "name": "Default",
+   "backgroundColor": "#ffffff",
+   "readBackgroundColor": "#f1f5f9",
+   "noReadBackgroundColor": "#ffffff",
+   "rules": [
+    {
+     "id": "pol2",
+     "name": "Pol II",
+     "color": "#ff69b4",
+     "opacity": 1,
+     "sizeMin": 35,
+     "sizeMax": 65,
+     "targetLayers": [],
+     "conditions": [
+      {
+       "target": "gene"
+      }
+     ],
+     "enabled": true,
+     "colorMode": "solid",
+     "qualityGates": []
+    },
+    {
+     "id": "tf",
+     "name": "TF",
+     "color": "#87ceeb",
+     "opacity": 1,
+     "sizeMin": 1,
+     "sizeMax": 89,
+     "targetLayers": [],
+     "conditions": [
+      {
+       "target": "peak",
+       "minPeakLayer": 1
+      },
+      {
+       "target": "gene",
+       "negate": true
+      }
+     ],
+     "enabled": true,
+     "colorMode": "solid",
+     "qualityGates": []
+    },
+    {
+     "id": "subnuc",
+     "name": "Subnucleosome",
+     "color": "#9ca3af",
+     "opacity": 1,
+     "sizeMin": 1,
+     "sizeMax": 89,
+     "targetLayers": [
+      "tf"
+     ],
+     "conditions": [],
+     "enabled": true,
+     "colorMode": "solid",
+     "qualityGates": []
+    },
+    {
+     "id": "fire",
+     "name": "Accessibility",
+     "color": "#ea580c",
+     "opacity": 1,
+     "sizeMin": 1,
+     "sizeMax": null,
+     "targetLayers": [
+      "fire"
+     ],
+     "conditions": [],
+     "qualityGates": [
+      {
+       "qualityName": "aq",
+       "minValue": 230
+      }
+     ],
+     "enabled": true,
+     "colorMode": "solid"
+    },
+    {
+     "id": "nuc",
+     "name": "Nucleosome",
+     "color": "#33a040",
+     "opacity": 1,
+     "sizeMin": 90,
+     "sizeMax": null,
+     "targetLayers": [],
+     "conditions": [],
+     "enabled": true,
+     "colorMode": "solid",
+     "qualityGates": []
+    }
+   ],
+   "qualityShading": {
+    "enabled": false,
+    "mode": "quality",
+    "vizMode": "opacity",
+    "invert": false,
+    "minOpacity": 0.2,
+    "maxOpacity": 1
+   },
+   "tfOverlay": {
+    "enabled": true,
+    "color": "#e040fb",
+    "minOpacity": 0.2,
+    "maxOpacity": 0.85,
+    "minTq": 0
+   },
+   "layerOpacities": {
+    "nuc": 1,
+    "tf": 0.9,
+    "nuc_sr": 0.9,
+    "tf_sr": 0.9,
+    "fire": 0.55
+   },
+   "layerBackgroundOpacities": {
+    "nuc": 1,
+    "tf": 1,
+    "nuc_sr": 1,
+    "tf_sr": 1,
+    "fire": 1
+   },
+   "displaySmoothing": {
+    "enabled": false,
+    "sigmaX": 0,
+    "sigmaY": 0
+   },
+   "qualityFilters": [
+    {
+     "layer": "fire",
+     "qualityName": "aq",
+     "minValue": 230,
+     "enabled": true
+    }
+   ],
+   "edgeAmbiguity": {
+    "mode": "strict",
+    "applyNuc": true,
+    "applyTf": true,
+    "maxGapBp": 30
+   }
+  },
+  "showHiddenTrackStrip": true,
+  "fillReadHeight": true,
+  "readSeparatorMode": "auto",
+  "readSeparatorMinHeight": 3,
+  "readSeparatorWidth": 1,
+  "showReadTooltip": false,
+  "showCoverageHistogram": false,
+  "maxRegionForReads": 100000,
+  "motifThreshold": 0.85,
+  "sessionName": "",
+  "uiScale": 1,
+  "readRowHeight": 1,
+  "readScrollOffsets": {},
+  "showGenomeOverview": false,
+  "publicMode": false,
+  "panels": [
+   {
+    "id": "panel-1793022369437-0",
+    "contentType": "dataset",
+    "datasetId": "sample_alu_chr3_GRCh38",
+    "subTracks": [
+     {
+      "type": "axis",
+      "visible": true
+     },
+     {
+      "type": "fire",
+      "visible": true
+     },
+     {
+      "type": "consensus",
+      "visible": true
+     },
+     {
+      "type": "nfr-variants",
+      "visible": true
+     },
+     {
+      "type": "microc",
+      "visible": true
+     },
+     {
+      "type": "coacc",
+      "visible": true
+     },
+     {
+      "type": "composite-__default_metaprofile__",
+      "visible": true
+     },
+     {
+      "type": "capture",
+      "visible": true
+     },
+     {
+      "type": "primer",
+      "visible": true
+     },
+     {
+      "type": "snps",
+      "visible": true
+     },
+     {
+      "type": "sv",
+      "visible": true
+     },
+     {
+      "type": "coverage",
+      "visible": true
+     },
+     {
+      "type": "sync-anchor",
+      "visible": true
+     },
+     {
+      "type": "reads",
+      "visible": true
+     },
+     {
+      "type": "sequence",
+      "visible": true
+     },
+     {
+      "type": "gene",
+      "visible": true
+     }
+    ],
+    "collapsed": false,
+    "linkGroup": null,
+    "layoutRow": 0
+   }
+  ],
+  "fullViewPanelId": null,
+  "navigationMode": "linked",
+  "editMode": false,
+  "navigatorRegions": [],
+  "highlights": [],
+  "selectedReadIds": {},
+  "selectedDatasets": [],
+  "selectedFootprints": [],
+  "footprintGroups": [],
+  "footprintCrossHighlight": true,
+  "savedClusters": [],
+  "selectedFeatures": [],
+  "pinnedMotifs": {},
+  "motifScoreMode": "p",
+  "motifPValue": 0.0001,
+  "customMotifs": [],
+  "savedNfrVariants": [],
+  "nfrMotifSettings": {
+   "background": "local",
+   "strand": "both",
+   "familySimilarity": 0.8,
+   "flank": 300,
+   "coreBp": 10,
+   "minReads": 10
+  },
+  "chipAtlasSelections": {},
+  "comparisonFrames": [],
+  "activeComparisonFrameId": null,
+  "captureRegions": [],
+  "capturePadding": 0,
+  "hiddenStripPanels": [],
+  "collapsedRows": [],
+  "analysisStripCollapsed": false,
+  "cooccClusterSelections": [],
+  "catalog": [],
+  "compositeTracks": [
+   {
+    "id": "__default_metaprofile__",
+    "label": "Metaprofile",
+    "kind": "metaprofile",
+    "sources": [
+     {
+      "id": "79fc9c49-2d07-4549-b201-7e326b5ca0f3",
+      "ref": {
+       "kind": "metaprofile",
+       "ruleId": "nuc"
+      },
+      "color": "#16a34a",
+      "visible": true,
+      "negate": false,
+      "scale": 1
+     },
+     {
+      "id": "2fc13360-30e0-4ab9-bfcb-b2845e70c549",
+      "ref": {
+       "kind": "metaprofile",
+       "ruleId": "tf"
+      },
+      "color": "#e040fb",
+      "visible": true,
+      "negate": false,
+      "scale": 1
+     },
+     {
+      "id": "cccdf379-f3a6-4fe2-a00c-3035acb70103",
+      "ref": {
+       "kind": "metaprofile",
+       "ruleId": "fire"
+      },
+      "color": "#ea580c",
+      "visible": false,
+      "negate": false,
+      "scale": 1
+     },
+     {
+      "id": "06a5181a-eb40-4eb6-b068-93e5a7d3b47d",
+      "ref": {
+       "kind": "metaprofile",
+       "ruleId": "m6a"
+      },
+      "color": "#6b21a8",
+      "visible": false,
+      "negate": false,
+      "scale": 1
+     },
+     {
+      "id": "c04a02d4-0b65-4da0-8142-48b50fbcd205",
+      "ref": {
+       "kind": "metaprofile",
+       "ruleId": "m5c"
+      },
+      "color": "#dc2626",
+      "visible": false,
+      "negate": false,
+      "scale": 1
+     }
+    ],
+    "scaleMode": "per-source",
+    "logScale": false,
+    "visible": true,
+    "groupAutoscaleSelected": false,
+    "showAxes": true,
+    "removable": false
+   }
+  ],
+  "savedTracks": [],
+  "coaccSettings": {
+   "coaccTrackMode": null,
+   "coaccSignalType": "accessibility",
+   "coaccLayer": null,
+   "coaccNormalization": "correlation",
+   "coaccScaling": "linear",
+   "coaccColormap": "fall",
+   "coaccMinCoverage": 20,
+   "coaccBinSize": 0,
+   "coaccArcThreshold": 1.5,
+   "coaccArcMaxArcs": 200,
+   "coaccArcMinDistance": 2,
+   "coaccV4cViewpoint": null
+  },
+  "commandHistory": [],
+  "dafcSettings": {
+   "dafcChrom": "chr1",
+   "dafcStart": 0,
+   "dafcEnd": 10000000,
+   "dafcResolution": 10000,
+   "dafcXStart": 0,
+   "dafcXEnd": 10000000,
+   "dafcYStart": 0,
+   "dafcYEnd": 10000000,
+   "dafcSelection": null,
+   "contactMode": null,
+   "contactModeOverride": null,
+   "splitViewMode": "region_independent",
+   "splitViewLinked": false,
+   "microcTrackMode": null,
+   "microcMinDistance": 500,
+   "microcMaxDistance": 100000,
+   "microcResolution": null,
+   "arcStrengthFilter": 0,
+   "arcStrengthFilterMax": 1,
+   "filterByPeaks": true,
+   "matrixScaling": "log",
+   "matrixColormap": "fall",
+   "matrixNormalization": "balanced",
+   "matrixFocusRegion": null,
+   "matrixValueMin": null,
+   "matrixValueMax": null,
+   "arcDisplayMode": "individual",
+   "arcMergeBinSize": 1000,
+   "arcNormalization": "none",
+   "arcMinCount": 0,
+   "arcOEFloor": 0,
+   "arcAccCorrect": false,
+   "arcAccLog": false,
+   "v4cNormalization": "none",
+   "v4cSmoothing": 3,
+   "v4cMinCount": 0,
+   "v4cViewpoint": null,
+   "linkedSplitMode": "vertical",
+   "xViewport": null,
+   "yViewport": null,
+   "linkedSortBy": "x",
+   "xViewportFilter": false,
+   "yViewportFilter": false,
+   "showUnlinkedReads": false,
+   "highlightLinkedMolecules": false,
+   "showGeneAnnotations": false,
+   "dafcFollowBrowser": true
+  },
+  "annotationSettings": {
+   "annotationFiles": [],
+   "enabledAnnotationTypes": {},
+   "annotationThresholds": {},
+   "annotationColors": {},
+   "annotationOpacityMin": 0.2,
+   "annotationOpacityMax": 0.6
+  },
+  "primerState": {
+   "targetStart": null,
+   "targetEnd": null,
+   "pair": null,
+   "configFasta": "__FASTA__",
+   "configBlastDb": null,
+   "designing": false,
+   "error": null,
+   "designResults": [],
+   "savedPrimers": [],
+   "mode": "standard",
+   "dafcQuads": [],
+   "cartTrackDisplay": "off"
+  },
+  "supplementalUiState": {
+   "bookmarks": [],
+   "selectedPanelIds": [],
+   "dismissedPanelTypes": [],
+   "activeSection": "file",
+   "openSections": [
+    "file"
+   ]
+  },
+  "regionCatalogs": {
+   "GRCh38_chr3.fa": {
+    "version": 1,
+    "genome": "GRCh38_chr3.fa",
+    "categories": [
+     {
+      "name": "Top regions \u00b7 GRCh38 fiber-seq",
+      "source": "top",
+      "fingerprint": "b44bd14c2b7b7f7658b8fa6f",
+      "dataset": "GRCh38 fiber-seq",
+      "note": "9 regions from 423 reads in 109 ms",
+      "id": "c_mvpb85511df62",
+      "created": "2026-10-26T13:46:12.613Z"
+     }
+    ],
+    "entries": [
+     {
+      "chrom": "chr3",
+      "start": 128618383,
+      "end": 128739930,
+      "label": "chr3:128,618,383-128,739,930",
+      "autoLabel": "chr3:128,618,383-128,739,930",
+      "source": "top",
+      "reads": 423,
+      "detail": "No gene annotation loaded",
+      "id": "e_mvpb85512qrq2",
+      "category": "c_mvpb85511df62",
+      "created": "2026-10-26T13:46:12.613Z"
+     },
+     {
+      "chrom": "chr3",
+      "start": 128613675,
+      "end": 128618383,
+      "label": "chr3:128,613,675-128,618,383",
+      "autoLabel": "chr3:128,613,675-128,618,383",
+      "source": "top",
+      "reads": 43,
+      "detail": "No gene annotation loaded",
+      "id": "e_mvpb855133tkz",
+      "category": "c_mvpb85511df62",
+      "created": "2026-10-26T13:46:12.613Z"
+     },
+     {
+      "chrom": "chr3",
+      "start": 128739930,
+      "end": 128745030,
+      "label": "chr3:128,739,930-128,745,030",
+      "autoLabel": "chr3:128,739,930-128,745,030",
+      "source": "top",
+      "reads": 43,
+      "detail": "No gene annotation loaded",
+      "id": "e_mvpb855142flt",
+      "category": "c_mvpb85511df62",
+      "created": "2026-10-26T13:46:12.613Z"
+     },
+     {
+      "chrom": "chr3",
+      "start": 128609280,
+      "end": 128613675,
+      "label": "chr3:128,609,280-128,613,675",
+      "autoLabel": "chr3:128,609,280-128,613,675",
+      "source": "top",
+      "reads": 21,
+      "detail": "No gene annotation loaded",
+      "id": "e_mvpb85515setc",
+      "category": "c_mvpb85511df62",
+      "created": "2026-10-26T13:46:12.613Z"
+     },
+     {
+      "chrom": "chr3",
+      "start": 128745030,
+      "end": 128749189,
+      "label": "chr3:128,745,030-128,749,189",
+      "autoLabel": "chr3:128,745,030-128,749,189",
+      "source": "top",
+      "reads": 21,
+      "detail": "No gene annotation loaded",
+      "id": "e_mvpb8551653fn",
+      "category": "c_mvpb85511df62",
+      "created": "2026-10-26T13:46:12.613Z"
+     },
+     {
+      "chrom": "chr3",
+      "start": 128605906,
+      "end": 128609280,
+      "label": "chr3:128,605,906-128,609,280",
+      "autoLabel": "chr3:128,605,906-128,609,280",
+      "source": "top",
+      "reads": 10,
+      "detail": "No gene annotation loaded",
+      "id": "e_mvpb85517nc9s",
+      "category": "c_mvpb85511df62",
+      "created": "2026-10-26T13:46:12.613Z"
+     },
+     {
+      "chrom": "chr3",
+      "start": 128749189,
+      "end": 128753269,
+      "label": "chr3:128,749,189-128,753,269",
+      "autoLabel": "chr3:128,749,189-128,753,269",
+      "source": "top",
+      "reads": 10,
+      "detail": "No gene annotation loaded",
+      "id": "e_mvpb85518s736",
+      "category": "c_mvpb85511df62",
+      "created": "2026-10-26T13:46:12.613Z"
+     },
+     {
+      "chrom": "chr3",
+      "start": 128601904,
+      "end": 128605906,
+      "label": "chr3:128,601,904-128,605,906",
+      "autoLabel": "chr3:128,601,904-128,605,906",
+      "source": "top",
+      "reads": 4,
+      "detail": "No gene annotation loaded",
+      "id": "e_mvpb85519nb4o",
+      "category": "c_mvpb85511df62",
+      "created": "2026-10-26T13:46:12.613Z"
+     },
+     {
+      "chrom": "chr3",
+      "start": 128753269,
+      "end": 128755466,
+      "label": "chr3:128,753,269-128,755,466",
+      "autoLabel": "chr3:128,753,269-128,755,466",
+      "source": "top",
+      "reads": 4,
+      "detail": "No gene annotation loaded",
+      "id": "e_mvpb8551azpfm",
+      "category": "c_mvpb85511df62",
+      "created": "2026-10-26T13:46:12.613Z"
+     }
+    ],
+    "revision": 0
+   }
+  },
+  "splitPanelReads": {},
+  "sessionManifest": {
+   "generatedAt": "2026-10-26T13:46:15.564Z",
+   "sessionName": "Untitled session",
+   "viewport": {
+    "chrom": "chr3",
+    "start": 128650000,
+    "end": 128665000,
+    "reversed": false
+   },
+   "reference": {
+    "genome": null,
+    "fastaPath": "__FASTA__",
+    "hasFasta": true
+   },
+   "datasets": [
+    {
+     "id": "sample_alu_chr3_GRCh38",
+     "label": "GRCh38 fiber-seq",
+     "paths": [
+      "__NATIVE_BAM__"
+     ],
+     "dataType": "bam",
+     "layers": [
+      "footprint",
+      "m5c",
+      "m6a",
+      "msp",
+      "nuc",
+      "tf"
+     ]
+    }
+   ],
+   "tracks": {
+    "catalogEntries": 0,
+    "unavailableCatalogEntries": 0,
+    "compositeTracks": 1,
+    "savedTracks": 0
+   },
+   "labeling": {
+    "presetName": "Default",
+    "rules": 5,
+    "enabledRules": 5,
+    "qualityFilters": [
+     "fire.aq>=230"
+    ],
+    "readBackgroundColor": "#f1f5f9",
+    "noReadBackgroundColor": "#ffffff",
+    "displaySmoothing": {
+     "enabled": false,
+     "sigmaX": 0,
+     "sigmaY": 0
+    },
+    "layerOpacities": {
+     "fire": 0.55,
+     "nuc": 1,
+     "nuc_sr": 0.9,
+     "tf": 0.9,
+     "tf_sr": 0.9
+    },
+    "layerBackgroundOpacities": {
+     "fire": 1,
+     "nuc": 1,
+     "nuc_sr": 1,
+     "tf": 1,
+     "tf_sr": 1
+    }
+   },
+   "reproducibility": {
+    "seed": "fiberbrowser-analysis",
+    "analysisCap": null,
+    "clusterPreparationCount": 10000,
+    "clusterPreparationSamples": {},
+    "displayCap": null,
+    "displayMode": "sample",
+    "allReadsDisplayCap": 2000,
+    "backgroundReadCap": 1000,
+    "peaksLocked": false,
+    "selectedPeaks": 0,
+    "peakRules": 2,
+    "clusterMethod": "kmeans",
+    "clusterK": 10,
+    "clusterFeatureRules": {
+     "total": 0,
+     "enabled": 0,
+     "terms": 0,
+     "names": []
+    },
+    "spanningOnly": false,
+    "qualityFilters": [
+     "fire.aq>=230"
+    ],
+    "disabledCachedLayers": [],
+    "legacyLayerInference": {
+     "enabled": true,
+     "nucMinSize": 90
+    },
+    "shortEndFootprints": {
+     "hidden": true,
+     "minBp": 90,
+     "maxEndGapBp": 30
+    },
+    "footprintRules": {
+     "total": 0,
+     "enabled": 0,
+     "pinned": 0,
+     "layers": [],
+     "rules": []
+    },
+    "historySnapshots": 0
+   },
+   "warnings": []
+  }
+ },
+ "packs": {
+  "lab": {
+   "name": "lab",
+   "label": "Analysis features",
+   "flavor": "public",
+   "parts": []
+  }
+ },
+ "file_fingerprints": {
+  "__NATIVE_BAM__": {
+   "size": 5604763,
+   "head_sha256": "c6e88b64dcfcbd21870814a8a3ba24dfab9aa15d55d8ffd87a4e716264bf0467"
+  },
+  "__FASTA__": {
+   "size": 198298870,
+   "head_sha256": "766fe2b2f699cc4c464322d33ca251321ffcc989aea0ce9aa657e9283a3f230b"
+  }
+ },
+ "_fixture_note": "Saved by FiberBrowser 3.0.1 (24c7a5c58) with one native BAM at the chr3 AluY locus; paths and the sample name replaced by placeholders."
+}

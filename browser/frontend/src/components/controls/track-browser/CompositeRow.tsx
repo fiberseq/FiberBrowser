@@ -14,12 +14,14 @@ import type {
 } from '../../../types/dataset';
 import { TRACK_COLORS } from '../../tracks/TrackContainerConstants';
 import { getDatasetLayerLabel, getLayerColor, getLayerLabel, getMetaprofileSourceEntries } from '../../../utils/layerColors';
+import { displayRuleColor } from '../../../utils/layerColourFollow';
 import { AnalysisButton } from '../shared';
 import { catalogRefKind, unloadCompositeSource, unloadCompositeTrack } from '../../../utils/trackLoader';
 import { AddTrackBox } from './AddTrackBox';
 import { Check, Eye, EyeOff } from '../../ui/Icons';
 import { followsActiveLayers, isDefaultMetaprofile } from '../../../utils/defaultMetaprofile';
 import { DisclosureChevron } from '../../ui/Disclosure';
+import { useLayerColorVersion } from '../../../features/layerColours/state';
 
 function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
@@ -63,6 +65,8 @@ function AddSourcePicker({
   onPick: (ref: SourceRef) => void;
   onClose: () => void;
 }) {
+  // Re-render when the user's layer colours change (Labels → Layer colours).
+  useLayerColorVersion();
   const datasets = useBrowserStore(useShallow(s => s.datasets));
   const activeColormap = useBrowserStore(s => s.activeColormap) as {
     rules?: Array<{ id: string; name: string; color: string }>;
@@ -87,7 +91,7 @@ function AddSourcePicker({
         ...layerOptions,
         ...(activeColormap?.rules ?? [])
           .filter(rule => !layerOptionIds.has(rule.id) && rule.id !== 'subnuc')
-          .map(rule => ({ id: rule.id, name: rule.name, color: rule.color, title: 'Color-rule metaprofile' })),
+          .map(rule => ({ id: rule.id, name: rule.name, color: displayRuleColor(rule), title: 'Color-rule metaprofile' })),
       ]
     : [];
 

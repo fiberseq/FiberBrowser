@@ -34,7 +34,7 @@ workspace), **New Independent Workspace**, **Open in Browser** (the same
 session in your default web browser) and **Quit**. The guided tour opens in a
 window of its own. Quitting (or closing the last window) stops the server.
 
-It is self-contained: it bundles Python, FiberHMM 3 (footprint classes,
+It is self-contained: it bundles Python, FiberHMM 3.2 (footprint classes,
 chemistry detection, BAM export), minimap2 (MIT licence, for new DAF-seq
 runs) and NCBI BLAST+ 2.17.0 (`blastn` and `makeblastdb`, for primer checks;
 NCBI's code is public domain, the libraries NCBI's binaries include keep
@@ -114,7 +114,7 @@ Windows (Z:) are not visible to WSL unless mounted inside it (see the message
 FiberBrowser shows); files of your other WSL distributions are not visible to
 FiberBrowser's either: copy them to a Windows folder or FiberBrowser's own.
 
-**What's inside**: the same as the Mac app (Python, FiberHMM 3, minimap2,
+**What's inside**: the same as the Mac app (Python, FiberHMM 3.2, minimap2,
 BLAST+ `blastn`/`makeblastdb` (Debian bookworm's `ncbi-blast+` 2.12.0, in
 `/usr/bin`), primer design, contact maps,
 UMAP; no Copilot; licences in `/usr/local/share/licenses` and, for the Debian
@@ -174,11 +174,11 @@ fiberbrowser -b sample.bam -g genes.gtf -f genome.fa
 fiberbrowser --help                       # every option (the same as python browser.py)
 ```
 
-This installs FiberHMM 3 (`fiberhmm[consensus]>=3.0.3,<4`) from PyPI with it.
+This installs FiberHMM 3.2.0 or later (`fiberhmm[consensus]>=3.2.0,<4`) from PyPI with it.
 FiberHMM runs footprint classes, chemistry detection, consensus BAM export,
 DAF-seq runs and re-run advisories; browsing works without it. At startup the
 server prints the FiberHMM version and location it uses and warns when it is
-older than 3.0.
+older than 3.2.0.
 
 Extras (`pip install "fiberbrowser[app,copilot]"`, or `[all]`):
 
@@ -191,6 +191,7 @@ Extras (`pip install "fiberbrowser[app,copilot]"`, or `[all]`):
 | `umap` | UMAP in the cluster Projection tab |
 | `plots` | server-side diagnostic plots, the standalone primer CLI |
 | `pipeline` | mappy, the minimap2 Python module, for new DAF-seq runs when the `minimap2` program isn't installed |
+| `graph` | the graph helper (`fiberbrowser-graph-native`) for [graph mode](workflows/graph-mode.md) and the graph view; not part of `[all]`. Built for Apple silicon Macs so far; elsewhere build `fiberbrowser-graph` from [graphlift](https://github.com/mtcicero26/graphlift) and set `FIBERBROWSER_GRAPH_HELPER` (see [Setting up live lift and graph mode](workflows/pangenome-setup.md)). The Mac app includes it. |
 
 **New DAF-seq runs** (FASTQ → aligned, called BAM) run FiberHMM's
 `fiberhmm-pipeline`, which aligns with minimap2: install the program
@@ -262,7 +263,7 @@ The public/reviewer server image is published to the GitHub Container Registry
 on every release:
 
 ```bash
-docker pull ghcr.io/fiberseq/fiberbrowser:3.0.8
+docker pull ghcr.io/fiberseq/fiberbrowser:3.1.0
 ```
 
 It runs `--public` (read-only catalog, per-visitor sessions, rate limits). How
@@ -272,8 +273,8 @@ to run it on a VM behind HTTPS: [A public FiberBrowser server](deployment/public
 
 ```bash
 git clone https://github.com/fiberseq/FiberBrowser && cd FiberBrowser
-bash scripts/install.sh          # or: python3 -m pip install -r requirements.txt
-python browser.py                # same options as the fiberbrowser command
+bash scripts/install.sh          # creates ./.venv with every dependency
+.venv/bin/python browser.py      # same options as the fiberbrowser command
 ```
 
 The double-click launchers (`Launch Browser.command`, `.sh`) start it
@@ -323,7 +324,7 @@ npm --prefix browser/frontend run build          # the production bundle the ser
 - **Icons**: edit the SVGs in `packaging/icons/`, then
   `python packaging/icons/build_icons.py`.
 - **Releasing** (tag `v<version>` = `browser/version.py`): the wheel, the image
-  and the app install FiberHMM 3.x from PyPI (`fiberhmm[consensus]>=3.0.3,<4`);
+  and the app install FiberHMM 3.2.0 or later (`fiberhmm[consensus]>=3.2.0,<4`) from PyPI;
   the repository variable `FIBERHMM_REQUIREMENT` overrides it for the Mac and
   Python workflows, e.g. a git URL to test an unreleased FiberHMM. Pushing the
   tag runs:

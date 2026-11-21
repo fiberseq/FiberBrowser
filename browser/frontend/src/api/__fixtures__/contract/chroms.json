@@ -1,0 +1,25 @@
+{
+ "chroms": [
+  {
+   "circular": false,
+   "circular_source": null,
+   "name": "chr1",
+   "plasmid": false,
+   "size": 248956422
+  },
+  {
+   "circular": false,
+   "circular_source": null,
+   "name": "chr2",
+   "plasmid": false,
+   "size": 242193529
+  },
+  {
+   "circular": false,
+   "circular_source": null,
+   "name": "chr3",
+   "plasmid": false,
+   "size": 198295559
+  }
+ ]
+}

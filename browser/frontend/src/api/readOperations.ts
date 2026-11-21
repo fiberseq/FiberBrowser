@@ -1,26 +1,34 @@
 import { prefetchReadRegion, prepareReadNavigation } from './readPrefetch';
 export { cancelReadPrefetch, setReadPrefetchMargin } from './readPrefetch';
 import { signalFilterParams } from '../utils/signalFilters';
+import { readPolicyParams } from '../utils/readPolicyParams';
 import { canProjectReadRegion, lookupReadRegion, rememberReadRegion, readRegionGeneration, lookupExactReadResponse, rememberExactReadResponse } from './loadedReadRegion';
 import type { ReadsResponse } from '../components/tracks/read-track/types';
 import { READ_STREAM_TYPE } from './readStream';
 import type { ReadRequestOptions } from './sharedFetch';
 import { readBinaryBytes, READ_BINARY_TYPE } from './readBinary';
-import type { FireResponse, FilterMode, MetaResponse } from '../types';
+import type { ClusterMetricCohort, FireResponse, FilterMode, MetaResponse } from '../types';
 import { fetchJson, fetchJsonSharedGet, withSortedParams } from './sharedFetch';
 import type { QualityGatePayload } from '../utils/ruleMatching';
+
+/** A feature_hub term: the hub hits whose per-read state is counted, and the state that counts. */
+export interface FeatureHubPayload {
+  hits: Array<{ set_id: string; hit_id: string; chrom: string; start: number; end: number }>;
+  state: '1' | '0';
+}
 
 const API_BASE = '/api';
 
 export async function getMeta(chrom: string, start: number, end: number, datasetId?: string): Promise<MetaResponse> {
   const params = new URLSearchParams({ chrom, start: start.toString(), end: end.toString() });
   if (datasetId) params.set('dataset_id', datasetId);
-  return fetchJson(`${API_BASE}/meta?${params}`);
+  // Dense reads follow the duplicate / QC-fail toggles (as the read track).
+  return fetchJson(`${API_BASE}/meta?${readPolicyParams(params)}`);
 }
 
 export async function getMetaAll(chrom: string, start: number, end: number): Promise<{ profiles: Record<string, { nucleosome_profile: number[]; subnuc_profile: number[] }> }> {
   const params = new URLSearchParams({ chrom, start: start.toString(), end: end.toString() });
-  return fetchJson(`${API_BASE}/meta_all?${params}`);
+  return fetchJson(`${API_BASE}/meta_all?${readPolicyParams(params)}`);
 }
 
 export function compactReadsQueryKey(params: URLSearchParams): string {
@@ -32,7 +40,7 @@ export function compactReadsAllQueryKey(params: URLSearchParams): string {
 }
 
 export function linkedCompactReadsQueryKey(params: URLSearchParams): string {
-  return withSortedParams(`${API_BASE}/linked/reads/compact`, params);
+  return withSortedParams(`${API_BASE}/linked/reads/compact`, readPolicyParams(params));
 }
 
 function readTransportOptions(params: URLSearchParams, options?: RequestInit): RequestInit | undefined {
@@ -70,11 +78,34 @@ export async function getCompactReads<T = any>(params: URLSearchParams, options?
   return data;
 }
 
+/** Whether a compact_all response is a first paint: some dataset has only its drawn reads (services/first_paint.py). */
+export function isPartialReadsAll(data: unknown): boolean {
+  const datasets = (data as { datasets?: Record<string, ReadsResponse> } | null)?.datasets;
+  return Object.values(datasets ?? {}).some(entry => Boolean(entry?.first_paint?.partial));
+}
+
+/** The request for a first paint's full set: the same view, built on the server's background pool. */
+export function fullSetParams(params: URLSearchParams): URLSearchParams {
+  const full = new URLSearchParams(params);
+  full.delete('first_paint');
+  full.set('background', 'true');
+  return full;
+}
+
+/** The view's own request, without the transport flags (first_paint, background). */
+function plainReadsParams(params: URLSearchParams): URLSearchParams {
+  const plain = new URLSearchParams(params);
+  plain.delete('first_paint');
+  plain.delete('background');
+  return plain;
+}
+
 export async function getCompactReadsAll<T = any>(params: URLSearchParams, options?: RequestInit): Promise<T> {
   if (options?.signal?.aborted) throw new DOMException('Request aborted', 'AbortError');
+  const plain = plainReadsParams(params);
   const ids = (params.get('dataset_ids') || params.get('dataset_id') || '').split(',');
   for (const id of ids) {
-    const request = signalFilterParams(new URLSearchParams(params));
+    const request = signalFilterParams(new URLSearchParams(plain));
     request.delete('dataset_ids');
     request.set('dataset_id', id);
     request.set('prefetch_batch', 'true');
@@ -84,11 +115,21 @@ export async function getCompactReadsAll<T = any>(params: URLSearchParams, optio
   const key = compactReadsAllQueryKey(params);
   const cached = lookupExactReadResponse<T>(key);
   const data = cached ?? await fetchJsonSharedGet<T>(key, readTransportOptions(params, options));
-  if (!cached) rememberExactReadResponse(key, data, generation);
-  if (!options?.signal?.aborted) {
+  // A first paint is never remembered: the same request must reach the server again for the full set.
+  const partial = isPartialReadsAll(data);
+  if (!cached && !partial) {
+    rememberExactReadResponse(key, data, generation);
+    if (params.get('background') === 'true') {
+      // The full set also answers this view's first-paint request (a revisit draws it at once).
+      const firstPaint = new URLSearchParams(plain);
+      firstPaint.set('first_paint', 'true');
+      rememberExactReadResponse(compactReadsAllQueryKey(firstPaint), data, generation);
+    }
+  }
+  if (!options?.signal?.aborted && !partial) {
     const datasets = (data as { datasets?: Record<string, ReadsResponse> })?.datasets;
     for (const [id, reads] of Object.entries(datasets ?? {})) {
-      const request = signalFilterParams(new URLSearchParams(params));
+      const request = signalFilterParams(new URLSearchParams(plain));
       request.delete('dataset_ids');
       request.set('dataset_id', id);
       request.set('prefetch_batch', 'true');
@@ -150,9 +191,16 @@ export async function filterReadsByAnalysisRule(
   spanning: boolean,
   datasetIds: string[],
   opts: {
+    /** 'value': the molecule metric itself (missing values never pass). */
     metric: string;
+    /** 'between': threshold <= value <= thresholdMax. */
     operator: string;
     threshold: number;
+    thresholdMax?: number | null;
+    /** A molecule_metric term's metric id ('nuc.nrl', ...). */
+    moleculeMetric?: string;
+    /** A feature_hub term (metric 'count': the hits where the read is in `state`). */
+    featureHub?: FeatureHubPayload;
     rule?: { size_min: number; size_max: number | null; conditions: any[]; quality_gates?: QualityGatePayload[] };
     peakRegions?: number[][];
     scopeWindows?: number[][];
@@ -179,6 +227,9 @@ export async function filterReadsByAnalysisRule(
       metric: opts.metric,
       operator: opts.operator,
       threshold: opts.threshold,
+      ...(opts.thresholdMax != null && { threshold_max: opts.thresholdMax }),
+      ...(opts.moleculeMetric && { molecule_metric: opts.moleculeMetric }),
+      ...(opts.featureHub && { feature_hub: opts.featureHub }),
       ...(opts.rule && { rule: opts.rule }),
       ...(opts.peakRegions && { peak_regions: opts.peakRegions }),
       ...(opts.scopeWindows && { scope_windows: opts.scopeWindows }),
@@ -205,6 +256,10 @@ export async function sortReads(
   sortBy: string,
   opts?: {
     rule?: { size_min: number; size_max: number | null; conditions: any[]; quality_gates?: QualityGatePayload[] };
+    /** sortBy 'value': the molecule metric (missing values sort last). */
+    moleculeMetric?: string;
+    /** sortBy 'feature_hub': the count of the hits where the read is in the state. */
+    featureHub?: FeatureHubPayload;
     descending?: boolean;
     linked?: boolean;
     peakRegions?: number[][];
@@ -222,9 +277,13 @@ export async function sortReads(
       subnucleosomalThreshold?: number;
       /** The whole clustering the map is drawn from (the sort may order a subset of it). */
       clusterAssignments?: Record<string, Record<string, number>>;
+      /** The fit's molecule metric cohort (as the Projection tab sends it); empty: none sent. */
+      metricCohort?: ClusterMetricCohort;
     };
     /** A panel on another assembly: its reference's key (genes and chromosomes are that reference's). */
     panelGenome?: string | null;
+    /** Live lift: a split panel's haplotype by dataset (absent: every haplotype of the dataset). */
+    liftHapByDataset?: Record<string, string>;
     signal?: AbortSignal;
   }
 ): Promise<{ results: Record<string, SortReadsResult>; error?: string }> {
@@ -243,6 +302,8 @@ export async function sortReads(
       dataset_ids: datasetIds,
       sort_by: sortBy,
       ...(opts?.rule && { rule: opts.rule }),
+      ...(opts?.moleculeMetric && { molecule_metric: opts.moleculeMetric }),
+      ...(opts?.featureHub && { feature_hub: opts.featureHub }),
       descending: opts?.descending ?? true,
       ...(opts?.linked !== undefined && { linked: opts.linked }),
       ...(opts?.peakRegions && { peak_regions: opts.peakRegions }),
@@ -252,12 +313,15 @@ export async function sortReads(
       ...(opts?.geneIds && { gene_ids: opts.geneIds }),
       ...(opts?.readIds && { read_ids: opts.readIds }),
       ...(opts?.clusterAssignments && { cluster_assignments: opts.clusterAssignments }),
+      ...(opts?.liftHapByDataset && { lift_hap_by_dataset: opts.liftHapByDataset }),
       ...(opts?.projection && {
         projection: {
           peak_regions: opts.projection.peakRegions,
           cluster_feature_rules: opts.projection.clusterFeatureRules ?? [],
           subnucleosomal_threshold: opts.projection.subnucleosomalThreshold ?? 90,
           ...(opts.projection.clusterAssignments && { cluster_assignments: opts.projection.clusterAssignments }),
+          ...(opts.projection.metricCohort && Object.keys(opts.projection.metricCohort).length
+            && { cluster_metric_cohort: opts.projection.metricCohort }),
         },
       }),
       sample_seed: opts?.sampleSeed ?? null,
@@ -297,7 +361,7 @@ export async function autozoom(
     end: end.toString(),
     spanning: spanning.toString()
   });
-  return fetchJson(`${API_BASE}/autozoom?${params}`, {
+  return fetchJson(`${API_BASE}/autozoom?${readPolicyParams(params)}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
