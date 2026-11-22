@@ -161,7 +161,7 @@ def _exact_mapped_count(read, starts, lengths) -> int:
     return len(map_tagged_footprints(starts, lengths, None, mapper.query_to_ref, min_fp_quality=0))
 
 
-def _mapped_legacy_count(read, starts, lengths, legacy_frame) -> int:
+def _mapped_legacy_count(read, starts, lengths, legacy_frame, seq_frame=False) -> int:
     """How many legacy (ns/nl, or as/al-complement) footprints the read loader places on
     the reference (its frame flip, then CigarCoordMapper + map_tagged_footprints at
     min_fp_quality 0), so Min footprints' counts agree with what it hides.
@@ -178,8 +178,9 @@ def _mapped_legacy_count(read, starts, lengths, legacy_frame) -> int:
         return 0  # the loader skips such a read entirely
     if not starts:
         return 0
-    molecular = read_legacy_tags_are_molecular(read, legacy_frame or (False, True))
-    starts = legacy_starts_in_seq_frame(starts, lengths, read, molecular)
+    if not seq_frame:   # MA calls (ma_call_arrays) are SEQ frame already
+        molecular = read_legacy_tags_are_molecular(read, legacy_frame or (False, True))
+        starts = legacy_starts_in_seq_frame(starts, lengths, read, molecular)
     cigar = getattr(read, "cigartuples", None)
     if not cigar or not hasattr(read, "get_cigar_stats"):
         return _exact_mapped_count(read, starts, lengths)
@@ -213,20 +214,85 @@ def _mapped_legacy_count(read, starts, lengths, legacy_frame) -> int:
     return count
 
 
-def footprint_call_count(read, legacy_frame=None) -> int:
-    """Whole-fiber footprint calls a record carries, as the read loaders count them for
-    "Min footprints": its ns/nl footprints that place on the reference, else the
-    stretches between its as/al MSPs that do, else its MA/Ma nucleosome and TF
-    annotations. 0 for an uncalled record. ``legacy_frame``: the file's legacy-tag
-    frame (``services.legacy_frame.bam_legacy_frame_for``; default: decided per read)."""
+_HEADER_MA_CONTEXT: Dict[int, tuple] = {}
+
+
+def _record_ma_context(read):
+    """(MA group frame, consensus contracts) of the record's file header, cached per header object; (False, None)
+    when the record carries no header (a test double)."""
+    header = getattr(read, "header", None)
+    if header is None:
+        return False, None
+    hit = _HEADER_MA_CONTEXT.get(id(header))
+    if hit is not None and hit[0] is header:
+        return hit[1], hit[2]
     try:
+        frame, contracts = bam_ma_group_frame(header), bam_consensus_contracts(header)
+    except Exception:
+        frame, contracts = False, None
+    if len(_HEADER_MA_CONTEXT) > 16:
+        _HEADER_MA_CONTEXT.clear()
+    _HEADER_MA_CONTEXT[id(header)] = (header, frame, contracts)
+    return frame, contracts
+
+
+def record_ma_call_arrays(read, ma_frame=None, family_contracts=None) -> Dict[str, tuple]:
+    """``ma_call_arrays`` of a record's MA (else fibertools Ma, always molecular), as the compact loader reads it;
+    {} when it has no MA call group. ``ma_frame``/``family_contracts``: the file's (default: from the record's
+    header)."""
+    from services.compact_read_loader import _read_ma_tags
+    if not callable(getattr(read, "has_tag", None)):
+        return {}
+    if ma_frame is None:
+        ma_frame, header_contracts = _record_ma_context(read)
+        family_contracts = header_contracts if family_contracts is None else family_contracts
+    tags = _read_ma_tags(read, ma_frame)
+    if tags is None:
+        return {}
+    return ma_call_arrays(tags[0], tags[1], tags_are_molecular=tags[3], read_length=getattr(read, "query_length", 0) or 0,
+                          is_reverse=bool(getattr(read, "is_reverse", False)), family_contracts=family_contracts) or {}
+
+
+def legacy_msps_match_ma(read, ma_msp, legacy_frame=None) -> bool:
+    """Whether the record's legacy ``as``/``al`` are the same accessible stretches as its MA msp group (``ma_msp``,
+    from ``ma_call_arrays``, SEQ frame): a fibertools <= 0.12 FIRE run on FiberHMM output keeps FiberHMM's stretches
+    and rewrites only their ``aq`` scores. The legacy stretches are put in the SEQ frame by the file's legacy-tag frame
+    (``legacy_frame``, as the loaders flip them; default: decided per read) and compared once. Stale legacy tags
+    (other stretches) do not match."""
+    try:
+        starts, lengths = interval_tag_pair(read, "as", "al")
+    except (KeyError, ValueError, TypeError):
+        return False
+    if starts is None or ma_msp is None:
+        return False
+    lengths = [int(v) for v in lengths]
+    molecular = read_legacy_tags_are_molecular(read, legacy_frame or (False, True))
+    seq_starts = legacy_starts_in_seq_frame([int(v) for v in starts], lengths, read, molecular)
+    legacy = sorted(zip(seq_starts, lengths))
+    return legacy == sorted(zip((int(v) for v in ma_msp[0]), (int(v) for v in ma_msp[1])))
+
+
+def footprint_call_count(read, legacy_frame=None, ma_frame=None, family_contracts=None) -> int:
+    """Whole-fiber footprint calls a record carries, as the read loaders count them for "Min footprints", by family
+    and MA first: its MA nuc calls that place on the reference, else its ns/nl footprints that do, else the
+    stretches between its MA msp (else as/al) accessible calls that do, else its MA/Ma footprint annotations (a
+    TF-only record). 0 for an uncalled record. ``legacy_frame``: the file's legacy-tag frame
+    (``services.legacy_frame.bam_legacy_frame_for``; default: decided per read)."""
+    try:
+        from services.compact_read_loader import msp_complement
+        arrays = record_ma_call_arrays(read, ma_frame, family_contracts)
+        read_length = getattr(read, "query_length", 0) or 0
+        if "nuc" in arrays:
+            return _mapped_legacy_count(read, arrays["nuc"][0], arrays["nuc"][1], legacy_frame, seq_frame=True)
         starts, lengths = interval_tag_pair(read, "ns", "nl")
         if starts is not None:
             return _mapped_legacy_count(read, starts, lengths, legacy_frame)
+        if "msp" in arrays:
+            comp_starts, comp_lengths = msp_complement(arrays["msp"][0], arrays["msp"][1], read_length)
+            return _mapped_legacy_count(read, comp_starts, comp_lengths, legacy_frame, seq_frame=True)
         msp_starts, msp_lengths = interval_tag_pair(read, "as", "al")
         if msp_starts is not None:
-            from services.compact_read_loader import msp_complement
-            comp_starts, comp_lengths = msp_complement(msp_starts, msp_lengths, getattr(read, "query_length", 0) or 0)
+            comp_starts, comp_lengths = msp_complement(msp_starts, msp_lengths, read_length)
             return _mapped_legacy_count(read, comp_starts, comp_lengths, legacy_frame)
         from services.compact_read_loader import ma_footprint_count
         for tag in ("MA", "Ma"):
@@ -1787,6 +1853,80 @@ def _ma_fast_section(section, walk, spans, region_start: int, region_end: int, a
         if 0 <= left < n_qual and 0 <= right < n_qual:
             columns[left], columns[right] = columns[right], columns[left]
     return intervals, sources, annotation_names, [c.tolist() for c in columns]
+
+
+def ma_call_arrays(ma_str, aq_values, *, tags_are_molecular=False, read_length: int = 0, is_reverse: bool = False,
+                   family_contracts=None) -> Optional[Dict[str, tuple]]:
+    """A record's MA call groups as the legacy tag arrays the read rows are built from, or None when the MA holds no
+    call group (``_ma_has_call_group``). Read first, by family: a record whose MA has a nuc group never reads
+    ``ns``/``nl``, one whose MA has an msp group never reads ``as``/``al``.
+
+    Returns ``{"nuc": (starts, lengths, nq, lq, rq), "msp": (starts, lengths, aq)}`` for the groups present, in the
+    SEQ frame (molecular-frame reverse reads flipped, and their left/right edge bytes swapped, as
+    ``parse_ma_aq_tags_into_layers`` does), sorted by start; quality lists are None when AQ has no bytes for them.
+    The same section, frame and AQ-offset rules as the layer parser: a nameless section's bytes are stepped over;
+    a later same-name section with another quality spec is skipped (its bytes stepped over). ``nuc`` maps to
+    ``ns``/``nl`` (its first quality byte is ``nq``, then ``lq``/``rq``), ``msp`` to ``as``/``al`` (``aq``):
+    FiberHMM writes both forms from the same calls."""
+    if not ma_str or not isinstance(ma_str, str) or not _ma_has_call_group(ma_str):
+        return None
+    group_frame = ma_group_frame(tags_are_molecular)
+    try:
+        aq = list(aq_values) if aq_values is not None else []
+    except TypeError:
+        aq = []
+    cursor = 0
+    spec_by_name: Dict[str, str] = {}
+    out: Dict[str, tuple] = {}
+    for part in ma_str.split(";")[1:]:
+        if ":" not in part:
+            continue
+        type_sig, intervals_str = part.split(":", 1)
+        strand_idx = ma_head_strand_index(type_sig)
+        if strand_idx < 0:
+            continue
+        name, qualspec = type_sig[:strand_idx], type_sig[strand_idx + 1:]
+        n_qual = len(qualspec)
+        if not name:
+            cursor += n_qual * sum(1 for t in intervals_str.split(",") if t.strip() and "-" in t)
+            continue
+        if spec_by_name.setdefault(name, qualspec) != qualspec:
+            cursor += n_qual * sum(1 for t in intervals_str.split(",") if t.strip() and "-" in t)
+            continue
+        _count, parsed = ma_intervals(intervals_str)
+        base, cursor = cursor, cursor + n_qual * len(parsed)
+        if name not in ("nuc", "msp"):
+            continue
+        contract = (family_contracts or {}).get(name, {})
+        molecular = (group_frame.is_molecular(name, type_sig[strand_idx])
+                     or contract.get("coordinates") == CONSENSUS_MOLECULAR_COORDINATES)
+        flip = bool(molecular and is_reverse and read_length)
+        rows = []
+        for k, (q_start, q_end, length, _ann) in enumerate(parsed):
+            if flip:
+                q_start, q_end = read_length - q_end, read_length - q_start
+            off = base + k * n_qual
+            quals = aq[off:off + n_qual] if n_qual and off + n_qual <= len(aq) else None
+            rows.append((q_start, length, quals))
+        if flip and name == "nuc":
+            # A flipped read's molecular-left edge is its genomic-right edge: lq/rq swap (nq, lq, rq bytes).
+            rows = [(a, l, ([q[0], q[2], q[1], *q[3:]] if q is not None and len(q) >= 3 else q)) for a, l, q in rows]
+        # A second strand section of the same group is the same layer: merged.
+        out[name] = sorted(out.get(name, []) + rows, key=lambda r: r[0])
+    result: Dict[str, tuple] = {}
+    for name, rows in out.items():
+        starts = [r[0] for r in rows]
+        lengths = [r[1] for r in rows]
+        have = all(r[2] is not None for r in rows) and bool(rows)
+        first = [int(r[2][0]) for r in rows] if have else None
+        if name == "nuc":
+            lq = rq = None
+            if have and all(len(r[2]) >= 3 for r in rows):
+                lq, rq = [int(r[2][1]) for r in rows], [int(r[2][2]) for r in rows]
+            result["nuc"] = (starts, lengths, first, lq, rq)
+        else:
+            result["msp"] = (starts, lengths, first)
+    return result
 
 
 def parse_ma_aq_tags_into_layers(ma_str: str, aq_values, coord_mapper,

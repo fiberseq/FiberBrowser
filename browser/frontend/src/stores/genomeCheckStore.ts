@@ -43,6 +43,15 @@ function readDismissed(): string[] {
   }
 }
 
+/** Bumped when the reference changes: answers to checks asked before it are dropped. */
+let checkGeneration = 0;
+
+/** The reference changed: drop the last answer and any answer still in flight for the old reference. */
+export function invalidateGenomeCheck(): void {
+  checkGeneration += 1;
+  useGenomeCheckStore.setState({ check: null });
+}
+
 let inflight: Promise<void> | null = null;
 let again = false;
 
@@ -61,8 +70,12 @@ export const useGenomeCheckStore = create<GenomeCheckState>((set, get) => ({
       try {
         do {
           again = false;
+          const asked = checkGeneration;
           try {
-            set({ check: await getGenomeCheck() });
+            const check = await getGenomeCheck();
+            // An answer asked for before the reference changed (invalidateGenomeCheck) is not this reference's.
+            if (asked === checkGeneration) set({ check });
+            else again = true;
           } catch {
             /* keep the last answer (e.g. a server restarting) */
           }

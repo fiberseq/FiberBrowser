@@ -114,3 +114,44 @@ def test_bigbed_names_payload_reports_fallback_errors():
     )
 
     assert result == {"success": False, "names": [], "error": "boom"}
+
+
+def test_jaspar_names_need_no_httpx(monkeypatch):
+    """The Mac app bundles no httpx: the JASPAR lookup must not import it (3.0.x-3.1.0 answered 500 on every
+    /api/bigbed/names call with a genome), and it reads every page with the standard library."""
+    import builtins
+    real_import = builtins.__import__
+
+    def no_httpx(name, *args, **kwargs):
+        if name == "httpx" or name.startswith("httpx."):
+            raise ModuleNotFoundError("No module named 'httpx'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_httpx)
+    pages = {1: {"results": [{"name": "GAF", "matrix_id": "MA0001.1"}, {"name": "Trl", "matrix_id": "MA0205.2"}],
+                 "next": "page2"},
+             2: {"results": [{"name": "GAF", "matrix_id": "MA0001.2"}], "next": None}}
+    seen = []
+
+    def get_json(url):
+        seen.append(url)
+        page = int(url.split("page=")[1].split("&")[0])
+        assert "tax_group=insects" in url and "collection=CORE" in url
+        return pages[page]
+
+    out = bigbed_names._fetch_jaspar_api_names_sync("insects", get_json=get_json)
+    assert out == {"success": True, "names": ["GAF", "Trl"], "name_to_ma": {"GAF": ["MA0001.1", "MA0001.2"], "Trl": ["MA0205.2"]}}
+    assert len(seen) == 2
+
+
+def test_jaspar_names_failure_falls_back_to_bigbed_sampling():
+    """A JASPAR failure (offline, TLS, HTTP error) returns None, so the payload samples the BigBed instead."""
+    def broken(url):
+        raise OSError("offline")
+
+    assert bigbed_names._fetch_jaspar_api_names_sync("insects", get_json=broken) is None
+    result = asyncio.run(bigbed_names.get_bigbed_names_payload(
+        url="https://example.org/tf.bb", genome="dm6", disk_cache={}, memory_cache={},
+        jaspar_fetcher=lambda tax: asyncio.sleep(0, result=bigbed_names._fetch_jaspar_api_names_sync(tax, get_json=broken)),
+        bigbed_fetcher=lambda url, n: {"success": True, "names": ["MA0001.1"]}))
+    assert result == {"success": True, "names": ["MA0001.1"]}

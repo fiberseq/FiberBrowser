@@ -31,7 +31,8 @@ class DataCache:
     def compact_reads(self, dataset_id: str, *, max_reads: Optional[int] = None, layer_names: Optional[list[str]] = None,
                       include_methylation: bool = False, include_metaprofile: bool = False,
                       metaprofile_layers: Optional[list[str]] = None, filter_ids: Optional[list[str]] = None,
-                      strand: Optional[str] = None, region: Optional[tuple] = None) -> dict:
+                      strand: Optional[str] = None, region: Optional[tuple] = None,
+                      spanning: Optional[bool] = None) -> dict:
         """The /api/reads/compact payload the browser gets for this dataset and view."""
         from services.read_endpoint import compact_reads_payload_for_request
         from services.lift.capability import require
@@ -45,11 +46,14 @@ class DataCache:
                tuple(sorted(metaprofile_layers or [])), tuple(sorted(filter_ids or [])), strand)
         chrom, start, end = region or (self.spec.chrom, self.spec.start, self.spec.end)
         key += (chrom, start, end)
+        spanning = bool(fe.get("spanningOnly")) if spanning is None else bool(spanning)
+        if spanning != bool(fe.get("spanningOnly")):
+            key += ("spanning", spanning)
 
         def load():
             return compact_reads_payload_for_request(
                 self.state, chrom=chrom, start=start, end=end,
-                max_reads=cap, spanning=bool(fe.get("spanningOnly")), dataset_id=dataset_id,
+                max_reads=cap, spanning=spanning, dataset_id=dataset_id,
                 include_methylation=include_methylation, include_layers=bool(layers),
                 layer_names=",".join(layers) or None, include_layer_qualities=True,
                 fill_gap_size=int(fe.get("fillGapSize") or 0) if fe.get("fillSmallGaps") else None,

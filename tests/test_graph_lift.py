@@ -133,7 +133,9 @@ def _names(reads):
 def test_ex_supplementaries_hidden_only_in_unrepaired_lifts(tmp_path, lift_rule, pgs, hidden):
     path = _write_bam(tmp_path / "x.bam", pgs, _split_molecule_specs())
     everything = {("m1", 1_000), ("m1", 12_000), ("m1", 16_000), ("m2", 2_000)}
-    assert set(_names(_load(path))) == everything - hidden
+    # Terminal gaps shown: m1's one MA nucleosome is its read row's only footprint (MA first), and the terminal-gap
+    # rule would hide it as it hides the same read written with ns/nl. This test is about the lift rule.
+    assert set(_names(_load(path, hide_terminal_gaps=False))) == everything - hidden
 
 
 def test_ex_supplementary_decision_is_view_independent(tmp_path):
@@ -167,7 +169,8 @@ def test_stash_flag_decides_and_hard_clipped_primaries_are_kept(tmp_path):
                                           ("SA", "chr1_A,9001,+,2000S500M,60,0;", "Z")]}),
     ]
     path = _write_bam(tmp_path / "stash.bam", VG_LIFT_PGS, specs)
-    assert _names(_load(path)) == [("h", 9_000), ("n", 12_000), ("s", 1_000)]
+    # Terminal gaps shown: the one-nucleosome MA reads are kept whatever their read-end gaps (see above).
+    assert _names(_load(path, hide_terminal_gaps=False)) == [("h", 9_000), ("n", 12_000), ("s", 1_000)]
     from services import dafc_reads
     rows = dafc_reads.query_bam_for_dafc(path, "chr1", 0, CHROM_LEN)
     assert sorted((r["name"], r["start"]) for r in rows) == [("h", 9_000), ("n", 12_000), ("s", 1_000)]

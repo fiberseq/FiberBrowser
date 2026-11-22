@@ -92,9 +92,22 @@ export function fractionDifference(a: SizeMatrix, b: SizeMatrix): SizeMatrix {
 
 export type SizeCompareOp = 'log2ratio' | 'diff';
 
-export function comparisons(groups: CompareGroup[], mode: ResolvedCompareMode, ab: [string, string] | null = null, op: SizeCompareOp = 'log2ratio'): Comparison[] {
+/** log2(norm(a) / norm(b)) per cell: each side's counts normalised first (the size plots' enrichment); null where either
+ *  side is blank or not positive. */
+export function log2NormalisedRatio(a: SizeMatrix, b: SizeMatrix, normalise: (m: SizeMatrix) => SizeMatrix): SizeMatrix {
+  const na = normalise(a), nb = normalise(b);
+  return na.map((row, i) => row.map((va, j) => {
+    const vb = nb[i]?.[j];
+    if (va == null || vb == null || !(va > 0) || !(vb > 0) || !Number.isFinite(va) || !Number.isFinite(vb)) return null;
+    return Math.log2(va / vb);
+  }));
+}
+
+/** `normalise`: log2 ratios compare each side's normalised matrix (enrichment) instead of its shares. */
+export function comparisons(groups: CompareGroup[], mode: ResolvedCompareMode, ab: [string, string] | null = null, op: SizeCompareOp = 'log2ratio',
+  normalise?: (m: SizeMatrix) => SizeMatrix): Comparison[] {
   if (groups.length < 2) return [];
-  const log2FractionRatio = op === 'diff' ? fractionDifference : log2Ratio;
+  const log2FractionRatio = op === 'diff' ? fractionDifference : normalise ? (a: SizeMatrix, b: SizeMatrix) => log2NormalisedRatio(a, b, normalise) : log2Ratio;
   if (mode === 'a-vs-b') {
     const a = groups.find(g => g.id === ab?.[0]) ?? groups[0];
     const b = groups.find(g => g.id === ab?.[1] && g.id !== a.id) ?? groups.find(g => g.id !== a.id)!;

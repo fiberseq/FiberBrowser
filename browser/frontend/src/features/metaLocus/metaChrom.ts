@@ -133,3 +133,21 @@ export function metaExportValues(meta: MetaSite | null | undefined, a: number, b
   if (!meta || !span) return META_EXPORT_COLUMNS.map(() => '');
   return [meta.chrom ?? '', span[0], span[1], meta.strand ?? '', meta.site ?? '', meta.site_name ?? ''];
 }
+
+/** Every reference to an old meta contig (``from``: values and record keys alike) renamed to ``to``; the saved
+ *  meta-locus keeps its own payload (its pool id is the server's to give). */
+export function renameMetaChroms<T>(value: T, to: string | null, from: Array<string | null | undefined>): T {
+  const old = new Set(from.filter((c): c is string => !!c && c !== to));
+  if (!to || old.size === 0) return value;
+  const walk = (v: unknown): unknown => {
+    if (typeof v === 'string') return old.has(v) ? to : v;
+    if (Array.isArray(v)) return v.map(walk);
+    if (!v || typeof v !== 'object') return v;
+    const proto = Object.getPrototypeOf(v);
+    if (proto !== Object.prototype && proto !== null) return v;  // (only plain records: a saved state is JSON)
+    return Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, x]) => [old.has(k) ? to : k, walk(x)]));
+  };
+  const out = walk(value) as T;
+  const meta = (value as { metaLocus?: unknown })?.metaLocus;
+  return meta !== undefined && out && typeof out === 'object' ? { ...out, metaLocus: meta } as T : out;
+}

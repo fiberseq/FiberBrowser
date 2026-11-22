@@ -132,6 +132,7 @@ describe('golden backend responses through the real API functions', () => {
     expect(['primary', 'primary-supplementary', 'all']).toContain(o.alignments);
     expect(typeof o.chimera_filter).toBe('boolean');
     expect(['unmethylated-only', 'methylated-only']).toContain(o.cpg_mask_policy);
+    expect(['conservative', 'topology']).toContain(o.nuc_recall_policy);
   });
 
   it('pipeline job: status, progress and outputs the jobs list reads', async () => {

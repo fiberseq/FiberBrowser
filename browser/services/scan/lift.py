@@ -99,6 +99,12 @@ def find_liftbed(environ: Optional[dict] = None) -> Optional[str]:
 
 
 def unavailable_note() -> str:
+    from services.app_build import is_frozen
+    if is_frozen():
+        # The Mac app bundles the graph helper but not liftbed yet (clean-Mac audit, 3.1.1; bundling planned for 3.2).
+        return ("Lifting scan hits onto a live-lifted dataset needs graphlift's liftbed, which this FiberBrowser app "
+                "does not include yet: hits stay in source coordinates. A source install can use it (build graphlift "
+                "and set FIBERBROWSER_LIFTBED).")
     return ("graphlift's liftbed was not found (set FIBERBROWSER_LIFTBED, or build graphlift next to the graph helper): "
             "hits stay in source coordinates")
 

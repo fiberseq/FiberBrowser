@@ -49,7 +49,7 @@ class UpdateError(ValueError):
 def minimum_version() -> str:
     # A packaged build records its floor (packaging/write_build_info.py); otherwise this source's requirement.
     floor = re.search(r">=([0-9.]+)", runtime.FIBERHMM_REQUIREMENT)
-    return str((app_build.build_info() or {}).get("fiberhmm_min_version") or (floor.group(1) if floor else "3.2.0"))
+    return str((app_build.build_info() or {}).get("fiberhmm_min_version") or (floor.group(1) if floor else "3.2.2"))
 
 
 def pip_command() -> str:

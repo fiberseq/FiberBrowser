@@ -60,7 +60,8 @@ class FirstPaintSet:
             "partial": not self.complete,
             "shown": int(shown),
             "decoded": int(self.decoded_names),
-            # Molecules with an alignment in view, before the read filters (the full set's count may be lower).
+            # Molecules with an alignment in view the read policy shows (duplicate / QC-fail toggles), before the
+            # other read filters (the full set's count may be lower).
             "total_estimate": int(self.total_overlapping),
             "rounds": int(self.rounds),
         }
@@ -123,10 +124,20 @@ def view_is_cached(state, query, dataset_id: str, **build_options) -> bool:
         working_set_probe.reset(token)
 
 
-def alignment_extents(state, dataset, chrom: str, start: int, end: int) -> dict:
+def alignment_extents(state, dataset, chrom: str, start: int, end: int, *, include_duplicates=None,
+                      include_qcfail=None) -> dict:
     """Per read name: [lowest start, highest end, first seen] over its mapped, non-secondary
-    records that overlap the view, every file of the dataset in order. No tag is parsed."""
+    records that overlap the view, every file of the dataset in order. No tag is parsed.
+    Duplicate (0x400) and QC-fail (0x200) records the read track hides are left out, as the loader leaves them
+    out (``include_*``: the request's toggles; None: as the request asks, services/bam_tags.record_passes_read_policy)."""
     from services.background_work import checkpoint
+    from services.bam_tags import record_passes_read_policy
+    if include_duplicates is None:
+        from services.signal_evidence import request_include_duplicates
+        include_duplicates = request_include_duplicates()
+    if include_qcfail is None:
+        from services.signal_evidence import request_include_qcfail
+        include_qcfail = request_include_qcfail()
     from services.bam_handles import get_bam_handle, transient_bam_handle
     from services.plasmid_reconcile import contig_links
     from utils.chrom import resolve_reference_name
@@ -150,6 +161,8 @@ def alignment_extents(state, dataset, chrom: str, start: int, end: int) -> dict:
                 if not i & 1023:
                     checkpoint()
                 if record.is_unmapped or record.is_secondary:
+                    continue
+                if not record_passes_read_policy(record, include_duplicates, include_qcfail):
                     continue
                 lo = record.reference_start
                 hi = record.reference_end
@@ -183,11 +196,14 @@ def _row_name(row, extents) -> Optional[str]:
 
 def plan_first_paint(state, query, dataset_id: str, *, chrom: str, start: int, end: int, max_reads: int,
                      build_options: dict, fill_gap_size: Optional[int] = None,
-                     pins=(), on_partial=None, workers: int = 0) -> Optional[FirstPaintSet]:
+                     pins=(), on_partial=None, workers: int = 0, include_duplicates=None,
+                     include_qcfail=None) -> Optional[FirstPaintSet]:
     """Decode the reads a cold view's display draws (module docstring). None: decode the whole view.
 
     ``build_options``: the working-set options the full path uses;
     ``workers``: decode the drawn reads on this many worker processes (0 or 1: in this thread);
+    ``include_duplicates`` / ``include_qcfail``: the request's read-policy toggles (candidates and estimates leave
+    the reads they hide out; None: as the request asks);
     ``on_partial()``: called once the drawn reads are decoded and the response will be partial (starts the
     full set: started earlier, its decode would slow this one)."""
     from services.read_metrics import fill_small_gaps_in_read
@@ -198,7 +214,8 @@ def plan_first_paint(state, query, dataset_id: str, *, chrom: str, start: int, e
     width = end - start
     timings: dict = {}
     t0 = time.perf_counter()
-    extents = alignment_extents(state, dataset, chrom, start, end)
+    extents = alignment_extents(state, dataset, chrom, start, end, include_duplicates=include_duplicates,
+                                include_qcfail=include_qcfail)
     timings["first_paint_extents_ms"] = (time.perf_counter() - t0) * 1000
     if len(extents) < MIN_DEPTH_FACTOR * max_reads:
         return None

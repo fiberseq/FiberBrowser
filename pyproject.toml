@@ -50,7 +50,7 @@ dependencies = [
     "boto3>=1.26",
     "requests>=2.28",
     "packaging>=23.2",
-    "fiberhmm[consensus]>=3.2.0,<4",
+    "fiberhmm[consensus]>=3.2.2,<4",
     "pyjaspar>=3.0",
     "tomli>=1.1; python_version < '3.11'",
 ]

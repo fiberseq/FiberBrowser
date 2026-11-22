@@ -60,13 +60,13 @@ In the **Clusters** panel, **Overview** tab:
 
 Other tabs: **Profiles** (average profiles overlaid), **Composition** (each
 dataset's share of reads per cluster, as **Bar**, **Pie** or **Line**),
-**Footprint sizes** (footprint size vs position as a **Size enrichment** plot
-or a **V-plot**; it also works without clustering, see the guide's
-[Footprint size enrichment plots](../guide.md#footprint-size-enrichment-plots)),
 **Projection** (PCA, UMAP or t-SNE of every read), and **Differences** (when
 labeling rules are defined: what sets each cluster apart). Click cluster names
 above a chart to show only those clusters; the pick is shared with the read
-panel.
+panel. **Footprint sizes → Plots** opens footprint size against position, one
+**Size enrichment** plot or **V-plot** per cluster, in Plots (it also works
+without clustering, see the guide's
+[Footprint size enrichment plots](../guide.md#footprint-size-enrichment-plots)).
 
 ### Subclusters and branches
 

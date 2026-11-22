@@ -125,6 +125,9 @@ class Surface:
     """Drawing API in page pixels; subclasses write the output."""
 
     _style_italic = False  # set around _text calls (keeps backend signatures stable)
+    # Scripted figures (services/figure/page.py); None: as before.
+    min_text_px: Optional[float] = None   # smallest text size, in page px
+    page = None                           # PageGeometry: physical page size and fit
 
     def __init__(self, width: float, height: float, background: str = "#ffffff"):
         self.width = float(width)
@@ -235,6 +238,8 @@ class Surface:
              max_width: Optional[float] = None, italic: bool = False) -> None:
         """``anchor``: start|middle|end; ``baseline``: alphabetic|middle|top|bottom."""
         text = str(text)
+        if self.min_text_px and size < self.min_text_px:
+            size = self.min_text_px
         if max_width is not None:
             while text and measure_text(text, size, weight, mono) > max_width:
                 text = text[:-1]
@@ -381,6 +386,11 @@ class SvgSurface(Surface):
     def to_bytes(self) -> bytes:
         head = (f'<svg xmlns="http://www.w3.org/2000/svg" width="{_n(self.width)}" height="{_n(self.height)}"'
                 f' viewBox="0 0 {_n(self.width)} {_n(self.height)}">')
+        if self.page is not None:
+            g = self.page
+            aspect = "none" if g.fit == "stretch" else "xMinYMin meet"
+            head = (f'<svg xmlns="http://www.w3.org/2000/svg" width="{g.width_pt:.2f}pt" height="{g.height_pt:.2f}pt"'
+                    f' viewBox="0 0 {_n(self.width)} {_n(self.height)}" preserveAspectRatio="{aspect}">')
         return (head + "".join(self._parts) + "</svg>").encode("utf-8")
 
 
@@ -399,7 +409,16 @@ class PdfSurface(Surface):
         self._ops: list[str] = []
         self._images: list[tuple[int, int, bytes, Optional[bytes]]] = []
         self._alphas: dict[float, str] = {}
+        self._truetype: Optional[dict] = None   # font key -> _TrueType (pdf_fonts="truetype")
+        self._used_fonts: set = set()
         super().__init__(width, height, background)
+
+    def use_truetype(self) -> None:
+        """Embed TrueType fonts (matplotlib's pdf.fonttype 42) instead of the base-14 fonts."""
+        from services.figure.page import truetype_font
+        kinds = {"F1": "regular", "F2": "bold", "F3": "mono", "F4": "italic", "F5": "bolditalic"}
+        self._truetype = {key: _TrueType.load(truetype_font(kind), italic=kind in ("italic", "bolditalic"),
+                                              fixed=kind == "mono") for key, kind in kinds.items()}
 
     def _y(self, y: float) -> float:
         return (self.height - y) * PX_TO_PT
@@ -462,9 +481,17 @@ class PdfSurface(Surface):
         for src, dst in _PDF_TEXT.items():
             text = text.replace(src, dst)
         safe = text.encode("latin-1", "replace").decode("latin-1")
+        squeeze = ""
+        if self._truetype is not None:
+            self._used_fonts.add(font)
+            # Keep the width the layout measured (Helvetica metrics): Arial/Liberation match; others are scaled.
+            actual = self._truetype[font].width(safe, size)
+            wanted = measure_text(text, size, weight, mono)
+            if actual > 0 and abs(actual - wanted) > 0.005 * wanted:
+                squeeze = f" {100 * wanted / actual:.2f} Tz"
         safe = safe.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
         self._ops.append(f"q {self._gs(_alpha(color, opacity))}{self._rgb(color)} rg BT /{font} {size * PX_TO_PT:.2f} Tf"
-                         f" {left * PX_TO_PT:.2f} {self._y(base):.2f} Td ({safe}) Tj ET Q")
+                         f"{squeeze} {left * PX_TO_PT:.2f} {self._y(base):.2f} Td ({safe}) Tj ET Q")
 
     def _text_image(self, left, base, text, size, color, weight, opacity):
         zoom = 4
@@ -494,14 +521,25 @@ class PdfSurface(Surface):
             objects.append(body)
             return len(objects)
 
-        content = zlib.compress("\n".join(self._ops).encode("latin-1"))
-        fonts = {
-            "F1": add(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>"),
-            "F2": add(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>"),
-            "F3": add(b"<< /Type /Font /Subtype /Type1 /BaseFont /Courier /Encoding /WinAnsiEncoding >>"),
-            "F4": add(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Oblique /Encoding /WinAnsiEncoding >>"),
-            "F5": add(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-BoldOblique /Encoding /WinAnsiEncoding >>"),
-        }
+        ops = self._ops
+        page_w, page_h = self.width * PX_TO_PT, self.height * PX_TO_PT
+        if self.page is not None:
+            # The drawing at natural size, scaled onto the page (top-left aligned).
+            g = self.page
+            page_w, page_h = g.width_pt, g.height_pt
+            ty = page_h - self.height * PX_TO_PT * g.sy
+            ops = [f"q {g.sx:.6f} 0 0 {g.sy:.6f} 0 {ty:.4f} cm"] + ops + ["Q"]
+        content = zlib.compress("\n".join(ops).encode("latin-1"))
+        if self._truetype is not None:
+            fonts = {key: self._truetype[key].add_objects(add) for key in sorted(self._used_fonts)}
+        else:
+            fonts = {
+                "F1": add(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>"),
+                "F2": add(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>"),
+                "F3": add(b"<< /Type /Font /Subtype /Type1 /BaseFont /Courier /Encoding /WinAnsiEncoding >>"),
+                "F4": add(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Oblique /Encoding /WinAnsiEncoding >>"),
+                "F5": add(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-BoldOblique /Encoding /WinAnsiEncoding >>"),
+            }
         image_ids = []
         for w, h, data, mask in self._images:
             smask = ""
@@ -519,7 +557,7 @@ class PdfSurface(Surface):
                      + (f" /ExtGState << {gstates} >>" if gstates else "") + " >>")
         content_id = add(f"<< /Filter /FlateDecode /Length {len(content)} >>\nstream\n".encode() + content + b"\nendstream")
         pages_id = len(objects) + 2
-        page_id = add(f"<< /Type /Page /Parent {pages_id} 0 R /MediaBox [0 0 {self.width * PX_TO_PT:.2f} {self.height * PX_TO_PT:.2f}]"
+        page_id = add(f"<< /Type /Page /Parent {pages_id} 0 R /MediaBox [0 0 {page_w:.2f} {page_h:.2f}]"
                       f" /Resources {resources} /Contents {content_id} 0 R >>".encode())
         add(f"<< /Type /Pages /Kids [{page_id} 0 R] /Count 1 >>".encode())
         catalog_id = add(f"<< /Type /Catalog /Pages {pages_id} 0 R >>".encode())
@@ -536,6 +574,53 @@ class PdfSurface(Surface):
             out.write(f"{off:010d} 00000 n \n".encode())
         out.write(f"trailer\n<< /Size {len(objects) + 1} /Root {catalog_id} 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode())
         return out.getvalue()
+
+
+class _TrueType:
+    """One embedded simple TrueType font (WinAnsi encoding, the whole .ttf as FontFile2)."""
+
+    _CACHE: dict = {}
+
+    def __init__(self, path: str, italic: bool, fixed: bool):
+        self.path, self.italic, self.fixed = path, italic, fixed
+        font = ImageFont.truetype(path, 1000)
+        chars = bytes(range(32, 256)).decode("cp1252", errors="replace")
+        space = font.getlength(" ")
+        self.widths = [int(round(font.getlength(c))) if c != "\ufffd" else int(round(space)) for c in chars]
+        ascent, descent = font.getmetrics()
+        self.ascent, self.descent = int(ascent), -int(descent)
+        family, style = font.getname()
+        name = (family or "Font") + ("" if (style or "Regular") in ("Regular", "Book", "Roman") else "-" + style)
+        self.name = "".join(ch for ch in name if ch.isalnum() or ch == "-") or "EmbeddedFont"
+        with open(path, "rb") as handle:
+            self.data = handle.read()
+
+    @classmethod
+    def load(cls, path: str, italic: bool = False, fixed: bool = False) -> "_TrueType":
+        key = (path, italic, fixed)
+        if key not in cls._CACHE:
+            cls._CACHE[key] = cls(path, italic, fixed)
+        return cls._CACHE[key]
+
+    def width(self, text: str, size: float) -> float:
+        """Width in px of latin-1 ``text`` at ``size`` px."""
+        total = 0
+        for byte in text.encode("cp1252", "replace"):
+            total += self.widths[byte - 32] if byte >= 32 else 0
+        return total * size / 1000
+
+    def add_objects(self, add) -> int:
+        packed = zlib.compress(self.data)
+        file_id = add(f"<< /Length {len(packed)} /Length1 {len(self.data)} /Filter /FlateDecode >>\nstream\n".encode()
+                      + packed + b"\nendstream")
+        flags = 32 | (64 if self.italic else 0) | (1 if self.fixed else 0)
+        descriptor = add((f"<< /Type /FontDescriptor /FontName /{self.name} /Flags {flags}"
+                          f" /FontBBox [-665 -325 2000 1040] /ItalicAngle {-12 if self.italic else 0}"
+                          f" /Ascent {self.ascent} /Descent {self.descent} /CapHeight {int(self.ascent * 0.8)}"
+                          f" /StemV 80 /FontFile2 {file_id} 0 R >>").encode())
+        widths = " ".join(str(w) for w in self.widths)
+        return add((f"<< /Type /Font /Subtype /TrueType /BaseFont /{self.name} /FirstChar 32 /LastChar 255"
+                    f" /Widths [{widths}] /Encoding /WinAnsiEncoding /FontDescriptor {descriptor} 0 R >>").encode())
 
 
 # ---------------------------------------------------------------------------
@@ -717,7 +802,27 @@ class PngSurface(Surface):
         c = self._c(color, a)
         tx, ty = left * s, base * s - ascent
         bbox = (tx, ty, tx + measure_text(text, size, weight, mono) * s * 1.2 + 4, ty + size * s * 1.4)
-        self._draw(a, lambda d, ox, oy: d.text((tx - ox, ty - oy), text, font=font, fill=c), bbox)
+        try:
+            self._draw(a, lambda d, ox, oy: d.text((tx - ox, ty - oy), text, font=font, fill=c), bbox)
+        except OSError:
+            # Some system fonts (macOS Helvetica.ttc with Pillow 13) fail below ~8 px: draw 4x larger, scale down.
+            self._small_text(left, base, text, size, kind, c)
+
+    def _small_text(self, left, base, text, size, kind, c):
+        s, zoom = self.scale, 4
+        font = _font(kind, max(8, int(round(size * s * zoom))))
+        try:
+            ascent = font.getmetrics()[0]
+        except Exception:
+            ascent = int(size * s * zoom * 0.8)
+        w = int(math.ceil(font.getlength(text))) + 4
+        h = int(math.ceil(size * s * zoom * 1.4)) + 4
+        layer = Image.new("RGBA", (max(1, w), max(1, h)), (0, 0, 0, 0))
+        ImageDraw.Draw(layer).text((0, 0), text, font=font, fill=c)
+        small = layer.resize((max(1, round(w / zoom)), max(1, round(h / zoom))), Image.LANCZOS)
+        x, y = int(round(left * s)), int(round(base * s - ascent / zoom))
+        if x < self._img.width and y < self._img.height:
+            self._img.alpha_composite(small, (max(0, x), max(0, y)))
 
     def _image(self, x, y, w, h, rgba):
         s = self.scale
@@ -728,9 +833,25 @@ class PngSurface(Surface):
     def to_image(self) -> Image.Image:
         return self._img.convert("RGB")
 
+    png_dpi: Optional[float] = None   # scripted figures: the PNG's resolution (and page placement)
+
     def to_bytes(self) -> bytes:
         buf = io.BytesIO()
-        self.to_image().save(buf, "PNG", optimize=True)
+        if self.page is None and self.png_dpi is None:
+            self.to_image().save(buf, "PNG", optimize=True)
+            return buf.getvalue()
+        img = self.to_image()
+        dpi = float(self.png_dpi or 300.0)
+        if self.page is not None:
+            g = self.page
+            size = (max(1, int(round(g.width_pt / 72 * dpi))), max(1, int(round(g.height_pt / 72 * dpi))))
+            if g.fit == "stretch":
+                img = img.resize(size, Image.LANCZOS)
+            elif img.size != size:
+                canvas = Image.new("RGB", size, (255, 255, 255))
+                canvas.paste(img.crop((0, 0, min(img.width, size[0]), min(img.height, size[1]))), (0, 0))
+                img = canvas
+        img.save(buf, "PNG", optimize=True, dpi=(dpi, dpi))
         return buf.getvalue()
 
 

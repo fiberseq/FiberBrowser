@@ -344,7 +344,7 @@ per-read contributions or biological-replicate profiles upstream.
 
 ### Footprint size plots (size enrichment and V-plots)
 
-Clusters › Footprint sizes bins footprint events by footprint size (rows) and
+The footprint size plots (Plots: Size enrichment and V-plot) bin footprint events by footprint size (rows) and
 position in the view (columns), from every read in view of each dataset
 (`group_by: all`, no clustering needed) or per cluster. In **Midpoint** mode
 (the traditional V-plot) each footprint adds 1 at its centre. In **Full

@@ -68,7 +68,7 @@ function appInfo(over: Partial<AppInfo> = {}): AppInfo {
   return {
     version: '3.0.0', packaged: true, build: { channel: 'lab', version: '3.0.0' }, platform: 'macos-arm64',
     fiberhmm: {
-      pip_command: 'pip install -U "fiberhmm[consensus]>=3.2.0,<4"',
+      pip_command: 'pip install -U "fiberhmm[consensus]>=3.2.2,<4"',
       packaged: true, requested: { source: 'app', path: '/src/Release' }, source: 'bundled', source_label: 'bundled with the app',
       root: null, package_dir: '/Applications/FiberBrowser.app/Contents/Resources/fiberhmm', version: '3.0.0',
       bundled: { path: '/Applications/FiberBrowser.app/Contents/Resources/fiberhmm', version: '3.0.0', kind: 'bundled' },
@@ -307,7 +307,7 @@ describe('FiberHMM & Updates settings', () => {
     await openSection();
     expect(host.querySelector('[data-testid="app-fiberhmm-choice"]')).toBeNull();
     expect(text()).toContain('from browser_settings.json');
-    expect(text()).toContain('pip install -U "fiberhmm[consensus]>=3.2.0,<4"');
+    expect(text()).toContain('pip install -U "fiberhmm[consensus]>=3.2.2,<4"');
   });
 });
 
@@ -331,7 +331,7 @@ describe('independent FiberHMM updates', () => {
   const offer = () => {
     check = { ...available, status: 'up_to_date', fiberhmm: {
       status: 'update_available', current: '3.0.3', latest: '3.1.0', packaged: true, blocked: false,
-      pip_command: 'pip install -U "fiberhmm[consensus]>=3.2.0,<4"',
+      pip_command: 'pip install -U "fiberhmm[consensus]>=3.2.2,<4"',
     } };
     info.fiberhmm = { ...info.fiberhmm, requested: { source: 'bundled', path: null }, source: 'bundled',
       app_choice: { source: 'bundled', custom_path: '', restart_needed: false }, notices: [] };
@@ -394,7 +394,7 @@ describe('independent FiberHMM updates', () => {
     await act(async () => { root.render(<AppUpdateHost />); });
     await act(async () => { useAppUpdateStore.getState().openDialog(); });
     await flush();
-    expect(text()).toContain('pip install -U "fiberhmm[consensus]>=3.2.0,<4"');
+    expect(text()).toContain('pip install -U "fiberhmm[consensus]>=3.2.2,<4"');
     expect(button('Update FiberHMM to')).toBeUndefined();
   });
 

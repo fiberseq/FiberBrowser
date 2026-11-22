@@ -6,6 +6,9 @@ import { useLaunchUiStore } from '../../utils/launchSession';
 import { resetRegistryAnnotation } from '../../utils/annotationReset';
 import { AlertTriangle, Info, X } from '../ui/Icons';
 import { useRecentGenomesStore } from '../../stores/recentGenomesStore';
+import { useBrowserStore } from '../../stores/browserStore';
+import { GenesPromptControls, useGenesPrompt } from '../../features/genesPrompt/GenesPromptControls';
+import { dismissGenesNotice, genesNoticeDismissed, mainGenesTrackShown } from '../../features/genesPrompt/genesPrompt';
 
 const BUTTON = 'inline-flex shrink-0 items-center gap-1 whitespace-nowrap px-[9px] py-[3px] rounded-fb border text-xs font-medium disabled:opacity-50';
 
@@ -31,7 +34,13 @@ export function ReferenceNotices() {
   const key = annotation ? `${annotation.genome_id ?? ''}:${annotation.gene_count}:${target?.genome_id ?? ''}` : null;
   const foreign = !restoring && !datasetProblem && annotation?.loaded && annotation.fits === false
     && !!target && annotation.can_reset && !annotation.current && hidden !== key;
-  if (!notice && !foreign) return null;
+  // No genes on the reference and no main Genes track to say so in place: a small notice here instead.
+  const genesPrompt = useGenesPrompt();
+  const genesTrackShown = useBrowserStore(s => mainGenesTrackShown(s.panels, { collapsedRows: s.collapsedRows, fullViewPanelId: s.fullViewPanelId }));
+  const [genesDismissed, setGenesDismissed] = useState<string | null>(null);
+  const showGenes = !restoring && !datasetProblem && !!genesPrompt && !genesTrackShown
+    && genesDismissed !== genesPrompt.key && !genesNoticeDismissed(genesPrompt.key);
+  if (!notice && !foreign && !showGenes) return null;
   return (
     <>
       {notice && (
@@ -41,6 +50,17 @@ export function ReferenceNotices() {
           <span className="min-w-0 flex-1" data-testid="reference-notice-text">{notice}</span>
           <button type="button" onClick={() => setNotice(null)} className="rounded p-0.5 hover:bg-sky-100 dark:hover:bg-sky-900/40"
             aria-label="Dismiss" data-testid="reference-notice-dismiss"><X size={12} /></button>
+        </div>
+      )}
+      {showGenes && genesPrompt && (
+        <div className="flex items-center gap-2 border-b border-sky-200 bg-sky-50 px-3 py-1 text-[12px] text-sky-900 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-100"
+          role="status" data-testid="genes-notice">
+          <Info size={14} className="flex-shrink-0" aria-hidden="true" />
+          <span className="min-w-0 flex-1"><GenesPromptControls key={genesPrompt.key} prompt={genesPrompt} testId="genes-notice-prompt" /></span>
+          <button type="button" onClick={() => { dismissGenesNotice(genesPrompt.key); setGenesDismissed(genesPrompt.key); }}
+            className="rounded p-0.5 hover:bg-sky-100 dark:hover:bg-sky-900/40" aria-label="Dismiss" data-testid="genes-notice-dismiss">
+            <X size={12} />
+          </button>
         </div>
       )}
       {foreign && target && (

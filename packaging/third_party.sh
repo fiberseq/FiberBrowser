@@ -14,6 +14,14 @@
 #   (Bergman lab, continuing FlyBase's set), FASTA + GFF3, CC0 1.0. Pinned to
 #   a commit of github.com/bergmanlab/drosophila-transposons.
 #
+# CPython for the Mac app's build venv (macos/build_app.sh, FB_PYTHON_RUNTIME=standalone, the default):
+#   python-build-standalone's install_only build (github.com/astral-sh/python-build-standalone, release
+#   $PYTHON_STANDALONE_TAG), CPython $PYTHON_STANDALONE_VERSION for macOS arm64 (targets macOS 11). Its
+#   libraries were built under the generic prefix /install and link only macOS's own libraries (OpenSSL,
+#   sqlite, libffi, bz2, lzma are static; ncurses and libedit are macOS's), so the app's libpython carries no
+#   builder's path, unlike a conda or Homebrew Python's. PSF licence (the tarball's licence files are copied into the app). The sha256 is GitHub's
+#   published asset digest for that file.
+#
 # minimap2 stays pinned in each build script (it is built from source there).
 
 BLAST_VERSION=2.17.0
@@ -21,6 +29,12 @@ BLAST_URL="https://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/$BLAST_VERSION"
 BLAST_MACOS_TARBALL="ncbi-blast-$BLAST_VERSION+-aarch64-macosx.tar.gz"
 BLAST_MACOS_SHA256=8d6739fa133107bce91dbb6b143ec993c9983416244fe502f9c36d585850dc00
 BLAST_PROGRAMS="blastn makeblastdb"
+
+PYTHON_STANDALONE_TAG=20261110
+PYTHON_STANDALONE_VERSION=3.12.16
+PYTHON_STANDALONE_MACOS_TARBALL="cpython-$PYTHON_STANDALONE_VERSION+$PYTHON_STANDALONE_TAG-aarch64-apple-darwin-install_only.tar.gz"
+PYTHON_STANDALONE_MACOS_SHA256=e956e60bc9465d577ef8062059aa05cd3a2665b4b8678a2ed24e432368330b8f
+PYTHON_STANDALONE_URL="https://github.com/astral-sh/python-build-standalone/releases/download/$PYTHON_STANDALONE_TAG"
 
 TE_DMEL_ID=dmel-canonical-v10.2
 TE_DMEL_COMMIT=9b28cdbe9d2b3ef895df37f8495b33104677e516

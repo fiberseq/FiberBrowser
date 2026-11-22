@@ -1,5 +1,103 @@
 # Changelog
 
+## 3.1.1 — 2026-11-22
+
+FiberBrowser 3.1.1 requires **FiberHMM 3.2.2 or later**
+(`fiberhmm[consensus]>=3.2.2,<4`; 3.1.0 needed 3.2.0). FiberHMM 3.2.2's scans
+read MA groups first, as FiberBrowser 3.1.1's read rows do, so scans and the
+read panel agree. The apps bundle FiberHMM 3.2.2, and pip installs pull it.
+
+- **Quantify a window.** Drag a window on a cluster profile or on the
+  metaprofile track (or type its bounds), then click **Quantify**. The card
+  gives one value per measure and group with a 95% interval: read layers,
+  footprint size bands, footprint families from Find classes, NFR families,
+  nucleosome geometries and the regularity score. Groups can be clusters,
+  datasets, both, or meta-locus pools. A layer's value is the mean of the curve
+  beside it over the window, from the same reads. Shares of reads use Wilson
+  intervals, and everything else a seeded bootstrap over reads. Values can be
+  shown as enrichment over a baseline or against a reference group. Click a
+  bar to show its reads. **Keep** sends the card to the Plots Gallery.
+- **Relative x-axis.** Cluster profiles, the metaprofile track and Plots
+  metaprofiles can be labelled by distance from a gene's start or end, the
+  view centre, a position or a meta-locus site. Upstream is negative on either
+  strand, and **Flip to gene direction** turns the reads and plots together.
+  Exports keep the axis.
+- **Several sources in one Plots metaprofile.** A metaprofile can draw layers,
+  MA-tag groups, single footprint classes and NFR families together, one line
+  per source in its layer colour. Summary across groups draws one bar per
+  source for each group, and Compare runs per source.
+- **Summary bars equal their curves.** A new metaprofile summary is the
+  mean of the drawn curve over the window, smoothing and blank bins
+  included. **Value → pooled** gives 3.1.0's summed signal over summed
+  coverage, and summaries saved with 3.1.0 keep it.
+- **Footprint size plots live in Plots only.** The Clusters panel's
+  **Footprint sizes** tab and the toolbar's size buttons are gone. One action,
+  **Footprint sizes → Plots**, opens Size enrichment per cluster at the
+  clustered locus, or per dataset without clusters. The read menu's
+  **Footprint size enrichment here** plots the panel it was opened from. In
+  Plots, size enrichment and V-plots take any size range, and Compare can
+  compare the two plots' enrichment (A vs B) instead of their size shares. Older links and
+  tour steps that ask for the retired tab open Overview, and older sessions
+  load as before.
+- **Scripted figures.** `figure()` and the new `fiberbrowser render` command
+  take a seed, spanning reads and read caps, can hide the SV strip, re-cluster
+  a session reproducibly (with a TSV of the clusters), overlay BED intervals
+  with opening-width classes and statistics, and set the page size, minimum
+  font size, DPI and TrueType text. Paths in a session can be remapped, and
+  each render writes a receipt of its inputs. A session renders as before
+  unless you ask for these.
+- **The Python API follows 3.1.** `BrowserClient` and the notebook link cover
+  the read policy (Min footprints and uncalled reads, duplicates, QC-fail),
+  layer colours, Quantify a window, Plots (open and keep a plot), the
+  meta-locus, Find sequence, recent and pinned genomes, and runs. A figure of
+  the current view follows every setting it draws, and a figure with no tab
+  open follows the notebook's settings.
+- **Pooled loci from a script.** `figure(meta_locus=...)` and
+  `fiberbrowser render --bed --anchor --flank --seed --count` draw a
+  meta-locus pool with no browser tab, from a BED, an existing pool or a
+  session saved on a pooled view. A pool can be re-clustered, and
+  `quantify_window` (`fiberbrowser quantify` on the command line) and
+  `get_meta_locus_profile` give the browser's numbers for the same pool,
+  seed and count. The open tab's view of a pool is never changed.
+- **Reads written with MA tags only.** FiberHMM 3.2 can write its calls as
+  MA/AQ alone, without the older ns/nl and as/al tags. Read rows, the
+  dense and DAF-C read paths, Min footprints, read statistics, run summaries
+  and the FIRE check now read the MA nucleosome and accessibility calls
+  first, so such files draw exactly as files with both. Before, each of their
+  reads drew as one blank row. When a record carries both, MA wins; the
+  older tags are read only for calls MA does not carry, or on a file that
+  fibertools FIRE (0.12 or older) rewrote after FiberHMM.
+- **Missing genes are one click away.** When the reference has no gene
+  annotation, the Genes track says so, for example "No genes loaded for dm6 ·
+  Load dm6 genes", and one click loads it. Your own FASTA gets "Load a GTF…".
+- **Nothing is left out silently.** Live-lifted datasets aren't plotted or
+  quantified yet. Plots and the Quantify card now name the ones they leave
+  out, and the headless numbers list them too.
+- **The Mac app's internet features work again.** The Mac apps 3.0.0 to
+  3.1.0 looked for HTTPS certificates in a folder that exists only on the
+  computer that built them, so on other Macs most internet features failed
+  with a certificate error: the app and FiberHMM update checks, genome and
+  annotation downloads, remote https:// BAMs, UCSC tracks, ENCODE search,
+  track hubs and share links, and Dfam TE downloads. 3.1.1 uses the
+  certificate file it ships with. Earlier Mac apps can't offer 3.1.1
+  themselves: download it from the releases page.
+- **Nucleosome recall: Topology.** The run wizard's advanced options offer
+  "Nucleosome recall: Conservative (default) / Topology" for Hia5 and DddB.
+  Topology keeps fragment structure in nucleosome recall and works well on
+  some Nanopore Hia5 data. A re-call replays it.
+- **Window quantification is easier to use.** A small click no longer starts a
+  window, "Select window" is a mode, the gene picker matches chromosome
+  aliases, and the axis ticks are round numbers.
+- **Clearer messages in the Mac app.** The browser-render engine
+  (`/api/render/figure`) says to use the headless engine or Export, and
+  lifting scan hits onto a live-lifted dataset says it needs liftbed, which
+  the app does not include yet. JASPAR names load without httpx.
+- **Fixes.** On FastAPI 0.142 the live-lift guard let lifted datasets through
+  to routes of included routers; it checks every route again. A graph helper
+  killed with an unread reply is reaped at once on Python 3.11 and later (it
+  waited 5 s). The remote helper refuses a path the system would not open for
+  too many links, on every Python.
+
 ## 3.1.0 — 2026-11-20
 
 FiberBrowser 3.1.0 requires **FiberHMM 3.2.0 or later**

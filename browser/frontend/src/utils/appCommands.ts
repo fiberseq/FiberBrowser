@@ -258,14 +258,14 @@ export const APP_COMMAND_INFO: Record<AppCommandName, AppCommandInfo | null> = {
   },
   'footprint-size-enrichment': {
     label: 'Footprint size enrichment',
-    detail: 'Clusters › Footprint sizes: footprint size by position, coloured by where each size is enriched (one plot per dataset, no clustering needed; per cluster when clustered)',
+    detail: 'Plots, Size enrichment: footprint size by position, coloured by where each size is enriched (one plot per dataset, no clustering needed; per cluster when clustered)',
     keywords: ['size enrichment', 'footprint sizes', 'footprint size', 'v-plot', 'vplot', 'v plot', 'enrichment', 'heatmap',
       'size by position', 'fragment size', 'nucleosome', 'pol ii', 'polymerase'],
     disabledReason: () => (hasDatasets() ? null : NEEDS_DATASET),
   },
   'footprint-vplot': {
     label: 'V-plot (footprint midpoints)',
-    detail: 'Clusters › Footprint sizes, V-plot view: each footprint counted once at its midpoint, by size',
+    detail: 'Plots, V-plot: each footprint counted once at its midpoint, by size',
     keywords: ['v-plot', 'vplot', 'v plot', 'midpoint', 'footprint sizes', 'size enrichment', 'fragment size'],
     disabledReason: () => (hasDatasets() ? null : NEEDS_DATASET),
   },

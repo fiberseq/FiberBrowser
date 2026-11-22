@@ -848,11 +848,11 @@ add("tp_label_what_order", "why does rule order matter in labeling?",
 
 add("tp_clusters_vplot", "how do I read the V-plot?",
     ["what is the V-plot", "interpret the v plot", "footprint size vs position plot"],
-    [op("cluster-detail", "vplot"),
-     ex("clusters-vplot", "Each point is a footprint: position on x, size on y; nucleosomes form a ~147 bp band, TFs sit low.",
+    [op("cluster-detail"),
+     ex("clusters-vplot", "Footprint sizes → Plots draws it: position on x, footprint size on y; nucleosomes form a ~147 bp band, TFs sit low.",
         requires="has_clusters"),
-     ex("clusters-vplot-settings", "V-plot settings change the size bins, layer and axes.")],
-    "Reading the V-plot", "Result tab of Clusters.", category="teach_read", clustered=(0,))
+     ex("clusters-vplot-settings", "Display under More options sets the normalisation, size bins, smoothing and colour scale.")],
+    "Reading the V-plot", "Clusters, then Plots.", category="teach_read", clustered=(0,))
 
 add("tp_clusters_projection", "how do I see if my clusters are really distinct?",
     ["cluster projection", "umap of reads", "are my clusters separated", "pca of the clusters"],
@@ -1339,8 +1339,8 @@ add("tp_label_quality_tab", "what is the labeling quality tab?",
 # ── Clusters ────────────────────────────────────────────────────────
 add("tp_clusters_vplot_compare", "compare V-plots between clusters",
     ["footprint size patterns by cluster", "v-plot per cluster", "do clusters have different footprint sizes"],
-    [op("cluster-detail", "vplot"),
-     ex("clusters-vplot", "The V-plot shows one panel per cluster; a nucleosome band in one and small footprints in another means different chromatin states.",
+    [op("cluster-detail"),
+     ex("clusters-vplot", "Footprint sizes → Plots shows one V-plot per cluster; a nucleosome band in one and small footprints in another means different chromatin states.",
         requires="has_clusters")],
     "V-plots by cluster", "Reading results.", category="teach_read", clustered=(0,))
 

@@ -14,6 +14,8 @@ from services.bam_tags import (
     ma_tag_is_spec,
     read_has_footprint_calls,  # noqa: F401 (re-exported)
     record_passes_call_rule,
+    bam_consensus_contracts,
+    record_ma_call_arrays,
     record_passes_read_policy,
     read_legacy_tags_are_molecular,
     MA_ALL_MOLECULAR,
@@ -185,6 +187,10 @@ def load_reads_from_bam(
             except Exception:
                 legacy_frame = (False, False)
             ma_molecular = bam_ma_group_frame(bam.header)
+            try:
+                family_contracts = bam_consensus_contracts(bam.header)
+            except Exception:
+                family_contracts = None
 
             from services.background_work import checkpoint
             from services.signal_evidence import signal_header, record_keeps_signal
@@ -217,10 +223,22 @@ def load_reads_from_bam(
                 nl_tag = None
                 msp_only = False
 
-                # Both tags, as arrays (a scalar ns:i is Dorado's signal sample count, not footprints).
-                ns_tag, nl_tag = interval_tag_pair(read, 'ns', 'nl')
+                # MA first, by family (as the compact loader): an MA nuc group is the footprints and an MA msp group
+                # the accessible stretches; legacy ns/nl and as/al fill only a family MA does not carry, so stale
+                # legacy tags beside MA never win. MA arrays are SEQ frame already (bam_tags.ma_call_arrays).
+                ma_arrays = record_ma_call_arrays(read, ma_molecular, family_contracts)
+                seq_frame = False
+                if 'nuc' in ma_arrays:
+                    ns_tag, nl_tag = ma_arrays['nuc'][:2]
+                    seq_frame = True
+                else:
+                    # Both tags, as arrays (a scalar ns:i is Dorado's signal sample count, not footprints).
+                    ns_tag, nl_tag = interval_tag_pair(read, 'ns', 'nl')
 
-                if ns_tag is None:
+                if ns_tag is None and 'msp' in ma_arrays:
+                    ns_tag, nl_tag = ma_arrays['msp'][:2]
+                    msp_only = seq_frame = True
+                elif ns_tag is None:
                     try:
                         ns_tag, nl_tag = interval_tag_pair(read, 'as', 'al')
                         if ns_tag is None:
@@ -256,7 +274,8 @@ def load_reads_from_bam(
                     footprints = ma_footprints
                 else:
                     footprints = _legacy_reference_footprints(
-                        read, ns_tag, nl_tag, reads_with_tags, read_legacy_tags_are_molecular(read, legacy_frame))
+                        read, ns_tag, nl_tag, reads_with_tags,
+                        False if seq_frame else read_legacy_tags_are_molecular(read, legacy_frame))
                     if footprints is None:
                         continue
 

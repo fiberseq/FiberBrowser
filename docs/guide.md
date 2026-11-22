@@ -334,9 +334,6 @@ The **Charts** tab compares the clusters:
   default metaprofile shows; click layer chips to pick your own.
 - **Composition** shows each dataset's share of reads in each cluster, as
   **Bar**, **Pie** or **Line** (Line joins datasets, so it needs two).
-- **Footprint sizes** plots footprint size against position, as a **Size
-  enrichment** plot or a **V-plot** (see
-  [Footprint size enrichment plots](#footprint-size-enrichment-plots)).
 - **Differences** (once labeling rules are defined) shows what sets each
   cluster apart: for each rule, how much more or less common a matching
   footprint is in the cluster's reads than in all the other clusters.
@@ -344,7 +341,9 @@ The **Charts** tab compares the clusters:
 Click cluster names above a chart to show only those clusters; **All** shows
 them all again. A cluster picked in the read panel or on the Overview is picked
 in the charts too. **Open in Plots** opens the cluster profiles in the
-[Plots](workflows/plots.md) workspace.
+[Plots](workflows/plots.md) workspace, and **Footprint sizes → Plots** opens a
+size enrichment plot per cluster there (see
+[Footprint size enrichment plots](#footprint-size-enrichment-plots)).
 
 ![The default metaprofile in the Tracks panel, following the active layers](images/guide/x19_metaprofile_follow_layers.png)
 
@@ -356,28 +355,26 @@ choice; turning it back on follows the layers again.
 
 ### Footprint size enrichment plots
 
-![Footprint size enrichment on the demo data](images/guide/footprint_size_enrichment.png)
+![Footprint size enrichment by cluster in Plots, opened from the Clusters panel](images/guide/footprint_size_enrichment.png)
 
 A footprint size enrichment plot puts footprint size on the y axis and position
 on the x axis, and colours each cell by how enriched that size is at that
-position. It needs no clustering. Open it in any of these ways:
+position. It is drawn in the [Plots](workflows/plots.md) workspace and needs no
+clustering. Open it in any of these ways:
 
-- right-click the reads and choose **Footprint size enrichment here** (without
-  clusters it plots the view of the panel you clicked; with clusters, the
-  clustered panels' view, as the other cluster charts);
-- click **Sizes** beside **Cluster** in the toolbar (also **Footprint sizes** in
-  the Cluster group's options);
+- right-click the reads and choose **Footprint size enrichment here** (it plots
+  the view of the panel you clicked);
 - press ⌘K (Ctrl+K) and type *size enrichment*, *footprint sizes* or *V-plot*;
-- open the **Clusters** panel and click **Footprint size enrichment**, or, once
-  you have clusters, use **Charts › Footprint sizes**.
+- in the **Clusters** panel, click **Footprint sizes → Plots**;
+- in Plots, choose **Size enrichment** or **V-plot** under **Type**.
 
 Without clusters there is one plot per dataset, made from every read in view,
-side by side on one colour scale. With clusters there is one plot per cluster;
-**Per dataset** switches back to all reads. Each plot shows how many reads and
-footprints it rests on, and a note appears when the plots rest on very
-different numbers of reads.
+side by side on one colour scale (**Group by › Dataset**). With clusters, the
+plot opens with one plot per cluster (**Group by › Cluster**), pinned to the
+clustered locus; **Dataset** switches back to all reads. Each plot shows how
+many reads and footprints it rests on.
 
-Choose one of two views:
+The two types:
 
 - **Size enrichment** (the default). Each footprint fills every position it
   covers. Each size row is divided by its average across the window, so 1 means
@@ -387,45 +384,23 @@ Choose one of two views:
 - **V-plot**. This is the classic plot: each footprint is counted once at its
   midpoint, coloured by count.
 
-Settings:
+**Source** chooses the footprints: **All footprints** (the default) joins the
+Nuc layer, the nucleosome-sized footprints, with the TF layer, which holds the
+small ones, counting each footprint once; the other choices are the layers in
+the Layers toolbar. **Compare** adds **A − B** or **log2 ratio** plots between
+groups; counts are first divided by each plot's footprints, so a comparison is
+of distributions rather than read numbers.
 
-- **Gaussian σ size / position**: the smoothing on each axis, in bp (0 = off).
-  It is a separable Gaussian applied to the counts before normalising.
-- **Size bin** and **Pos bin**: the bin widths, in bp.
-- **Normalise**:
-  - **Per size row**: each size over its mean across the window;
-  - **Per position**: each position over its mean across sizes;
-  - **Obs / expected**: the observed count over the count expected from the
-    size and position totals;
-  - **Counts**: no normalisation.
-- **More settings**:
-  - the size range;
-  - **Min footprints**: sizes, or positions under Per position, with fewer
-    footprints are left blank (hatched); the default is 20;
-  - log2 or linear colour;
-  - a shared or per-plot colour range, and its limit;
-  - **Colormap** and **Reverse**. Single plots use a sequential map: magma
-    for Size enrichment (log2 or linear) and viridis, as V-plots have always
-    used, for the V-plot. The log2 ratio, a comparison, has its own
-    **Colormap** beside its picker, RdBu by default (blue lower, red higher,
-    white equal). Any of Magma, Viridis, Inferno, Plasma, Cividis, Greys or
-    RdBu can be picked; each keeps its own pick, so switching to the V-plot
-    and back restores it. A diverging colormap keeps 0 at its white middle.
-    The colour bar and the PNG, SVG and PDF downloads use it, and it is saved
-    with the session;
-  - **Layer**, the source: **All footprints** (the default) joins the Nuc
-    layer, the nucleosome-sized footprints, with the TF layer, which holds the
-    small ones, counting each footprint once. The other choices are the
-    layers in the Layers toolbar, with the same names and colours: Nuc, TF,
-    the accessibility layer and any footprint-class or other interval layer
-    in the loaded files.
-- **log2 ratio** (with two or more plots): adds a plot of log2(A / B) for two
-  plots you choose. Counts are first divided by each plot's footprints, so the
-  ratio compares distributions rather than read numbers.
+**More options › Display** holds the rest: **Normalise** (per size row, per
+position, observed over expected, or counts), **Footprint as** (full footprint
+or midpoint), the Gaussian smoothing on each axis in bp, the size and position
+bins, the size range, **Min footprints** (sizes or positions with fewer
+footprints are left blank, 20 by default), log colour, the colormap, a shared
+or per-plot colour range and its limit.
 
-Export: each plot's save menu (top right, on hover) saves PNG, SVG or PDF.
-**Export TSV** saves every matrix, each with its settings in a `#` header.
-The settings are saved with the session.
+Export: **Export** above the plot saves PNG, SVG or PDF, or the Data TSV, with
+every matrix and its settings in a `#` header. **Keep** saves the plot to the
+Gallery, and the plot is saved with the session.
 
 ### 19. The read map
 
@@ -1107,6 +1082,59 @@ plot like any other; see [Meta-locus](workflows/meta-locus.md).
 
 ![A meta-locus: the reads of every site in a BED file, clustered](images/meta-locus/clustered.png)
 
+### Quantify a window
+
+![A window on the cluster profiles and its card, one bar per layer and cluster](images/guide/x24_quantify_window.png)
+
+**Quantify a window** answers questions such as "how often is this footprint
+family or NFR there in each cluster or dataset, and how sure is that?" straight
+from the reads. It works on the Clusters panel's **Profiles** tab and on the
+main metaprofile track.
+
+1. **Set the window.** Drag across a cluster profile, or click
+   **▭ Select window** and drag on the metaprofile track (Shift + drag also
+   works there). You can also type the start and end. The window is shaded on
+   every profile; drag it to move it, drag its edges to resize it, and × clears
+   it. Without a window, the whole view is used, and the card says so.
+2. **Click Quantify.** The card shows one bar per measure and group with 95%
+   whiskers, or lines, or a table.
+3. **Choose what to measure.** By default the card measures the active layers.
+   **Measures** also lists footprint size bands, footprint families from
+   **Find classes**, NFR families from an Accessibility run, nucleosome
+   geometries and the regularity score. A measure that isn't available yet is
+   greyed out with the step that makes it available.
+4. **Choose what to compare:** clusters, datasets, both, or meta-locus pools.
+   You can also pick a reference group.
+
+The numbers match the curves beside them: a layer's value is the curve's mean
+over the window, computed from the same reads and bins. Shares of reads, such
+as a footprint family, use Wilson intervals. Everything else uses a seeded
+bootstrap over reads. **Value** switches to enrichment over a baseline
+(the groups pooled, the rest, the reference group, the whole region, the
+profile's own flank or the dataset mean). For shares, a test of equal shares
+across groups is given, with BH-adjusted q values. Groups with fewer than 20
+reads are drawn grey and labelled, never hidden.
+
+Click a bar or a table row to show its reads in the panel. A chip names the
+filter, and × puts every read back. **Keep** sends a frozen copy to the Plots
+Gallery, and **Open in Plots** shows the working card there.
+
+Live-lifted datasets aren't quantified or plotted yet. When one is in view, the
+card and Plots leave it out and a line under them names it.
+
+#### Relative x-axis
+
+![Cluster profiles on a relative axis, with a window from −100 to +100 bp](images/guide/x25_relative_axis.png)
+
+**x-axis: Genome | Relative** labels the profiles by distance from an anchor:
+the TSS or end of a gene in view, the view centre, a typed position, or, on a
+meta-locus, the site anchor. Upstream is negative on either strand. A plot
+always runs the same way as the reads beside it. For a minus-strand gene,
+**Flip to gene direction** turns on Reverse view, so the reads and the plots
+flip together. A window set on a relative axis is kept relative (for example
+−200 to +50), so it stays on the same place when the view moves. Plots
+metaprofiles have the same x-axis option, and exports keep it.
+
 ### The read menu
 
 ![The read menu](images/guide/x12_read_menu.png)
@@ -1219,7 +1247,11 @@ A reference given with `--fasta` when the server starts stays loaded: neither
 a remembered reference nor a restored session replaces it, and the page says
 so in one line. If the annotation loaded doesn't belong to the reference,
 **Reset to dm6 genes** (with your reference's name) in Reference & Tracks (or in the **Gene annotation
-mismatch** banner) loads the reference's own. On a lab server each member has
+mismatch** banner) loads the reference's own. When no genes are loaded at all,
+the Genes track says so, for example **No genes loaded for dm6 · Load dm6
+genes**, and one click loads them (a large download asks first). Without a
+Genes track the same line appears under the genome banner. For your own FASTA
+it offers **Load a GTF…** instead. On a lab server each member has
 their own list, holding only files inside their folders; public servers don't
 show it.
 

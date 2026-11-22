@@ -1,3 +1,4 @@
+import '../../features/testSetup';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -20,7 +21,8 @@ import type { PanelConfig } from '../../types';
  * fb-n3-clusters (audit H2): in Per panel mode (switched on by "Open with dm6
  * in its own panel") the main locus is stale; the charts read it, so the
  * clustered panel was "left out", Projection said "run clustering first" and
- * no projection or V-plot was requested. They read the clustered panel's view.
+ * no projection or V-plot was requested. They read the clustered panel's view (the footprint size plots, now in
+ * Plots, are pinned to it).
  */
 const ds = (id: string) => ({ id, label: id, path: `/d/${id}.bam`, color: '#000', data_type: 'bam' });
 const panel = (id: string, datasetId: string, over: Partial<PanelConfig> = {}) =>
@@ -81,13 +83,10 @@ describe('Clusters charts in Per panel mode', () => {
     expect(options.panelGenome ?? undefined).toBe(genome);
     expect(host.textContent).not.toContain('run clustering first');
 
-    await openTab('vplot');
-    // Footprint sizes, per cluster (the default with clusters): the clustered panel's locus and reference.
-    expect(api.fetchFootprintSizes).toHaveBeenCalledTimes(1);
-    const [vChrom, vStart, vEnd, vOptions] = api.fetchFootprintSizes.mock.calls[0];
-    expect([vChrom, vStart, vEnd]).toEqual(locus);
-    expect(vOptions.groupBy).toBe('cluster');
-    expect(Object.keys(vOptions.clusterAssignments)).toEqual([clustered]);
-    expect(vOptions.panelGenome ?? undefined).toBe(genome);
+    // Footprint sizes → Plots: by cluster, pinned to the clustered panel's locus and reference.
+    await act(async () => { (host.querySelector('[data-testid="cluster-detail-sizes-in-plots"]') as HTMLButtonElement).click(); });
+    expect(useBrowserStore.getState().plotsWorkspace.current).toMatchObject({
+      type: 'size-enrichment', groupBy: 'cluster', pinned: { chrom: locus[0], start: locus[1], end: locus[2], genome: genome ?? null },
+    });
   });
 });

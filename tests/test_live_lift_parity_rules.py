@@ -174,8 +174,10 @@ def test_trim_uses_only_projected_aligned_bases(tmp_path, monkeypatch):
 
 
 def test_nested_ma_extent_keeps_a_valid_record(tmp_path, monkeypatch):
+    # The record's footprints are ns/nl (its MA carries TF calls only; an MA nuc group would be read first), and
+    # the MA calls' extent reaches past the lifted record's start.
     tags = [("ns", array("I", [750])), ("nl", array("I", [250]))] + _ma(
-        "2000;nuc.Q:151-150;tf.Q:161-10", [200, 200])
+        "2000;tf.Q:151-150,161-10", [200, 200])
     path = _bam(tmp_path, [("r", 0, "2000M", tags)])
     (row,) = _lift(monkeypatch, path, _pieces([(200, 1500, 0)]), 1400)
     assert [iv for iv in _ivs(row) if iv[2] > 0] == [[550, 800, 250]]

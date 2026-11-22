@@ -9,9 +9,12 @@ interface ChartMaximizeButtonProps {
   renderChart: (width: number, height: number) => React.ReactNode;
   title?: string;
   filename?: string;
+  /** The header's exports draw through this (given the chart's size plus `exportExtraHeight`), not the canvas copy. */
+  exportDrawFn?: import('../../utils/chartVectorExport').ChartDrawFn;
+  exportExtraHeight?: number;
 }
 
-export function ChartMaximizeButton({ renderChart, title, filename }: ChartMaximizeButtonProps) {
+export function ChartMaximizeButton({ renderChart, title, filename, exportDrawFn, exportExtraHeight }: ChartMaximizeButtonProps) {
   const insideModal = useContext(ChartMaximizeContext);
   const [open, setOpen] = useState(false);
 
@@ -32,6 +35,8 @@ export function ChartMaximizeButton({ renderChart, title, filename }: ChartMaxim
           renderChart={renderChart}
           title={title}
           filename={filename}
+          exportDrawFn={exportDrawFn}
+          exportExtraHeight={exportExtraHeight}
           onClose={() => setOpen(false)}
         />
       )}

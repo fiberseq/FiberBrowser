@@ -79,6 +79,22 @@ describe('clipped footprints keep their whole size', () => {
   });
 });
 
+describe('a compact footprint cut at both ends of a narrower window (3.1.1)', () => {
+  // A 300-bp footprint read over [1000, 1100): compact reads send [0, 100, 300], cut at both edges. Where it starts is
+  // unknown, so its midpoint is too: it is not counted as one inside the window (it used to be centred on the window,
+  // midpoint 1050, and counted). It does overlap the window, and its bp inside are exact (100).
+  const r = engineRead({ id: 'r', aligned_blocks: [[500, 1600]], intervals: [[0, 100, 300]] }, 1000, 'nuc', 'g')!;
+  const win = { start: 1000, end: 1100 };
+  const h = { ...DEFAULT_HISTOGRAM_SETTINGS, binBp: 10, sizeMin: 0, sizeMax: 400, normalization: 'count' as const, weighting: 'count' as const };
+  it('midpoint inclusion leaves it out; overlap and clipped keep it at its whole size', () => {
+    expect(histogramAccumulate([r], win, { ...h, inclusion: 'midpoint' }, ['g'])[0].signal[30]).toBe(0);
+    expect(histogramAccumulate([r], win, { ...h, inclusion: 'overlap' }, ['g'])[0].signal[30]).toBe(1);
+    expect(histogramAccumulate([r], win, { ...h, inclusion: 'clipped', weighting: 'bp' }, ['g'])[0].signal[30]).toBe(100);
+    // The read still touches the window (per-read denominators).
+    expect(histogramAccumulate([r], win, { ...h, inclusion: 'midpoint' }, ['g'])[0].nReads).toBe(1);
+  });
+});
+
 describe('BED transport sends whole footprints (size histograms)', () => {
   // Window [1000, 1100): [950, 1050) is 100 bp, cut on the left; [810, 1110) is 300 bp, cut on both sides with its
   // midpoint (960) outside the window. The server sends them whole, relative to the window start, with their sizes.

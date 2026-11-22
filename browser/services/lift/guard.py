@@ -72,12 +72,21 @@ _DATASET_MAPS = ("read_ids_by_dataset", "read_ids", "cluster_assignments", "clus
 _MAX_BODY = 4 * 1024 * 1024
 
 
-def _route_template(app, scope) -> Optional[str]:
-    for route in app.router.routes:
-        match, _child = route.matches(scope)
-        if match == Match.FULL:
-            return getattr(route, "path", None)
-    return None
+def _route_match(app, scope) -> tuple[Optional[str], dict]:
+    """The route template a request matches and its path parameters, on any FastAPI version.
+
+    FastAPI 0.142 keeps included routers as ``_IncludedRouter`` branches without a ``path``, so walking
+    ``app.router.routes`` found no template for them and every included route passed the guard. The
+    public-mode guard's flattened route list (``iter_route_entries``) gives the full templates on both.
+    """
+    from starlette.routing import compile_path
+    from services.public_mode_guard import iter_route_entries
+
+    for entry in iter_route_entries(app):
+        if entry.matches(scope) == Match.FULL:
+            m = compile_path(entry.path)[0].match(scope.get("path") or "")
+            return entry.path, (m.groupdict() if m else {})
+    return None, {}
 
 
 def _split(values: Iterable) -> list:
@@ -137,7 +146,7 @@ def install_live_lift_guard(app, get_state: Callable) -> None:
         lifted = {d for d, ds in list(datasets.items()) if is_lifted(ds)}
         if not lifted:
             return await call_next(request)
-        template = _route_template(app, request.scope)
+        template, path_params = _route_match(app, request.scope)
         if template is None or (request.method, template) in LIFT_ALLOWED:
             return await call_next(request)
         body = None
@@ -151,12 +160,6 @@ def install_live_lift_guard(app, get_state: Callable) -> None:
         # Rule grouping reads config only; every SNP/SV variant path stays denied.
         if request.method == _POST and template == "/api/variants/alleles" and isinstance(body, dict) and body.get("source") == "lift_hap":
             return await call_next(request)
-        path_params = {}
-        for route in app.router.routes:
-            match, child = route.matches(request.scope)
-            if match == Match.FULL:
-                path_params = child.get("path_params", {})
-                break
         named = [d for d in named_dataset_ids(request.query_params, path_params, body) if d in lifted]
         if not named:
             return await call_next(request)

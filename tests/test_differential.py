@@ -27,6 +27,8 @@ def test_woolf_and_haldane():
 
 
 def test_cmh_and_mh_or_match_statsmodels():
+    # A reference check against statsmodels, a dev-only dependency: skipped where it isn't installed.
+    pytest.importorskip("statsmodels")
     from statsmodels.stats.contingency_tables import StratifiedTable
     tables = [(12, 8, 6, 14), (20, 30, 10, 40), (5, 5, 3, 9)]
     st = StratifiedTable([np.array([[a, b], [c, d]]) for a, b, c, d in tables])

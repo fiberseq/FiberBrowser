@@ -84,8 +84,9 @@ def _balanced_indices(groups: list[list[int]], seed: int, ident) -> np.ndarray:
 
 
 def _fit_predict(X: np.ndarray, fit_rows: np.ndarray, k: int, method: str, random_state: int,
-                 centers_out: dict | None = None) -> np.ndarray:
-    """K-means fitted on fit_rows, assigning every row; labels ordered by size (0 = largest). ``centers_out``
+                 centers_out: dict | None = None, ids=None) -> np.ndarray:
+    """K-means fitted on fit_rows, assigning every row; labels canonical (cluster_assignment.canonical_cluster_labels:
+    by size, 0 = largest, ties by the smallest of ``ids`` (one per row of X) or else the fitted centre). ``centers_out``
     receives the fitted centres under the returned labels (graph primary G0: the model as fitted, never centres
     recomputed from every assigned read)."""
     if X.shape[0] == 0:
@@ -103,13 +104,15 @@ def _fit_predict(X: np.ndarray, fit_rows: np.ndarray, k: int, method: str, rando
     else:
         model = KMeans(n_clusters=n_clusters, random_state=random_state, n_init=10)
     model.fit(X[fit_rows])
+    from services.cluster_assignment import canonical_cluster_labels
     labels = model.predict(X).astype(np.int32)
-    sizes = np.bincount(labels, minlength=n_clusters)
-    rank = {int(old): new for new, old in enumerate(sorted(range(n_clusters), key=lambda c: (-sizes[c], c)))}
+    rank: dict = {}
+    out = canonical_cluster_labels(labels, ids, centers={c: model.cluster_centers_[c] for c in range(n_clusters)},
+                                   rank_out=rank)
     if centers_out is not None:
         for old, new in rank.items():
             centers_out[new] = model.cluster_centers_[old].astype(np.float64).tolist()
-    return np.array([rank[int(label)] for label in labels], dtype=np.int32)
+    return out
 
 
 def _pattern_labels(bits: np.ndarray) -> tuple[np.ndarray, dict[int, list[int]]]:
@@ -288,7 +291,7 @@ def run_matched_views_endpoint(*, state, req) -> Dict[str, Any]:
         fitted = len(row_read_ids)
     elif req.mode == "joint":
         fit_rows = fit_rows_for(list(range(len(row_read_ids))))
-        labels = _fit_predict(X, fit_rows, req.k, method, random_state)
+        labels = _fit_predict(X, fit_rows, req.k, method, random_state, ids=row_read_ids)
         fitted = len(fit_rows)
     else:
         label_space = "per_view"
@@ -300,7 +303,8 @@ def run_matched_views_endpoint(*, state, req) -> Dict[str, Any]:
             if not indices:
                 continue
             fit_rows = fit_rows_for(indices)
-            view_labels = _fit_predict(X[indices], np.searchsorted(indices, fit_rows), req.k, method, random_state)
+            view_labels = _fit_predict(X[indices], np.searchsorted(indices, fit_rows), req.k, method, random_state,
+                                       ids=[row_read_ids[i] for i in indices])
             labels[indices] = view_labels + offset
             offset += int(view_labels.max()) + 1
             fitted += len(fit_rows)

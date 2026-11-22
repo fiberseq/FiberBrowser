@@ -1,3 +1,4 @@
+import { useReferenceNoticeStore } from './referenceNoticeStore';
 import { useMemo } from 'react';
 import { create } from 'zustand';
 import {
@@ -79,6 +80,8 @@ function applyToPanels(genomes: Record<string, PanelGenomeInfo>, assignments: Re
 let inflight: Promise<void> | null = null;
 let again = false;
 // Bumped by each attach: a refresh answer asked for before it is stale (it would undo the attach).
+/** The "attached without genes" notice each reference left (cleared when its annotation loads). */
+const annotationNotices = new Map<string, string>();
 let attachGeneration = 0;
 
 export const usePanelGenomeStore = create<PanelGenomeState>((set, get) => ({
@@ -129,6 +132,20 @@ export const usePanelGenomeStore = create<PanelGenomeState>((set, get) => ({
       const span = Math.max(1_000, Math.min(200_000, st.end - st.start || 10_000));
       const res = await attachPanelGenome({ span, ...request });
       if (!res.success) return res;
+      const refKey = res.genome?.key ?? request.genome_id ?? '';
+      if (res.annotation_error) {
+        // The sequence is attached without genes (a declined or failed annotation download): said, not dropped.
+        const name = res.genome?.label ?? res.name ?? request.genome_id ?? 'The reference';
+        const notice = `${name} is attached without genes: ${res.annotation_error}`;
+        annotationNotices.set(refKey, notice);
+        useReferenceNoticeStore.getState().setNotice(notice);
+      } else if (res.genome?.has_gtf && annotationNotices.has(refKey)) {
+        // Its annotation loaded since: the notice this reference left is cleared (another notice stays).
+        if (useReferenceNoticeStore.getState().notice === annotationNotices.get(refKey)) {
+          useReferenceNoticeStore.getState().setNotice(null);
+        }
+        annotationNotices.delete(refKey);
+      }
       attachGeneration += 1;
       const listed = await getPanelGenomes();
       const genomes = Object.fromEntries((listed.genomes ?? []).map(g => [g.key, g]));

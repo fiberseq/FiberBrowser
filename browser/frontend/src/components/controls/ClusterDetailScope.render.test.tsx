@@ -40,9 +40,9 @@ import type { PanelConfig } from '../../types';
 
 /**
  * fb-n6-integ (Codex, after merging the read map and the cluster charts): the
- * map, the V-plots and Differences read only their own panels (the map: the
- * first clustering of each dataset at the plotted view; the V-plots: every
- * panel at that view; Differences: one clustering per dataset). Clicking or
+ * map and Differences read only their own panels (the map: the first
+ * clustering of each dataset at the plotted view; Differences: one clustering
+ * per dataset). Clicking or
  * picking in them used every clustered panel instead, so a panel they leave
  * out (on another reference, at another locus, a copy clustered on its own)
  * was focused, unfocused or picked by clusters it doesn't share.
@@ -197,18 +197,6 @@ describe('Clusters: the map and charts change only their own panels', () => {
     expect(focusOf('napa')).toBeNull();
     // The dm6 panel keeps its own focus.
     expect(focusOf('flyamp')).toEqual([5]);
-  });
-
-  it('V-plot picks go to the plotted panels only, from their clusters', async () => {
-    await act(async () => { root.render(<ClusterDetailPanel />); });
-    await openTab('vplot');
-    const chip = (c: number) => host.querySelector(`[data-testid="vplot-picks-chip-${c}"]`) as HTMLButtonElement | null;
-    expect(chip(3)).not.toBeNull(); // the copy is plotted
-    expect(chip(5)).toBeNull(); // the dm6 panel isn't
-    await act(async () => { chip(1)!.click(); });
-    expect(pickOf('napa')).toEqual([1]);
-    expect(pickOf('napa:copy')).toEqual([1]);
-    expect(pickOf('flyamp')).toEqual([5]);
   });
 
   it('Differences picks from one clustering per dataset at the plotted view', async () => {

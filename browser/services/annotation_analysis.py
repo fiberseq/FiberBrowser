@@ -141,8 +141,10 @@ def cluster_reads_by_annotation_patterns(
             "patterns": {},
         }
 
+    from services.cluster_assignment import canonical_cluster_labels
+
     kmeans = KMeans(n_clusters=n_clusters, n_init=10, random_state=random_state)
-    labels = kmeans.fit_predict(feature_matrix)
+    labels = canonical_cluster_labels(kmeans.fit_predict(feature_matrix), read_names)
 
     return {
         "assignments": {

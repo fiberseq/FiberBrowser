@@ -4,7 +4,7 @@
 
 FiberBrowser 3.1 adds the **Plots** workspace, opens a BED file as a pooled
 **meta-locus**, and brings live lift, graph mode, the Feature hub, the
-Nucleosomes panel and sequence search. It needs **FiberHMM 3.2.0** or later, which the
+Nucleosomes panel and sequence search. It needs **FiberHMM 3.2.2** or later, which the
 apps and the pip install bring with them. Coming from 3.0? Read
 [What's changed since 3.0](#whats-changed-since-30) first.
 
@@ -143,8 +143,11 @@ called*.
 - **Co-accessibility moved into Plots.** The Co-accessibility panel is now the
   **Co-accessibility** plot type, with the same settings and exports. ⌘K
   **Co-accessibility**, the track menu and old sessions open it there.
-- **Footprint sizes** (Clusters › Charts) replaces the V-plot chart, with Size
-  enrichment as the default view. The same plots are in Plots.
+- **Footprint sizes moved into Plots.** The Clusters panel's V-plot chart is
+  gone: **Footprint sizes → Plots** opens Size enrichment (the default) or a
+  V-plot per cluster in Plots, as do the read menu and ⌘K. (3.1.0 had a
+  Footprint sizes tab and size buttons in the Clusters panel; 3.1.1 keeps them
+  in Plots only.)
 - **Metaprofile sources follow the layers.** The default metaprofile no longer
   has its own fixed list of sources; it shows the active layers unless you
   turn **Follow active layers** off.
@@ -155,7 +158,7 @@ called*.
   insertions still restore.
 - **MAPQ.** Read-difference analysis, SNP scans and consensus no longer apply
   MAPQ 20 by default.
-- **FiberHMM 3.2.0** or later is required (`fiberhmm[consensus]>=3.2.0,<4`; 3.0 needed 3.0.3 or later). The apps update it
+- **FiberHMM 3.2.2** or later is required (`fiberhmm[consensus]>=3.2.2,<4`; 3.0 needed 3.0.3 or later). The apps update it
   for you; pip users run `pip install -U fiberbrowser`.
 - **Experimental:** the full-window Feature hub workspace and the
   **Differential features** plot are behind **Settings › Read Display ›

@@ -20,6 +20,20 @@ import { sampleScope } from './useProfileData';
 import { applyBandsAndCondition } from './sizeBands';
 import type { ProfileRead } from './profileEngine';
 import type { SummaryUnit } from './summary';
+import { plotSources } from './plotModel';
+import { isFamilySource } from '../hub/familySources';
+import { combineSourceGroups } from './multiSource';
+import { multiSourceKey } from './useProfileData';
+
+/** The sources a BED plot reads (families are one locus each: not over BED regions) and the ones it leaves out. */
+export function bedSources(plot: PlotSpec): { sources: string[]; missing: Array<{ source: string; reason: string }> } {
+  const all = plotSources(plot);
+  const sources = all.filter(x => !isFamilySource(x));
+  // Only families picked: nothing they ask for can be pooled, so All footprints is drawn, and the note says so.
+  const instead = sources.length ? '' : '; All footprints is drawn instead';
+  const missing = all.filter(isFamilySource).map(source => ({ source, reason: `a family is one locus: not pooled over BED regions${instead}` }));
+  return { sources: sources.length ? sources : ['all_footprints'], missing };
+}
 
 export interface BedEntry {
   key: string;
@@ -30,6 +44,8 @@ export interface BedEntry {
   /** Reads used / in scope per dataset (the plot's sampling). */
   sampled?: Record<string, { used: number; total: number }>;
   profile: ProfileEntry;
+  /** Sources asked for that BED regions can't draw (families), with why. */
+  missingSources?: Array<{ source: string; reason: string }>;
   heatmap: HeatmapEntry;
   seeded?: boolean;
 }
@@ -83,6 +99,8 @@ export function bedFetchKey(plot: PlotSpec, sets: RegionSet[], target: Footprint
     window: [b.mode, b.anchor, b.flankBp, b.scaleFlankBp], reads: b.readsPerRegion, occluders: b.occlusionRead !== 'off' || b.occlusionRegion, footprints: plot.profile.conditionOn || undefined,
     source: plot.source, datasets: [...new Set(target.panels.map(p => p.datasetId))], sampleSeed, settingsKey,
     whole: plot.type === 'size-histogram' ? histogramPadBp(plot) : undefined,
+    // Several sources (one source keeps its key: stored cards seed).
+    ...(multiSourceKey(plot) ? { sources: bedSources(plot).sources } : {}),
   });
 }
 
@@ -137,7 +155,7 @@ export function useBedData(o: {
   const requestKey = `${fetchKey}|${derivedKey}`;
   const stableKey = `${seedMatchKey(fetchKey)}|${derivedKey}`;
   const seedFits = !!seed && seed.stableKey === stableKey;
-  const [fetched, setFetched] = useState<{ key: string; input: BedRegionReads[] } | null>(null);
+  const [fetched, setFetched] = useState<{ key: string; input: BedRegionReads[]; bySource?: Array<{ source: string; input: BedRegionReads[] }> } | null>(null);
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState<BedProgress | null>(null);
   const [error, setError] = useState<{ key: string; message: string } | null>(null);
@@ -174,16 +192,28 @@ export function useBedData(o: {
       max_regions: b2.maxRegions, reads_per_region: b2.readsPerRegion, occluders: b2.occlusionRead !== 'off' || b2.occlusionRegion, footprints: plot.profile.conditionOn, sample_seed: sampleSeed,
       ...(plot.type === 'size-histogram' ? { whole_footprints: true, footprint_pad_bp: histogramPadBp(plot) } : {}),
     };
-    readRegionChunks(
+    // Several sources: the endpoint reads one source, so one pass per source (the same seeded regions and reads; the
+    // progress counts every pass).
+    const srcs = multiSourceKey(plot) ? bedSources(plot).sources : [plot.source];
+    const readOne = (src: string, i: number) => readRegionChunks(
       (offset, limit) => fetchJson<RegionsAnswer>('/api/plots/region_reads', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
-        body: JSON.stringify({ ...body, job_offset: offset, job_limit: limit }),
+        body: JSON.stringify({ ...body, source: src, job_offset: offset, job_limit: limit }),
       }),
       BED_CHUNK_REGIONS,
-      (done, total) => { if (seq.current === mine) setProgress(p => ({ done, total, startedAt: p?.startedAt ?? Date.now() })); },
+      (done, total) => { if (seq.current === mine) setProgress(p => ({ done: i * total + done, total: total * srcs.length, startedAt: p?.startedAt ?? Date.now() })); },
       controller.signal,
-    )
-      .then(regions => { if (seq.current === mine && !controller.signal.aborted && regions) setFetched({ key: fetchKey, input: regionReadsFromServer(sets, regions) }); })
+    );
+    (async () => {
+      const out: Array<{ source: string; input: BedRegionReads[] }> = [];
+      for (let i = 0; i < srcs.length; i++) {
+        const regions = await readOne(srcs[i], i);
+        if (!regions) return null;
+        out.push({ source: srcs[i], input: regionReadsFromServer(sets, regions) });
+      }
+      return out;
+    })()
+      .then(parts => { if (seq.current === mine && !controller.signal.aborted && parts) setFetched({ key: fetchKey, input: parts[0].input, ...(srcs.length > 1 || multiSourceKey(plot) ? { bySource: parts } : {}) }); })
       .catch(err => {
         if (controller.signal.aborted || err?.name === 'AbortError' || seq.current !== mine) return;
         setError({ key: requestKey, message: `BED regions could not be read: ${err instanceof Error ? err.message : String(err)}` });
@@ -202,36 +232,47 @@ export function useBedData(o: {
     const axis = bedAxis(plot);
     const pooledDatasets = plot.groupBy === 'none';
     const histogram = plot.type === 'size-histogram';
-    // The plot's read sampling over every region together (a read in two regions is kept or dropped in both).
-    const flat = fetched.input.flatMap(item => [...item.byDataset.entries()].flatMap(([ds, rs]) => rs.map(r => ({ r, id: r.id, dataset: ds }))));
-    const sampled = sampleScope(flat, plot.sampling);
-    const keep = new Set(sampled.reads.map(x => x.r));
-    const sampledInput = plot.sampling.mode === 'random'
-      ? fetched.input.map(item => ({ ...item, byDataset: new Map([...item.byDataset.entries()].map(([ds, rs]) => [ds, rs.filter(r => keep.has(r))])) }))
-      : fetched.input;
-    // Size bands (one band, or a line per band) and the state at each region's anchor, as for the view and features.
-    const p = plot.profile;
-    const bands = p.band !== 'off' || p.conditionOn ? {
-      groups: (gs: Array<{ id: string; title: string; color?: string }>) => applyBandsAndCondition([], gs, p, () => null).groups,
-      reads: (rs: ProfileRead[], anchor: number) => applyBandsAndCondition(rs, [], p, () => anchor).reads,
-    } : null;
-    // The summaries' bootstrap over reads (BED's option; regions are the default units).
-    const readUnits = plot.summary.on && plot.summary.unit === 'reads' ? new Map<string, Map<string, { cov: Float64Array; sig: Float64Array }>>() : undefined;
-    const res = bedProfiles(sampledInput, sets, { ...plot.bed, seed: plot.sampling.seed }, plot.profile.binBp, datasetLabels, pooledDatasets,
-      histogram ? (reads, win, ids) => histogramAccumulate(reads, win, plot.hist, ids) : undefined, { bands, readUnits, rawMarkCounts });
-    // Bootstrap units per group: the regions (each region's own raw profile) or the reads.
-    const unitsOf = (gi: number, id: string, set: string): SummaryUnit[] | undefined => {
-      if (!plot.summary.on) return undefined;
-      if (readUnits) return [...(readUnits.get(id)?.entries() ?? [])].map(([rid, v]) => ({ id: rid, cov: v.cov, sig: v.sig }));
-      // A unit is the genomic region: the same region in two BED sets is one unit, so a comparison pairs it.
-      return res.perRegion.filter(r => r.set === set && r.raws[gi]?.nReads > 0).map(r => ({ id: regionIdentity(r.region), cov: r.raws[gi].coverage, sig: r.raws[gi].signal }));
+    const profileOf = (input: BedRegionReads[]) => {
+      // The plot's read sampling over every region together (a read in two regions is kept or dropped in both).
+      const flat = input.flatMap(item => [...item.byDataset.entries()].flatMap(([ds, rs]) => rs.map(r => ({ r, id: r.id, dataset: ds }))));
+      const sampled = sampleScope(flat, plot.sampling);
+      const keep = new Set(sampled.reads.map(x => x.r));
+      const sampledInput = plot.sampling.mode === 'random'
+        ? input.map(item => ({ ...item, byDataset: new Map([...item.byDataset.entries()].map(([ds, rs]) => [ds, rs.filter(r => keep.has(r))])) }))
+        : input;
+      // Size bands (one band, or a line per band) and the state at each region's anchor, as for the view and features.
+      const p = plot.profile;
+      const bands = p.band !== 'off' || p.conditionOn ? {
+        groups: (gs: Array<{ id: string; title: string; color?: string }>) => applyBandsAndCondition([], gs, p, () => null).groups,
+        reads: (rs: ProfileRead[], anchor: number) => applyBandsAndCondition(rs, [], p, () => anchor).reads,
+      } : null;
+      // The summaries' bootstrap over reads (BED's option; regions are the default units).
+      const readUnits = plot.summary.on && plot.summary.unit === 'reads' ? new Map<string, Map<string, { cov: Float64Array; sig: Float64Array }>>() : undefined;
+      const res = bedProfiles(sampledInput, sets, { ...plot.bed, seed: plot.sampling.seed }, plot.profile.binBp, datasetLabels, pooledDatasets,
+        histogram ? (reads, win, ids) => histogramAccumulate(reads, win, plot.hist, ids) : undefined, { bands, readUnits, rawMarkCounts });
+      // Bootstrap units per group: the regions (each region's own raw profile) or the reads.
+      const unitsOf = (gi: number, id: string, set: string): SummaryUnit[] | undefined => {
+        if (!plot.summary.on) return undefined;
+        if (readUnits) return [...(readUnits.get(id)?.entries() ?? [])].map(([rid, v]) => ({ id: rid, cov: v.cov, sig: v.sig }));
+        // A unit is the genomic region: the same region in two BED sets is one unit, so a comparison pairs it.
+        return res.perRegion.filter(r => r.set === set && r.raws[gi]?.nReads > 0).map(r => ({ id: regionIdentity(r.region), cov: r.raws[gi].coverage, sig: r.raws[gi].signal }));
+      };
+      // Datasets within a set's colour: one dash pattern each (the excluded group dotted), told apart in print.
+      const dsOrder = [...new Set(res.pooled.map(g => g.id.slice(g.id.indexOf('|') + 1)).filter(d => d !== 'excluded' && d !== '*'))];
+      const dashOf = (id: string) => {
+        const ds = id.slice(id.indexOf('|') + 1);
+        return ds === 'excluded' ? [1, 3] : SERIES_DASHES[Math.max(0, dsOrder.indexOf(ds)) % SERIES_DASHES.length];
+      };
+      const groups = res.pooled.map((g, gi) => ({ g, gi })).filter(({ g }) => g.raw.nReads > 0).map(({ g, gi }) => ({ id: g.id, title: g.title, color: g.color, raw: g.raw, dash: g.dash ?? dashOf(g.id), ...(plot.summary.on ? { units: unitsOf(gi, g.id, g.set) } : {}) }));
+      return { res, sampled, groups };
     };
-    // Datasets within a set's colour: one dash pattern each (the excluded group dotted), told apart in print.
-    const dsOrder = [...new Set(res.pooled.map(g => g.id.slice(g.id.indexOf('|') + 1)).filter(d => d !== 'excluded' && d !== '*'))];
-    const dashOf = (id: string) => {
-      const ds = id.slice(id.indexOf('|') + 1);
-      return ds === 'excluded' ? [1, 3] : SERIES_DASHES[Math.max(0, dsOrder.indexOf(ds)) % SERIES_DASHES.length];
-    };
+    const main = profileOf(fetched.input);
+    const { res, sampled } = main;
+    // Several sources: each source's groups, combined group × source (multiSource.ts).
+    const profileGroups = fetched.bySource && fetched.bySource.length > 1
+      ? combineSourceGroups(fetched.bySource.map((x, i) => ({ source: x.source, groups: i === 0 ? main.groups : profileOf(x.input).groups })), plot.sourceLabels)
+      : main.groups;
+    const missing = bedSources(plot).missing;
     // BED order and columns: each region's line in its set.
     const lineOf = new Map(sets.map(x => [x.id, new Map(x.regions.map((r, i) => [regionIdentity(r), i]))]));
     const bedIndexOf = (set: string, r: BedRegion) => lineOf.get(set)?.get(regionIdentity(r)) ?? 0;
@@ -239,7 +280,8 @@ export function useBedData(o: {
     const locus = { chrom: first?.[0] ?? '', start: first?.[1] ?? 0, end: first?.[2] ?? 0, genome: null };
     return {
       key: requestKey, stableKey, counts: res.counts, countsText: bedCountsText(res.counts, sets), sampled: sampled.counts,
-      profile: { key: requestKey, locus, binBp: histogram ? plot.hist.binBp : axis.binBp, groups: res.pooled.map((g, gi) => ({ g, gi })).filter(({ g }) => g.raw.nReads > 0).map(({ g, gi }) => ({ id: g.id, title: g.title, color: g.color, raw: g.raw, dash: g.dash ?? dashOf(g.id), ...(plot.summary.on ? { units: unitsOf(gi, g.id, g.set) } : {}) })) },
+      ...(missing.length ? { missingSources: missing } : {}),
+      profile: { key: requestKey, locus, binBp: histogram ? plot.hist.binBp : axis.binBp, groups: profileGroups },
       heatmap: {
         key: requestKey, locus, mode: 'features', binBp: axis.binBp, start: axis.start,
         groups: res.pooled.map(g => ({ id: g.id, title: g.title, color: g.color, set: g.set })),

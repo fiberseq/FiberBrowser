@@ -16,6 +16,8 @@ import { COMPARE_MODES, type CompareMode } from './compare';
 import type { ProfileNormalization } from './profileEngine';
 import { DEFAULT_BED_SETTINGS, normalizeBedSettings, type BedSettings } from './bedRegions';
 import { DEFAULT_SUMMARY, normalizeSummary, type SummarySettings } from './summary';
+import { normalizeQuantSpec, normalizeQuantWindow } from '../windowQuant/spec';
+import { normalizeAxisFrame } from '../windowQuant/axisFrame';
 
 export type PlotType = 'size-enrichment' | 'vplot' | 'metaprofile' | 'heatmap' | 'size-histogram' | 'differential' | 'nuc-spacing' | 'co-accessibility';
 export type PlotWhere = 'view' | 'features' | 'bed' | 'random';
@@ -34,8 +36,14 @@ export interface PlotSpec {
   id: string;
   name: string;
   type: PlotType;
-  /** ALL_FOOTPRINTS or a layer key as the Layers toolbar lists it ('nuc', 'tf', 'fire', a class layer...). */
+  /** ALL_FOOTPRINTS or a layer key as the Layers toolbar lists it ('nuc', 'tf', 'fire', a class layer...): the first
+   *  of `sources`, kept for every reader of one source (size types, heatmaps, older sessions). */
   source: string;
+  /** The sources drawn, in chip order: several for the multi-source types (Metaprofile: one line per source per
+   *  group), one otherwise. Layer keys, ALL_FOOTPRINTS, or a feature family (`fam:<set>|<hit>`, hub/familySources). */
+  sources: string[];
+  /** Names of the non-layer sources (families), so a stored plot can say what it drew without the run loaded. */
+  sourceLabels?: Record<string, string>;
   where: PlotWhere;
   groupBy: PlotGroupBy;
   compare: PlotCompare;
@@ -45,6 +53,12 @@ export interface PlotSpec {
   compareAB: [string, string] | null;
   /** null: follows the browser's view. A locus: pinned there (BED and feature-set plots are always pinned). */
   pinned: PlotLocus | null;
+  /** The dataset panel the plot was made from (the read menu's "here"): its datasets and clusters are plotted, as
+   *  the panel the user works in would be. Absent: the active panel (an unknown id falls back to it). */
+  panel?: string;
+  /** Size plots, log2 ratio: compare the size-by-position shares (absent, the default) or each side's enrichment under
+   *  the plot's normalisation ('enrichment': per size row, per position or obs / expected, as the plots show it). */
+  sizeCompareOn?: 'enrichment';
   /** The size types' settings (bins, smoothing, normalisation, colour). Source, grouping and ratio live above. */
   size: FootprintSizeSettings;
   /** The profile types' settings (Metaprofile, Heatmap: bin, smoothing, signal, coverage mask, reads per dataset). */
@@ -66,6 +80,8 @@ export interface PlotSpec {
   sampling: SamplingSettings;
   /** Summary across groups: each group reduced to one number, as bars or a line in panel order (a view mode). */
   summary: SummarySettings;
+  /** Profiles over the view: the x-axis in genome coordinates (absent) or relative to an anchor (windowQuant/axisFrame). */
+  axis?: import('../windowQuant/axisFrame').AxisFrame;
 }
 
 export type SamplingMode = 'all' | 'random';
@@ -148,6 +164,30 @@ export interface SuppliedSpec {
   measures?: string;
   /** Supplied matrices (V-plots, heatmaps): x of column j = x0 + j * dx; rows labelled; signed values centre on 0. */
   matrix?: { kind: 'vplot' | 'heatmap'; x0: number; dx: number; valueLabel: string; signed?: boolean; xLabel?: string };
+  /** Quantify a window (features/windowQuant): the spec, the window and the bounds it was computed over; the values are
+   *  in the card (SuppliedData.quant). */
+  quant?: QuantRecord;
+}
+
+export interface QuantRecord {
+  spec: import('../windowQuant/spec').QuantSpec;
+  window: import('../windowQuant/spec').QuantWindow | null;
+  bounds: { chrom: string; from: number; to: number; kind: 'window' | 'region' | 'sites' };
+  /** The axis frame (a relative window is relative to this anchor) and the anchor as resolved when computed. */
+  axis?: import('../windowQuant/axisFrame').AxisFrame;
+  anchor?: { pos: number; strand: '+' | '-'; name: string } | null;
+}
+
+export function normalizeQuantRecord(raw: unknown): QuantRecord | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const b = r.bounds && typeof r.bounds === 'object' ? r.bounds as Record<string, unknown> : null;
+  if (!b || typeof b.chrom !== 'string' || !Number.isFinite(Number(b.from)) || !Number.isFinite(Number(b.to))) return null;
+  const kind = b.kind === 'window' || b.kind === 'sites' ? b.kind : 'region';
+  const a = r.anchor && typeof r.anchor === 'object' ? r.anchor as Record<string, unknown> : null;
+  const anchor = a && Number.isFinite(Number(a.pos)) ? { pos: Number(a.pos), strand: a.strand === '-' ? '-' as const : '+' as const, name: typeof a.name === 'string' ? a.name.slice(0, 200) : '' } : null;
+  return { spec: normalizeQuantSpec(r.spec), window: normalizeQuantWindow(r.window), bounds: { chrom: b.chrom, from: Number(b.from), to: Number(b.to), kind },
+    ...(r.axis ? { axis: normalizeAxisFrame(r.axis) } : {}), ...(anchor ? { anchor } : {}) };
 }
 
 export function normalizeSupplied(raw: unknown): SuppliedSpec | null {
@@ -160,7 +200,8 @@ export function normalizeSupplied(raw: unknown): SuppliedSpec | null {
   const matrix = m ? { kind: m.kind === 'vplot' ? 'vplot' as const : 'heatmap' as const, x0: num(m.x0, 0), dx: num(m.dx, 1) || 1, valueLabel: str(m.valueLabel),
     ...(m.signed === true ? { signed: true } : {}), ...(str(m.xLabel) ? { xLabel: str(m.xLabel) } : {}) } : null;
   return { origin: str(r.origin) || 'a panel', x0: num(r.x0, 0), dx: num(r.dx, 1) || 1, xLabel: str(r.xLabel), yLabel: str(r.yLabel), ...(ticks ? { xTicks: ticks } : {}),
-    ...(str(r.note) ? { note: str(r.note) } : {}), ...(str(r.measures) ? { measures: str(r.measures) } : {}), ...(matrix ? { matrix } : {}) };
+    ...(str(r.note) ? { note: str(r.note) } : {}), ...(typeof r.measures === 'string' && r.measures ? { measures: r.measures.slice(0, 2000) } : {}), ...(matrix ? { matrix } : {}),
+    ...(r.quant ? (q => (q ? { quant: q } : {}))(normalizeQuantRecord(r.quant)) : {}) };
 }
 
 export type DiffFeatures = 'peaks' | 'classes' | 'geometries' | 'hub-selection' | 'all';
@@ -351,6 +392,11 @@ export interface ProfileSettings {
   conditionBp: number;
   /** Footprints at least this long are nucleosome-sized (shorter: TF-sized). */
   conditionNucBp: number;
+  /** Several sources: 'auto' (one panel per group with every source overlaid when there are several groups, else
+   *  one chart), 'panels' (always one panel per group) or 'overlay' (one chart; groups told apart by dash). */
+  multiLayout: 'auto' | 'panels' | 'overlay';
+  /** Several sources in panels: one y range across the panels ('shared') or each its own ('own'). */
+  multiYScale: 'shared' | 'own';
 }
 
 export const PROFILE_NORMALIZATIONS: readonly { value: ProfileNormalization; label: string; help: string }[] = [
@@ -360,7 +406,7 @@ export const PROFILE_NORMALIZATIONS: readonly { value: ProfileNormalization; lab
 ];
 
 export const DEFAULT_PROFILE_SETTINGS: ProfileSettings = Object.freeze({ binBp: 10, sigmaBp: 20, normalization: 'fraction', minCoverage: 5, readCap: 2000,
-  bandEdges: [90, 200] as number[], band: 'off', conditionOn: false, conditionBp: 10, conditionNucBp: 90 }) as ProfileSettings;
+  bandEdges: [90, 200] as number[], band: 'off', conditionOn: false, conditionBp: 10, conditionNucBp: 90, multiLayout: 'auto', multiYScale: 'shared' }) as ProfileSettings;
 
 const clampNum = (v: unknown, lo: number, hi: number, d: number, int = true): number => {
   const n = typeof v === 'number' && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : d;
@@ -380,6 +426,8 @@ export function normalizeProfileSettings(raw: unknown): ProfileSettings {
     conditionOn: r.conditionOn === true,
     conditionBp: clampNum(r.conditionBp, 0, 5000, d.conditionBp),
     conditionNucBp: clampNum(r.conditionNucBp, 1, 1000, d.conditionNucBp),
+    multiLayout: r.multiLayout === 'panels' || r.multiLayout === 'overlay' ? r.multiLayout : 'auto',
+    multiYScale: r.multiYScale === 'own' ? 'own' : 'shared',
   };
 }
 
@@ -511,20 +559,22 @@ export function withType(plot: PlotSpec, type: PlotType): PlotSpec {
   if (type === plot.type) return plot;
   // A size type always takes its own view preset (a V-plot from a Metaprofile is a V-plot: midpoints, counts).
   const size = isSizeType(type) && plot.type !== type ? sizeSettingsForType(type, plot.size) : plot.size;
-  // Marks have no footprint sizes: a size plot of a mark source plots all footprints instead.
-  const source = (isSizeType(type) || type === 'size-histogram') && MARK_SOURCES.has(plot.source) ? ALL_FOOTPRINTS : plot.source;
+  // A single-source type keeps the first selected source (sourcesForType); marks have no footprint sizes, so a size
+  // plot of a mark source plots all footprints instead.
+  const sources = sourcesForType(type, plotSources(plot));
+  const source = sources[0];
   const where = type === 'heatmap' && (plot.where === 'view' || plot.where === 'random') ? 'features'
     : (type !== 'heatmap' && type !== 'metaprofile' && type !== 'size-histogram' && (plot.where === 'features' || (plot.where === 'bed' && !isSizeType(type))))
     || (type !== 'size-histogram' && plot.where === 'random') ? 'view' : plot.where;
   if (type === 'co-accessibility') {
     const groupBy = plot.groupBy === 'none' ? 'none' : 'dataset';
-    return { ...plot, type, size, source, where: 'view', compare: plot.compare === 'diff' ? 'diff' : 'off', groupBy };
+    return { ...plot, type, size, source, sources, where: 'view', compare: plot.compare === 'diff' ? 'diff' : 'off', groupBy };
   }
   if (type === 'differential') {
     const groupBy = plot.groupBy === 'none' || plot.groupBy === 'bed' ? 'dataset' : plot.groupBy;
-    return { ...plot, type, size, source, where: 'view', compare: 'off', groupBy };
+    return { ...plot, type, size, source, sources, where: 'view', compare: 'off', groupBy };
   }
-  return { ...plot, type, size, source, where };
+  return { ...plot, type, size, source, sources, where };
 }
 
 const PLOT_TYPE_SET = new Set<PlotType>(PLOT_TYPES.map(p => p.type));
@@ -552,7 +602,7 @@ export function normalizePlot(raw: unknown): PlotSpec {
     id: typeof r.id === 'string' && r.id ? r.id : newPlotId(),
     name: typeof r.name === 'string' ? r.name.slice(0, 200) : '',
     type,
-    source: normalizeFootprintSizeLayer(r.source),
+    ...normalizeSources(r, type),
     where,
     groupBy: oneOf(r.groupBy, PLOT_GROUP_BY, 'dataset'),
     compare: oneOf(r.compare, PLOT_COMPARE, 'off'),
@@ -560,6 +610,8 @@ export function normalizePlot(raw: unknown): PlotSpec {
     compareAB: ab,
     // BED and feature-set plots never follow the view.
     pinned: normalizeLocus(r.pinned),
+    ...(typeof r.panel === 'string' && r.panel ? { panel: r.panel } : {}),
+    ...(r.sizeCompareOn === 'enrichment' ? { sizeCompareOn: 'enrichment' as const } : {}),
     // The plot-level fields own source, grouping and ratio: keep the copy in `size` neutral.
     size: { ...size, ratio: null },
     profile: normalizeProfileSettings(r.profile),
@@ -572,6 +624,7 @@ export function normalizePlot(raw: unknown): PlotSpec {
     // Old plots kept their BED region seed as the plot's seed.
     sampling: normalizeSampling(r.sampling ?? (r.bed && typeof r.bed === 'object' && typeof (r.bed as Record<string, unknown>).seed === 'number' ? { seed: (r.bed as Record<string, unknown>).seed } : undefined)),
     ...(r.supplied ? { supplied: normalizeSupplied(r.supplied) } : {}),
+    ...(r.axis && typeof r.axis === 'object' && (r.axis as Record<string, unknown>).mode === 'relative' ? { axis: normalizeAxisFrame(r.axis) } : {}),
   };
 }
 
@@ -615,7 +668,7 @@ export function describePlot(plot: PlotSpec): string {
     const signal = COACC_SIGNAL_LABELS[plot.coacc.signalType] ?? plot.coacc.signalType;
     return [plotTypeInfo(plot.type).label, `${signal}${plot.coacc.layer ? ` (${plot.coacc.layer})` : ''}`, norm, where, group, compare].filter(Boolean).join(' · ');
   }
-  return [plotTypeInfo(plot.type).label, footprintSizeLayerLabel(plot.source), where, group, compare].filter(Boolean).join(' · ');
+  return [plotTypeInfo(plot.type).label, plotSources(plot).map(s => sourceLabel(s, plot.sourceLabels)).join(' + '), where, group, compare].filter(Boolean).join(' · ');
 }
 
 /** The co-accessibility signals as the panel named them. */
@@ -626,5 +679,87 @@ export const plotDisplayName = (plot: PlotSpec): string => plot.name.trim() || d
 
 /** A copy under a new id, named "… (copy)". */
 export function duplicatePlot(plot: PlotSpec): PlotSpec {
-  return { ...plot, id: newPlotId(), name: `${plotDisplayName(plot)} (copy)`, size: { ...plot.size }, profile: { ...plot.profile, bandEdges: [...plot.profile.bandEdges] }, heatmap: { ...plot.heatmap }, hist: { ...plot.hist, guides: [...plot.hist.guides] }, bed: { ...plot.bed, setIds: [...plot.bed.setIds] }, diff: { ...plot.diff, sideA: [...plot.diff.sideA], sideB: [...plot.diff.sideB] }, coacc: { ...plot.coacc }, sampling: { ...plot.sampling }, summary: { ...plot.summary } };
+  return { ...plot, id: newPlotId(), name: `${plotDisplayName(plot)} (copy)`, sources: [...plotSources(plot)], ...(plot.sourceLabels ? { sourceLabels: { ...plot.sourceLabels } } : {}), size: { ...plot.size }, profile: { ...plot.profile, bandEdges: [...plot.profile.bandEdges] }, heatmap: { ...plot.heatmap }, hist: { ...plot.hist, guides: [...plot.hist.guides] }, bed: { ...plot.bed, setIds: [...plot.bed.setIds] }, diff: { ...plot.diff, sideA: [...plot.diff.sideA], sideB: [...plot.diff.sideB] }, coacc: { ...plot.coacc }, sampling: { ...plot.sampling }, summary: { ...plot.summary } };
+}
+
+// ------------------------------------------------------------------ several sources
+/** The types that draw several sources at once (one line per source per group). Size histograms, V-plots, size
+ *  enrichment and heatmaps draw one: a size distribution or a matrix per source would need its own axis. */
+export const MULTI_SOURCE_TYPES: readonly PlotType[] = ['metaprofile'];
+export const isMultiSourceType = (t: PlotType): boolean => MULTI_SOURCE_TYPES.includes(t);
+/** Sources one plot draws at most (more lines than this stop being readable). */
+export const MAX_SOURCES = 8;
+
+/** A source's name: the Layers toolbar's for a layer, the stored name for a family. */
+export function sourceLabel(src: string, labels?: Record<string, string>): string {
+  if (labels?.[src]) return labels[src];
+  if (src.startsWith('fam:')) return src.slice(src.lastIndexOf('|') + 1);
+  return footprintSizeLayerLabel(src);
+}
+
+/**
+ * The sources a plot draws. `sources` when it agrees with `source`; a writer that set only `source` (an older session,
+ * a panel's Open in Plots, a `{ source }` patch through updateCurrentPlot, which does not normalise) wins: one
+ * source. Single-source types draw the first.
+ */
+export function plotSources(plot: Pick<PlotSpec, 'type' | 'source'> & { sources?: unknown }): string[] {
+  const list = Array.isArray(plot.sources) ? plot.sources.filter((x): x is string => typeof x === 'string' && x.length > 0 && x.length < 300) : [];
+  const ok = list.length > 0 && (plot.source == null || list[0] === plot.source);
+  const out = ok ? [...new Set(list)] : [plot.source || ALL_FOOTPRINTS];
+  return isMultiSourceType(plot.type) ? out.slice(0, MAX_SOURCES) : out.slice(0, 1);
+}
+
+/** The sources a type keeps: all (capped) for a multi-source type; else the first selected (marks become all
+ *  footprints for the size types, which have no mark sizes). */
+export function sourcesForType(type: PlotType, sources: string[]): string[] {
+  const list = sources.length ? sources : [ALL_FOOTPRINTS];
+  if (isMultiSourceType(type)) return list.slice(0, MAX_SOURCES);
+  // One source: the first layer (a feature family is a metaprofile source only: it has no footprints to size or bin).
+  const first = list.find(x => !x.startsWith('fam:')) ?? ALL_FOOTPRINTS;
+  return [(isSizeType(type) || type === 'size-histogram') && MARK_SOURCES.has(first) ? ALL_FOOTPRINTS : first];
+}
+
+/** A plot with these sources (`source` follows the first; family names kept for the ones drawn). */
+export function withSources<T extends PlotSpec>(plot: T, sources: string[], labels: Record<string, string> = {}): T {
+  const list = sourcesForType(plot.type, [...new Set(sources)]);
+  const merged = { ...(plot.sourceLabels ?? {}), ...labels };
+  const kept = Object.fromEntries(list.filter(s => merged[s]).map(s => [s, merged[s]]));
+  const { sourceLabels: _old, ...rest } = plot;
+  return { ...rest, source: list[0], sources: list, ...(Object.keys(kept).length ? { sourceLabels: kept } : {}) } as T;
+}
+
+/** Whether a source is a mark layer (marks per read per bp: an axis of its own, never mixed with intervals). */
+export const isMarkSource = (src: string): boolean => MARK_SOURCES.has(src);
+
+/** Why `src` can't join the selected sources (null: it can). Marks are per bp and intervals a fraction of reads. */
+export function sourceMixBlocker(selected: string[], src: string): string | null {
+  if (selected.includes(src)) return null;
+  const marks = selected.some(isMarkSource);
+  if (isMarkSource(src) && selected.length && !marks) return 'm6A is marks per read per bp, the others a fraction of reads: it replaces them (one axis per plot).';
+  if (!isMarkSource(src) && marks) return 'm6A is marks per read per bp, this a fraction of reads: it replaces m6A (one axis per plot).';
+  return null;
+}
+
+/**
+ * The sources after a chip click. Single-source types: the chip alone. Multi-source: toggles it; at least one stays
+ * (the last one can't be cleared); a mark source and interval sources never mix (the click replaces them); at most
+ * MAX_SOURCES (the oldest selected beyond that is dropped).
+ */
+export function toggleSource(type: PlotType, selected: string[], src: string): string[] {
+  if (!isMultiSourceType(type)) return [src];
+  if (selected.includes(src)) return selected.length > 1 ? selected.filter(s => s !== src) : selected;
+  if (sourceMixBlocker(selected, src)) return [src];
+  const next = [...selected, src];
+  return next.length > MAX_SOURCES ? next.slice(next.length - MAX_SOURCES) : next;
+}
+
+function normalizeSources(r: Record<string, unknown>, type: PlotType): Pick<PlotSpec, 'source' | 'sources' | 'sourceLabels'> {
+  // Older plots and sessions: `source` alone (normalised as before: null / '' were the Nuc layer, ...).
+  const source = normalizeFootprintSizeLayer(r.source);
+  const raw = Array.isArray(r.sources) ? r.sources.filter((x): x is string => typeof x === 'string' && x.length > 0 && x.length < 300) : [];
+  const fromList = raw.length ? raw.map(x => (x.startsWith('fam:') ? x : normalizeFootprintSizeLayer(x))) : [];
+  const sources = plotSources({ type, source: r.source === undefined && fromList.length ? fromList[0] : source, sources: fromList });
+  const rawLabels = r.sourceLabels && typeof r.sourceLabels === 'object' ? r.sourceLabels as Record<string, unknown> : {};
+  const labels = Object.fromEntries(sources.filter(s => typeof rawLabels[s] === 'string').map(s => [s, String(rawLabels[s]).slice(0, 200)]));
+  return { source: sources[0], sources, ...(Object.keys(labels).length ? { sourceLabels: labels } : {}) };
 }

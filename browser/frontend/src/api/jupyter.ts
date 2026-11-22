@@ -64,6 +64,8 @@ export interface JupyterState {
     clear_peaks?: boolean;
     rescan?: boolean;
   };
+  /** The notebook's settings calls, one by one in order (applied instead of the merged settings_update). */
+  settings_updates?: Array<NonNullable<JupyterState['settings_update']>>;
   settings_update?: {
     analysis_sample_seed?: string | null;
     analysis_sample_count?: number | null;
@@ -114,6 +116,31 @@ export interface JupyterState {
     /** Panel opens/closes, in the order the notebook asked for them. */
     panel_ops?: Array<['open' | 'close', string]>;
     hidden_strip_panels?: string[];
+    // 3.1.1 parity: read filters, metaprofile follow mode, layer colours, Quantify a window, Plots.
+    /** Min footprints (-1: "All reads, including uncalled"). */
+    min_footprints?: number | null;
+    min_fp_quality?: number | null;
+    show_duplicate_reads?: boolean | null;
+    show_qc_fail_reads?: boolean | null;
+    /** The default metaprofile follows the Tracks layer toggles (true) or keeps its own sources (false). */
+    metaprofile_follow_active_layers?: boolean | null;
+    /** The session's layer colours: merged in (null forgets one); `replace_layer_color_overrides` starts from none. */
+    layer_color_overrides?: Record<string, string | null> | null;
+    replace_layer_color_overrides?: boolean | null;
+    /** The saved default layer colours (this computer): merged in (null forgets one). */
+    user_layer_colors?: Record<string, string | null> | null;
+    /** Quantify a window: window, spec and axis are merged into the current state; open_in shows the card. */
+    window_quant?: Record<string, unknown> | null;
+    /** Open Plots with this plot in the builder (a PlotSpec; omitted fields take the defaults). */
+    plot?: Record<string, unknown> | null;
+    /** BED region sets for Plots (a replayed snapshot's), restored before `plot`. */
+    plots_region_sets?: Array<Record<string, unknown>> | null;
+    /** In the merged summary only: apply the follow switch before the layer and source toggles. */
+    metaprofile_follow_first?: boolean | null;
+    /** Which workspace covers the reads: the browser, Plots or the hub. */
+    workspace?: 'browser' | 'plots' | 'hub' | null;
+    /** Reverse the view (Flip to gene direction turns it on: reads and plots flip together). */
+    reversed?: boolean | null;
   };
 }
 
@@ -171,6 +198,19 @@ export interface BrowserSettingsSnapshot {
   cluster_assignments?: Record<string, Record<string, number>>;
   cluster_order?: Record<string, number[]>;
   read_sort_order?: Record<string, string[]>;
+  min_footprints?: number;
+  min_fp_quality?: number;
+  show_duplicate_reads?: boolean;
+  show_qc_fail_reads?: boolean;
+  metaprofile_follow_active_layers?: boolean | null;
+  layer_color_overrides?: Record<string, string>;
+  user_layer_colors?: Record<string, string>;
+  window_quant?: Record<string, unknown>;
+  plots_workspace?: Record<string, unknown>;
+  plots_gallery?: Array<{ id: string; name: string; status: string; plot_id?: string | null }>;
+  workspace?: 'browser' | 'plots' | 'hub';
+  meta_locus?: Record<string, unknown> | null;
+  reversed?: boolean;
 }
 
 export async function getJupyterState(): Promise<JupyterState> {

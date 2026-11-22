@@ -13,7 +13,7 @@ from models.domain import CigarCoordMapper, ContactMode
 from services.sv_events import read_deletion_cuts, split_span
 from services.bam_tags import (
     bam_consensus_contracts, bam_ma_group_frame, interval_tag_pair, legacy_starts_in_seq_frame,
-    read_legacy_tags_are_molecular,
+    read_legacy_tags_are_molecular, record_ma_call_arrays,
 )
 from services.compact_read_loader import _read_ma_tags, ma_footprint_query_spans
 from services.graph_lift import lift_hidden_predicate
@@ -161,8 +161,16 @@ def query_bam_for_dafc(bam_path: str, chrom: str, start: int, end: int, hide_unc
                 try:
                     seq_spans = None
                     from_ma = False
-                    # Both tags, as arrays (a scalar ns:i is Dorado's signal sample count, not footprints).
-                    ns_tag, nl_tag = interval_tag_pair(read, 'ns', 'nl')
+                    # MA first: an MA nuc group is the footprints (SEQ frame, placed as ns/nl are), so stale or
+                    # absent legacy ns/nl beside it never matter; ns/nl only when MA carries no nuc group.
+                    ma_nuc = record_ma_call_arrays(read, ma_frame, family_contracts).get('nuc')
+                    if ma_nuc is not None:
+                        footprints_called = True
+                        seq_spans = [(a, n) for a, n in zip(ma_nuc[0], ma_nuc[1])] or None
+                        ns_tag = None
+                    else:
+                        # Both tags, as arrays (a scalar ns:i is Dorado's signal sample count, not footprints).
+                        ns_tag, nl_tag = interval_tag_pair(read, 'ns', 'nl')
                     if ns_tag is not None:
                         if hasattr(ns_tag, 'tolist'):
                             ns_list = ns_tag.tolist()
@@ -174,7 +182,7 @@ def query_bam_for_dafc(bam_path: str, chrom: str, start: int, end: int, hide_unc
                         if len(ns_list) > 0 and len(ns_list) == len(nl_list):
                             seq_starts = legacy_starts_in_seq_frame(ns_list, nl_list, read, read_legacy_tags_are_molecular(read, legacy_frame))
                             seq_spans = list(zip(seq_starts, nl_list))
-                    else:
+                    elif ma_nuc is None:
                         ma_tags = _read_ma_tags(read, ma_frame)
                         if ma_tags is not None and _ma_has_nuc_group(ma_tags[0]):
                             footprints_called = True

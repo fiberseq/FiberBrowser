@@ -23,7 +23,8 @@ from services.circular_genome import (
     concat_compact_read_parts,
     wrap_passes,
 )
-from services.bam_tags import footprint_call_summary, interval_tag_pair, read_has_footprint_calls
+from services.bam_tags import (footprint_call_summary, interval_tag_pair, legacy_msps_match_ma, ma_call_arrays,
+                               read_has_footprint_calls)
 from services.diagnostics import env_flag_enabled, log_if_enabled
 from utils.validation import is_url
 
@@ -2017,7 +2018,7 @@ def _build_compact_reads_from_bam_region(
         signal_provenance = signal_header(bam.header)
         family_contracts = bam_consensus_contracts(bam.header)
         # Whether this file's MSP scores are fibertools FIRE scores (services/fire_quality: per file, reads first).
-        from services.fire_quality import apply_msp_quality_source, file_fire_status
+        from services.fire_quality import apply_msp_quality_source, file_fire_status, record_has_fire_group
         msp_scores_are_fire = file_fire_status(bam_path, bam.header)["fire"]
         phase_t0 = _profile_start()
         references = bam.references
@@ -2097,6 +2098,7 @@ def _build_compact_reads_from_bam_region(
                        records, eligible_segment, keep=keep_molecule,
                        on_skipped=skipped_molecule, with_source_order=True))
         open_iterators.append(records)
+        supplementary_lookup = None
         for read, molecule_records, source_order in records:
             records_seen += 1
             if not records_seen & 255:
@@ -2123,9 +2125,16 @@ def _build_compact_reads_from_bam_region(
             signal_evidence = record_signal(read, signal_provenance)
             if not signal_keeps(signal_evidence):
                 continue
-            # "Hide reads without footprint calls" (the molecule path decided it in eligible_segment).
-            called = (not hide_uncalled or read.is_supplementary or not record_scoped
-                      or read_has_footprint_calls(read))
+            # "Hide reads without footprint calls" (the molecule path decided it in eligible_segment). A record-scoped
+            # supplementary follows its molecule's primary, asked of the file through its SA tag (below, only for a
+            # record that is decoded), so the answer never depends on the fetch or a cache
+            # (services/supplementary_primary). (None: not asked yet; a supplementary never counts for the sampler.)
+            if not hide_uncalled or not record_scoped:
+                called = True
+            elif read.is_supplementary:
+                called = None
+            else:
+                called = read_has_footprint_calls(read)
             # A sampled display load (services/read_sampling.py): decided on the
             # name after signal eligibility; a skipped read leaves its extent.
             if sampler is not None:
@@ -2158,6 +2167,13 @@ def _build_compact_reads_from_bam_region(
                 if profile_bam:
                     profile_counts["records_duplicate_hidden"] += 1
                 continue
+            if called is None and not getattr(read, "is_qcfail", False):
+                if supplementary_lookup is None:
+                    from services.supplementary_primary import SupplementaryPrimaryLookup
+                    supplementary_lookup = SupplementaryPrimaryLookup(bam_path, lift_hidden=lift_hidden,
+                                                                      load_budget=load_budget)
+                    open_iterators.append(supplementary_lookup)
+                called = supplementary_lookup.called(read)
             # A QC-fail read shown by choice (FiberHMM chimeras carry no calls by design) is kept.
             if hide_uncalled and not called and not getattr(read, "is_qcfail", False):
                 # Uncalled reads are hidden at every Min footprints (its relax to 0 included)
@@ -2210,42 +2226,75 @@ def _build_compact_reads_from_bam_region(
             fire_quals_all_zero = False
             lq_tag = None
             rq_tag = None
+            # MA first (FiberHMM writes MA; legacy ns/nl/as/al are optional): the row's footprints and accessible
+            # stretches come from the MA nuc / msp groups, in the SEQ frame (bam_tags.ma_call_arrays). Per family:
+            # a record whose MA has a nuc group never reads ns/nl, one whose MA has an msp group never reads as/al,
+            # so stale legacy tags beside MA never win. Legacy tags fill only a family MA does not carry (a record
+            # without MA, or a legacy-tagged record given an MA TF group by a later tool).
+            from_ma = False        # ns/nl (footprints) came from MA: already SEQ frame
+            fire_from_ma = False   # as/al (accessible stretches) came from MA: already SEQ frame
+            _ma_early = _read_ma_tags(read, ma_aq_tags_molecular)
+            _ma_arrays = (ma_call_arrays(_ma_early[0], _ma_early[1], tags_are_molecular=_ma_early[3],
+                                         read_length=read.query_length or 0, is_reverse=read.is_reverse,
+                                         family_contracts=family_contracts)
+                          if _ma_early is not None else None) or {}
+            if "nuc" in _ma_arrays:
+                ns_tag, nl_tag, nq_tag, lq_tag, rq_tag = _ma_arrays["nuc"]
+                from_ma = True
+            if "msp" in _ma_arrays and not (msp_scores_are_fire and read.has_tag("aq") and not record_has_fire_group(read)
+                                             and legacy_msps_match_ma(read, _ma_arrays["msp"], legacy_frame)):
+                # (A fibertools <= 0.12 FIRE run on FiberHMM output keeps the MA's stretches in as/al and rewrites
+                # their aq with FIRE scores, after the MA: there as/al/aq are read, as before. Stale legacy tags,
+                # other stretches, never are.)
+                fire_starts, fire_lengths, fire_quals = _ma_arrays["msp"]
+                fire_from_ma = True
 
             try:
-                # Both tags, as arrays (a scalar ns:i is Dorado's signal sample count, not footprints).
-                ns_tag, nl_tag = interval_tag_pair(read, "ns", "nl")
-                if ns_tag is None:
-                    raise KeyError("ns")
-                try:
-                    nq_tag = read.get_tag("nq")
-                except KeyError:
-                    pass
-                try:
-                    lq_tag = read.get_tag("lq")
-                except KeyError:
-                    pass
-                try:
-                    rq_tag = read.get_tag("rq")
-                except KeyError:
-                    pass
-                try:
-                    fire_starts, fire_lengths = interval_tag_pair(read, "as", "al")
-                    if fire_starts is None:
-                        raise KeyError("as")
+                if not from_ma:
+                    # Both tags, as arrays (a scalar ns:i is Dorado's signal sample count, not footprints).
+                    ns_tag, nl_tag = interval_tag_pair(read, "ns", "nl")
+                    if ns_tag is None:
+                        raise KeyError("ns")
                     try:
-                        fire_quals = read.get_tag("aq")
-                        fire_qual_values = parse_optional_int_tag_values(fire_quals) or []
-                        # All-0 (or all-128) scores are real: FIRE scores of a read without FIRE elements, or
-                        # FiberHMM posteriors (services/fire_quality decides which per file).
-                        fire_quals_all_zero = False
+                        nq_tag = read.get_tag("nq")
                     except KeyError:
                         pass
-                except KeyError:
-                    pass
+                    try:
+                        lq_tag = read.get_tag("lq")
+                    except KeyError:
+                        pass
+                    try:
+                        rq_tag = read.get_tag("rq")
+                    except KeyError:
+                        pass
+                if not fire_from_ma:
+                    try:
+                        fire_starts, fire_lengths = interval_tag_pair(read, "as", "al")
+                        if fire_starts is None:
+                            raise KeyError("as")
+                        try:
+                            fire_quals = read.get_tag("aq")
+                            fire_qual_values = parse_optional_int_tag_values(fire_quals) or []
+                            # All-0 (or all-128) scores are real: FIRE scores of a read without FIRE elements, or
+                            # FiberHMM posteriors (services/fire_quality decides which per file).
+                            fire_quals_all_zero = False
+                        except KeyError:
+                            pass
+                    except KeyError:
+                        pass
             except KeyError:
                 pass
 
-            if ns_tag is None:
+            if ns_tag is None and fire_from_ma:
+                # MA accessible stretches only: the footprints are the stretches between them (as as/al alone).
+                ns_tag, nl_tag = msp_complement(fire_starts, fire_lengths, read.query_length or 0)
+                nq_tag = None
+                from_ma = True
+            if from_ma and ns_tag is not None and len(ns_tag) == 0:
+                # MA calls with no footprint at all (a wholly accessible read, or empty groups): the MA-only row path
+                # below keeps it as a neutral row with its MA layers, as before MA was read first.
+                ns_tag = nl_tag = None
+            elif ns_tag is None and not from_ma:
                 try:
                     msp_starts, msp_lengths = interval_tag_pair(read, "as", "al")
                     if msp_starts is None:
@@ -2451,7 +2500,9 @@ def _build_compact_reads_from_bam_region(
             # build_intervals_from_footprints re-sorts by position and keeps
             # lq/rq aligned, so interval order is handled downstream.
             read_length = read.query_length or 0
-            flip_legacy = bool(read.is_reverse and read_length > 0 and read_legacy_tags_are_molecular(read, legacy_frame))
+            flip_frame = bool(read.is_reverse and read_length > 0 and read_legacy_tags_are_molecular(read, legacy_frame))
+            flip_legacy = flip_frame and not from_ma
+            flip_fire = flip_frame and not fire_from_ma
             if flip_legacy:
                 fp_starts_query = legacy_starts_in_seq_frame(fp_starts_query, fp_lengths, read, True)
                 if lq_qualities is not None and rq_qualities is not None:
@@ -2737,7 +2788,7 @@ def _build_compact_reads_from_bam_region(
                     fl_int = int(fire_len)
                     # MSP (as/al) tags share the legacy frame; flip to SEQ on
                     # reverse reads when the file's legacy tags are molecular.
-                    if flip_legacy:
+                    if flip_fire:
                         fs_int = read_length - (fs_int + fl_int)
                     # Both ends through the CIGAR, as footprints are: an MSP
                     # running into a soft clip ends at the alignment edge

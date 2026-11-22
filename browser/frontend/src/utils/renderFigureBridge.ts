@@ -1,4 +1,5 @@
 import { applyImportedState } from '../api/session';
+import { alignImportedMetaChrom } from '../features/metaLocus/metaLocusStore';
 import { getDafcStatus } from '../api/dafc';
 import { applyDafcStatusToStores } from '../hooks/useDafcStatusBootstrap';
 import { exportTrackFigure, type FigureOptions } from './figureExport';
@@ -42,7 +43,8 @@ export function installRenderFigureBridge({ loadStartupData }: RenderFigureBridg
       loadStartupData().catch(() => {}),
       getDafcStatus().then(applyDafcStatusToStores).catch(() => {}),
     ]);
-    applyImportedState(result);
+    // The same meta contig alignment as a session import (the pool may come back under another id).
+    applyImportedState(await alignImportedMetaChrom(result));
     // Re-arm readiness even when the restored view equals the initial one
     // (Browser's ready effect only re-fires when the viewport/panels change).
     await nextFrame();

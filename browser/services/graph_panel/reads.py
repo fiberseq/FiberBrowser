@@ -830,6 +830,16 @@ def _record_key(base: tuple, rec: tuple) -> tuple:
     return base + (lib, qname, start, end, bool(flag & 0x800))
 
 
+def _cacheable_entries(entries: dict, missing: list, base: tuple, truncated: bool) -> dict:
+    """The entries of a decoded batch that may be cached as settled. A truncated load may have kept a supplementary
+    whose primary's calls it could not look up (the lookup allowance ran out: services/supplementary_primary): its
+    entry is returned to the request but never cached, so a later request decodes it again."""
+    if not truncated:
+        return entries
+    unsettled = {_record_key(base, rec) for rec in missing if rec[3] & 0x800}
+    return {key: entry for key, entry in entries.items() if key not in unsettled}
+
+
 def _decode_records(dataset, contig: str, size: int, windows: list, binding: str, missing: list, region: tuple,
                     base: tuple, listed_n: Optional[dict] = None, max_bytes: int = MAX_DECODED_BYTES, state=None,
                     options: Optional[dict] = None, filters: Optional[list] = None) -> tuple:
@@ -982,7 +992,7 @@ def _decode_records(dataset, contig: str, size: int, windows: list, binding: str
         # Records of the identity that composed to nothing while another one did (a duplicate the loader dropped).
         partial = max(0, n - len(got)) if got else 0
         entries[key] = (got, nbytes.get(k, 0), reason, _entry_bytes(got), partial if reason is None else max(0, n - 1))
-    _records_put(entries)
+    _records_put(_cacheable_entries(entries, missing, base, bool(budget.truncated)))
     return entries, bool(budget.truncated), counts.get("hard_clipped_scoped"), len(decoded)
 
 

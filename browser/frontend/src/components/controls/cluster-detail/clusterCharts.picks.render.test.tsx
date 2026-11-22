@@ -1,8 +1,7 @@
 /**
- * fb-n5-charts: Composition shows with one dataset (Bar / Pie / Line), the
- * V-plot switches between Midpoint and Full footprint, and picking clusters
- * (on a chart's names, or anywhere else through the shared selection) filters
- * Profiles, Composition and the V-plots.
+ * fb-n5-charts: Composition shows with one dataset (Bar / Pie / Line), and
+ * picking clusters (on a chart's names, or anywhere else through the shared
+ * selection) filters Profiles and Composition.
  */
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -138,7 +137,7 @@ describe('cluster charts render', () => {
     expect(useBrowserStore.getState().selectedClusters.ds).toBeUndefined();
   });
 
-  it('follows a cluster picked elsewhere (the read panel) in Composition and the V-plot', () => {
+  it('follows a cluster picked elsewhere (the read panel) in Composition', () => {
     useBrowserStore.getState().setClusterSelection('ds', [2]);
     act(() => root.render(
       <CompositionTabContent datasetIds={['ds']} multiDs={false} visibleClusterData={clusters}

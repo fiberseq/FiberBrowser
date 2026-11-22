@@ -50,6 +50,14 @@ class GenomeUnavailable(LookupError):
     """``panel_genome=<key>`` names no loaded reference."""
 
 
+class NeedsConfirmation(Exception):
+    """A registry genome's FASTA download is over the warning size and was not confirmed: nothing is attached."""
+
+    def __init__(self, genome_id: str, name: str, download: dict):
+        super().__init__(f"{genome_id}: download over the warning size")
+        self.genome_id, self.name, self.download = genome_id, name, download
+
+
 # ---------------------------------------------------------------------------
 # Per-state registries (a forked session may predate them: read with getattr)
 # ---------------------------------------------------------------------------
@@ -235,6 +243,8 @@ def _context_info(key: str, ctx) -> dict:
         'n_chroms': len(chroms),
         # The annotation download waiting for confirmation (url, bytes, threshold), when it is.
         'annotation_pending': (spec.get('annotation_pending') or None) if _annotation_pending(ctx) else None,
+        # Why the last confirmed annotation download failed (it still waits), else None.
+        'annotation_error': spec.get('annotation_error') or None,
         'chroms': [{'name': c.name, 'size': int(c.size), 'circular': bool(getattr(c, 'circular', False))}
                    for c in chroms[:2000]],
     }
@@ -268,6 +278,9 @@ def _load_registry(genome_id: str):
     ctx = _empty_context()
     with allow_shared_writes():
         result = load_genome_blocking(ctx, genome_id, info)
+    if not result.get('success') and result.get('needs_confirmation'):
+        # Its FASTA is over the download warning size (a caller that asks: services/http_download.download_policy).
+        raise NeedsConfirmation(genome_id, info.get('name') or genome_id, dict(result.get('download') or {}))
     if not result.get('success'):
         raise RuntimeError(result.get('fasta_error') or result.get('gtf_error') or f'Could not load {genome_id}')
     from services.assembly_fingerprint import short_name
@@ -277,9 +290,35 @@ def _load_registry(genome_id: str):
                               'name': info.get('name') or short_name(genome_id)}
     if result.get('needs_confirmation'):
         # Its annotation is over the download warning size and was not confirmed: the context has the sequence
-        # only, says so (``annotation_pending``) and is loaded again by the next attachment (never reused).
+        # only, says so (``annotation_pending``), and the next attachment (the confirmed retry) finishes it.
         ctx._panel_genome_spec['annotation_pending'] = dict(result.get('download') or {})
     return ctx
+
+
+def _resume_annotation(ctx, genome_id: str) -> None:
+    """Finish the annotation of a registry context that waited for a download confirmation, in place (the
+    request's download policy decides: confirmed, it downloads; else it is asked for again). The sequence is not
+    loaded again; the context's reference lock (load_genome_blocking) keeps its readers off a half-load."""
+    from services.genome_loading import load_genome_blocking
+    from services.genome_registry import GENOME_REGISTRY
+    from services.runtime import allow_shared_writes
+    with allow_shared_writes():
+        result = load_genome_blocking(ctx, genome_id, GENOME_REGISTRY[genome_id])
+    spec = getattr(ctx, '_panel_genome_spec', None)
+    if isinstance(spec, dict):
+        if result.get('needs_confirmation'):
+            spec['annotation_pending'] = dict(result.get('download') or {})
+            spec.pop('annotation_error', None)
+        elif result.get('gtf_loaded') and getattr(ctx, 'gtf_data', None) is not None:
+            spec.pop('annotation_pending', None)
+            spec.pop('annotation_error', None)
+            spec['default_gtf_path'] = getattr(ctx, 'gtf_path', None)
+        else:
+            # The confirmed download or its parsing failed: the annotation still waits (a later retry may load it),
+            # and the attachment says why instead of reporting the genome complete.
+            spec['annotation_error'] = str(result.get('gtf_error') or f'Could not load the {genome_id} annotation')
+            from services.genome_loading import set_pending_annotation
+            set_pending_annotation(ctx, genome_id)
 
 
 def _load_fasta_context(fasta_path: str, gtf_path: Optional[str]):
@@ -368,8 +407,13 @@ def attach(state, dataset_ids: list[str], *, genome_id: Optional[str] = None,
     # process-wide and every session's dataset removal / prune waits on it, so it is held only for bookkeeping.
     key_hint, force = key, False
     while True:
-        prepared = _prepare_context(state, dataset_ids, genome_id=genome_id, fasta_path=fasta_path,
-                                    gtf_path=gtf_path, contigs=contigs, force=force)
+        try:
+            prepared = _prepare_context(state, dataset_ids, genome_id=genome_id, fasta_path=fasta_path,
+                                        gtf_path=gtf_path, contigs=contigs, force=force)
+        except NeedsConfirmation as asked:
+            # Nothing attached: the caller asks the user and retries with the download confirmed.
+            return {'success': False, 'genome': None, 'main': False, 'loci': {}, 'needs_confirmation': True,
+                    'name': asked.name, 'download': asked.download}
         with _LOCK:
             try:
                 key, main = _attach_locked(state, dataset_ids, genome_id=genome_id, fasta_path=fasta_path,
@@ -388,7 +432,15 @@ def attach(state, dataset_ids: list[str], *, genome_id: Optional[str] = None,
             for dataset_id, locus in loci.items():
                 if assignments(state).get(dataset_id) == key:
                     remembered[dataset_id] = {'key': key, 'locus': dict(locus)}
-    return {'success': True, 'genome': info, 'main': main, 'loci': loci}
+    out = {'success': True, 'genome': info, 'main': main, 'loci': loci}
+    if info and info.get('annotation_error'):
+        out['annotation_error'] = info['annotation_error']
+    if info and info.get('annotation_pending'):
+        # The sequence is attached; its annotation waits for the confirmed retry (``confirm_large``).
+        spec = getattr(contexts(state).get(key), '_panel_genome_spec', None) or {}
+        out.update(needs_confirmation=True, download=dict(info['annotation_pending']),
+                   name=spec.get('name') or info.get('label') or key)
+    return out
 
 
 class _NeedsContext(Exception):
@@ -409,6 +461,10 @@ def _prepare_context(state, dataset_ids, *, genome_id, fasta_path, gtf_path, con
             existing = contexts(state).get(genome_id)
             if existing is not None and not force and not _annotation_pending(existing):
                 return None
+        if existing is not None and not force:
+            # Its annotation waited for a confirmation: finished in place (outside the registry lock).
+            _resume_annotation(existing, genome_id)
+            return None
         return _load_registry(genome_id)
     if fasta_path:
         source = {'fasta_path': fasta_path, **({'gtf_path': gtf_path} if gtf_path else {})}

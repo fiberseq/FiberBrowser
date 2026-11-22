@@ -93,8 +93,9 @@ describe('meta-locus in autosave and crash recovery', () => {
     resetMetaLocusForTests();
     useBrowserStore.setState({ chrom: 'chr1', start: 0, end: 10 } as never);
     await restoreSnapshot(saved);
-    await vi.waitFor(() => expect(startMetaLocusPool).toHaveBeenCalledTimes(1));
-    expect(mocked(startMetaLocusPool).mock.calls[0][0]).toMatchObject({ bed_path: '/beds/sites.bed', flank_bp: 1500 });
+    // (Twice: the probe could not name the pool, so its contig is asked of the pool itself, then the restore reopens it.)
+    await vi.waitFor(() => expect(startMetaLocusPool).toHaveBeenCalledTimes(2));
+    for (const call of mocked(startMetaLocusPool).mock.calls) expect(call[0]).toMatchObject({ bed_path: '/beds/sites.bed', flank_bp: 1500 });
   });
 
   it('a pool reopened under another id (datasets under other ids) keeps the zoomed view, clusters and selections', async () => {
@@ -127,5 +128,60 @@ describe('meta-locus in autosave and crash recovery', () => {
     expect([...(s.selectedReadIds.sample ?? [])]).toEqual(['r2']);
     expect(s.restoredClusterViewport).toEqual({ chrom: 'meta:p2', start: 500, end: 1500 });
     expect(useMetaLocusStore.getState().status?.pool_id).toBe('p2');
+  });
+
+  // 3.1.1 (deferred MED): the contig comes from the pool the restore reopens, not only from the probe. A probe that
+  // fails (transiently, or answers without a pool id) used to leave the old contig, and the reopen then moved to the
+  // new one and cleared the restored analysis.
+  const recoverWithProbe = async (probe: () => Promise<unknown>) => {
+    const ds = { id: 'sample_1', label: 'Sample', paths: ['/data/sample.bam'], color: '#123456', data_type: 'bam' };
+    useMetaLocusStore.setState({ spec: { bed_path: '/beds/sites.bed', name: 'Sites', anchor: 'centre', flank_bp: 1500, dataset_ids: ['sample_1'] },
+      seed: 2, count: 30, lastRealLocus: REAL, status: { status: 'ready', pool_id: 'p1', width: 3000, flank_bp: 1500 } as never });
+    useBrowserStore.setState({ datasets: [ds], chrom: 'meta:p1', start: 500, end: 1500,
+      clusterAssignments: { sample_1: { r1: 0, r2: 1, r3: 1 } }, selectedReadIds: { sample_1: new Set(['r2']) } } as never);
+    await autoSaveNow();
+    const saved = JSON.parse(JSON.stringify(mocked(saveAutoSave).mock.calls[0][0])) as SerializedState;
+    resetMetaLocusForTests();
+    useBrowserStore.setState({ chrom: 'chr1', start: 0, end: 10, datasets: [], clusterAssignments: {}, selectedReadIds: {} } as never);
+    mocked(getDatasets).mockResolvedValue({ datasets: [{ ...ds, id: 'sample' }] });
+    mocked(probeMetaLocusPool).mockImplementation(probe);
+    mocked(startMetaLocusPool).mockResolvedValue({ status: 'ready', pool_id: 'p2', chrom: 'meta:p2', width: 3000, flank_bp: 1500,
+      spec: { bed_path: '/beds/sites.bed' } });
+    mocked(setMetaLocusView).mockResolvedValue({ chrom: 'meta:p2', length: 3000, generation: 1, entries: 0 } as never);
+    await restoreSnapshot(saved);
+    await vi.waitFor(() => expect(setMetaLocusView).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(useMetaLocusStore.getState().busy).toBe(false));
+    const s = useBrowserStore.getState();
+    expect([s.chrom, s.start, s.end]).toEqual(['meta:p2', 500, 1500]);
+    expect(s.clusterAssignments).toEqual({ sample: { r1: 0, r2: 1, r3: 1 } });
+    expect([...(s.selectedReadIds.sample ?? [])]).toEqual(['r2']);
+    expect(mocked(startMetaLocusPool).mock.calls[0][0]).toMatchObject({ bed_path: '/beds/sites.bed', dataset_ids: ['sample'] });
+  };
+
+  it('a pool-id probe that fails transiently: the reopened pool names the contig and the analysis is kept', async () => {
+    await recoverWithProbe(async () => { throw new Error('Failed to fetch'); });
+  });
+
+  it('a probe answering without a pool id: the reopened pool names the contig and the analysis is kept', async () => {
+    await recoverWithProbe(async () => ({ success: true, cached: false }));
+  });
+
+  it('a pool that cannot be named before the restore but reopens elsewhere says the analysis was not kept', async () => {
+    useMetaLocusStore.setState({ spec: { bed_path: '/beds/sites.bed', anchor: 'centre', flank_bp: 1500, dataset_ids: ['a'] },
+      seed: 2, count: 30, lastRealLocus: REAL, status: { status: 'ready', pool_id: 'p1', width: 3000, flank_bp: 1500 } as never });
+    useBrowserStore.setState({ chrom: 'meta:p1', start: 500, end: 1500, clusterAssignments: { a: { r1: 0 } } } as never);
+    await autoSaveNow();
+    const saved = JSON.parse(JSON.stringify(mocked(saveAutoSave).mock.calls[0][0])) as SerializedState;
+    resetMetaLocusForTests();
+    useBrowserStore.setState({ chrom: 'chr1', start: 0, end: 10, clusterAssignments: {} } as never);
+    mocked(probeMetaLocusPool).mockRejectedValue(new Error('Failed to fetch'));
+    mocked(startMetaLocusPool).mockRejectedValueOnce(new Error('Failed to fetch')).mockResolvedValue({ status: 'ready', pool_id: 'p2',
+      chrom: 'meta:p2', width: 3000, flank_bp: 1500, spec: { bed_path: '/beds/sites.bed' } });
+    mocked(setMetaLocusView).mockResolvedValue({ chrom: 'meta:p2', length: 3000, generation: 1, entries: 0 } as never);
+    await restoreSnapshot(saved);
+    await vi.waitFor(() => expect(setMetaLocusView).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(useMetaLocusStore.getState().busy).toBe(false));
+    expect(useBrowserStore.getState().chrom).toBe('meta:p2');
+    expect(useMetaLocusStore.getState().notice).toMatch(/reopened as a different pool.*could not be kept/);
   });
 });

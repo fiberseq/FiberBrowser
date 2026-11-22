@@ -50,6 +50,19 @@ def test_binaries_and_wheel_members_with_the_builders_home_are_flagged(tmp_path,
     assert cpp.main(["--allow", "dirty", str(tmp_path / "dirty")]) == 0
 
 
+def test_numba_cache_files_with_the_builders_home_are_flagged(tmp_path, monkeypatch):
+    """numba's cache index/objects are pickles, not binaries, yet record the source path (3.1.0 shipped 45 pynndescent
+    caches naming the build venv): they are searched by suffix."""
+    monkeypatch.setenv("HOME", HOME)
+    monkeypatch.setenv("USER", "builder")
+    cache = tmp_path / "pynndescent" / "__pycache__"
+    cache.mkdir(parents=True)
+    (cache / "utils.norm-120.py312.nbi").write_bytes(b"\x80\x05" + B_HOME + b"/venv/pynndescent/utils.py")
+    (cache / "utils.norm-120.py312.1.nbc").write_bytes(b"\x80\x05 clean")
+    hits = cpp.scan([tmp_path], cpp.patterns([]))
+    assert [Path(n).name for n, _ in hits] == ["utils.norm-120.py312.nbi"]
+
+
 def test_the_graph_wheel_builder_refuses_a_helper_with_the_builders_paths(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", HOME)
     monkeypatch.setenv("USER", "builder")

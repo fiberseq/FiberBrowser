@@ -300,6 +300,21 @@ def test_read_end_footprints_endpoint_toggles_and_clears_read_caches():
     assert state._broad_cache  # unchanged setting: caches kept
 
 
+def test_legacy_layer_inference_endpoint_reports_whether_the_server_changed():
+    """The frontend confirms graph reloads on this answer (useReadSettingsSync), as for the read-end setting."""
+    from services.read_auxiliary_endpoint import set_legacy_layer_inference_payload
+    from state.browser_state import BrowserState
+
+    state = BrowserState(None, None, None, None)
+    state._broad_cache[("x",)] = ([], 0.0)
+    result = set_legacy_layer_inference_payload(state, {"enabled": True, "nuc_min_size": 120})
+    assert result["changed"] is True and result["nuc_min_size"] == 120 and result["enabled"] is True
+    assert not state._broad_cache
+    state._broad_cache[("x",)] = ([], 0.0)
+    assert set_legacy_layer_inference_payload(state, {"enabled": True, "nuc_min_size": 120})["changed"] is False
+    assert state._broad_cache  # unchanged setting: caches kept
+
+
 def test_direct_bam_loader_uses_the_workspace_setting(monkeypatch):
     from services import read_route_helpers
 

@@ -8,7 +8,8 @@ import {
 } from '../../../api/pipeline';
 import { pickAnyFile, pickFolder, uploadFile } from '../../../api/files';
 import {
-  BASECALL_DEVICES, BASECALL_MODELS, DEFAULT_BASECALL, DEFAULT_OPTIONS, ENZYME_INFO, WIZARD_STEPS, basecallSummary, buildRunRequest,
+  BASECALL_DEVICES, BASECALL_MODELS, DEFAULT_BASECALL, DEFAULT_OPTIONS, ENZYME_INFO, NUC_RECALL_ENZYMES, TOPOLOGY_HELP, WIZARD_STEPS,
+  basecallSummary, buildRunRequest,
   changedOptionLabels, defaultOutputRoot, runMinMapq, enzymesFor, formatBytes, includedSamples, initialWizardState,
   genomeDownloadText, hintText, sampleNameError, sampleOutdir, samplesFromScan, stepIssues, type WizardState, type WizardStep,
 } from '../../../utils/dafRun';
@@ -933,6 +934,16 @@ export function DafRunWizard() {
                   data-testid="daf-run-opt-mapq"
                 />
               </OptionRow>
+              {NUC_RECALL_ENZYMES.includes(state.enzyme as Enzyme) && (
+                <OptionRow label="Nucleosome recall" help={TOPOLOGY_HELP}>
+                  <select className={INPUT} value={state.options.nuc_recall_policy ?? 'conservative'} title={TOPOLOGY_HELP}
+                    onChange={e => setOption('nuc_recall_policy', e.target.value as NonNullable<PipelineOptions['nuc_recall_policy']>)}
+                    data-testid="daf-run-opt-nuc-recall">
+                    <option value="conservative">Conservative (default)</option>
+                    <option value="topology">Topology</option>
+                  </select>
+                </OptionRow>
+              )}
               {state.enzyme === 'ddda' && (
                 <>
                   <OptionRow label="CpG-aware recall (DddA)" help="Exclude CpG observations outside unmethylated islands from footprint recall (on by default for DddA).">

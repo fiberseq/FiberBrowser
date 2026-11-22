@@ -127,10 +127,10 @@ goes to the *NAPA* promoter.
    focused reads. **Snapshot** keeps the clustering in **Saved** to restore
    later. ([17](guide.md#17-the-clusters-panel))
 6. Open **Charts**: **Profiles** overlays the clusters' average profiles,
-   **Composition** shows each dataset's share, **Footprint sizes** plots footprint size
-   against position (Size enrichment or V-plot; it also works without
-   clustering, see [Footprint size enrichment plots](guide.md#footprint-size-enrichment-plots)), and **Differences** (once you have labeling rules) shows
-   what sets each cluster apart. The **Profile** chips pick the layers;
+   **Composition** shows each dataset's share, and **Differences** (once you have labeling rules) shows
+   what sets each cluster apart. **Footprint sizes → Plots** plots footprint size
+   against position per cluster in Plots (Size enrichment or V-plot; it also works without
+   clustering, see [Footprint size enrichment plots](guide.md#footprint-size-enrichment-plots)). The **Profile** chips pick the layers;
    **Default** shows the layers switched on in the Layers toolbar, like the
    metaprofile track. ([18](guide.md#18-profiles-and-other-views))
 7. In **Overview**, choose **Map**: each read is a dot on a t-SNE map,

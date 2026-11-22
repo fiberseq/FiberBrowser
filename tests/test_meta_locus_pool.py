@@ -559,3 +559,33 @@ def test_a_members_new_pools_never_evict_another_members_pool(tmp_path, monkeypa
         _wait(mj.start_pool(state, {"flank_bp": 5000}, _regions(6), "sites"))
     with runtime.lab_request_context(alice):
         assert mj.get_pool(hers.pool_id) is hers and not hers.cancel.is_set()
+
+
+def test_a_full_server_replaces_the_requesters_own_idle_pool_instead_of_refusing(tmp_path, monkeypatch):
+    """3.1.1 (deferred MED): past the server-wide cap a member with an idle pool of their own gets the new pool in
+    place of their least recently used one (it is rebuilt from its cache when asked again); only a member with
+    nothing of their own to replace is refused. Other members' pools are never dropped."""
+    from services import runtime
+    paths = {"d1": _bam(tmp_path / "a.bam", n_sites=6)}
+    state = _state(paths)
+    alice, bob = SimpleNamespace(name="alice"), SimpleNamespace(name="bob")
+    monkeypatch.setattr(runtime, "_lab_mode", True)
+    mj._pools.clear()
+    with runtime.lab_request_context(alice):
+        hers = mj.start_pool(state, {"flank_bp": 1000}, _regions(6), "sites")
+        assert _wait(hers) == "ready"
+    with runtime.lab_request_context(bob):
+        his = [mj.start_pool(state, {"flank_bp": 2000 + i}, _regions(6), "sites") for i in range(mj.MAX_POOLS)]
+        for pool in his:
+            _wait(pool)
+    monkeypatch.setattr(mj, "MAX_POOLS_TOTAL", mj.MAX_POOLS + 1)  # the server is full
+    with runtime.lab_request_context(alice):
+        new = mj.start_pool(state, {"flank_bp": 1500}, _regions(6), "sites")
+        assert _wait(new) == "ready"
+        assert mj.get_pool(hers.pool_id) is None and hers.cancel.is_set()  # her own idle pool made room
+        assert mj.get_pool(new.pool_id) is new
+    with runtime.lab_request_context(bob):
+        assert all(mj.get_pool(p.pool_id) is p and not p.cancel.is_set() for p in his)
+    with runtime.lab_request_context(SimpleNamespace(name="carol")):  # nothing of hers to replace
+        with pytest.raises(mj.PoolsFull):
+            mj.start_pool(state, {"flank_bp": 1000}, _regions(6), "sites")

@@ -63,20 +63,20 @@ def test_the_contract_names_every_new_module_with_functions_browser_imports():
 def test_a_fiberhmm_without_the_new_modules_is_refused_by_name(tmp_path):
     pkg = write_tree(tmp_path / "old", "3.1.0", with_new=False)
     missing = runtime.missing_features(pkg)
-    assert missing == ["FiberHMM 3.2 or newer"] + [f["label"] for f in new_features()]
+    assert missing == ["FiberHMM 3.2.2 or newer"] + [f["label"] for f in new_features()]
 
 
 def test_a_310_version_with_the_new_modules_is_refused_by_version(tmp_path):
-    # The floor (FIBERHMM_REQUIREMENT >=3.2.0, CORE_REQUIREMENTS min_version 3.2) refuses 3.1.x even with the files.
-    assert runtime.missing_features(write_tree(tmp_path / "v31", "3.1.9", with_new=True)) == ["FiberHMM 3.2 or newer"]
+    # The floor (FIBERHMM_REQUIREMENT >=3.2.2, CORE_REQUIREMENTS min_version 3.2.2) refuses older versions even with the files.
+    assert runtime.missing_features(write_tree(tmp_path / "v31", "3.1.9", with_new=True)) == ["FiberHMM 3.2.2 or newer"]
 
 
 def test_a_fiberhmm_with_the_new_modules_passes(tmp_path):
-    assert runtime.missing_features(write_tree(tmp_path / "new", "3.2.0", with_new=True)) == []
+    assert runtime.missing_features(write_tree(tmp_path / "new", "3.2.2", with_new=True)) == []
 
 
 def test_a_new_module_lacking_one_imported_name_is_refused(tmp_path):
-    pkg = write_tree(tmp_path / "partial", "3.2.0", with_new=True)
+    pkg = write_tree(tmp_path / "partial", "3.2.2", with_new=True)
     lift = pkg / "io" / "graph_lift.py"
     lift.write_text(lift.read_text().replace("def lift_pg_record", "def renamed"))
     assert runtime.missing_features(pkg) == ["fiberhmm.io.graph_lift (graph mode and live lift)"]
@@ -97,7 +97,7 @@ def test_the_real_fiberhmm_310_wheel_fails_the_contract(tmp_path):
         wheel.extractall(site)
     assert runtime.package_version(site / "fiberhmm") == "3.1.0"
     missing = runtime.missing_features(site / "fiberhmm")
-    assert missing == ["FiberHMM 3.2 or newer"] + [f["label"] for f in new_features()]
+    assert missing == ["FiberHMM 3.2.2 or newer"] + [f["label"] for f in new_features()]
     error = runtime.check_overlay(site, "3.1.0")
     assert error and all(f["label"] in error for f in new_features())
 
@@ -109,3 +109,32 @@ def test_a_real_fiberhmm_tree_with_the_modules_passes_the_contract():
     assert runtime.missing_features(tree / "fiberhmm") == []
     # The updater's import check (a disposable process) also imports every listed module and name.
     assert runtime.check_overlay(tree, runtime.package_version(tree / "fiberhmm")) is None
+
+
+def test_a_321_with_the_new_modules_is_refused_by_version(tmp_path):
+    # 3.1.1: FiberHMM 3.2.2 is the floor; 3.2.1's scans still read the legacy tags first, so they disagree with the
+    # read rows on MA-only reads.
+    assert runtime.missing_features(write_tree(tmp_path / "v321", "3.2.1", with_new=True)) == ["FiberHMM 3.2.2 or newer"]
+
+
+def test_every_declared_fiberhmm_requirement_is_the_runtimes():
+    """One floor everywhere: packaging, CI, installers, docs and messages name FIBERHMM_REQUIREMENT exactly (the
+    CHANGELOG's older sections and test fixtures, which use other ranges on purpose, excepted)."""
+    import re
+    import subprocess
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    listed = subprocess.run(["git", "ls-files"], cwd=root, capture_output=True, text=True, check=True).stdout.split()
+    pattern = re.compile(r"fiberhmm\[consensus\]\s*>=\s*[0-9][0-9.]*\s*,\s*<\s*[0-9]+")
+    wanted = runtime.FIBERHMM_REQUIREMENT
+    stale = []
+    for name in listed:
+        if name == "CHANGELOG.md" or name.startswith(("browser/frontend/dist/", "tests/")) or ".test." in name or not name.endswith(
+                (".py", ".toml", ".txt", ".yml", ".yaml", ".md", ".sh", ".ts", ".tsx", ".cfg")):
+            continue
+        try:
+            text = (root / name).read_text()
+        except (OSError, UnicodeDecodeError):
+            continue
+        stale += [f"{name}: {m.group(0)}" for m in pattern.finditer(text) if re.sub(r"\s", "", m.group(0)) != wanted]
+    assert not stale, stale

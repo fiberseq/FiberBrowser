@@ -62,7 +62,8 @@ def test_interval_tag_pair(tmp_path):
 def test_library_counts_do_not_call_dorado_reads_annotated(tmp_path):
     from services.pipeline_jobs import _count_bam
     counts = _count_bam(_write(tmp_path / "ont.bam"), 100)
-    assert counts["called"] == 2 and counts["nucleosomes"] == 3
+    # Nucleosomes: the fibertools read's three ns/nl calls and the called Dorado read's MA nuc calls (MA first).
+    assert counts["called"] == 2 and counts["nucleosomes"] == 6
 
 
 def test_reads_compact_route_shows_dorado_reads(client, tmp_path):
@@ -118,7 +119,8 @@ def test_library_counts_called_reads_with_ma_or_msps_despite_scalar_ns(tmp_path)
     from services.pipeline_jobs import _count_bam
     counts = _count_bam(_write_odd(tmp_path / "odd.bam"), 100)
     # dorado_Ma, dorado_msp, scalar_as, after; not the string-tag read.
-    assert counts["called"] == 4 and counts["nucleosomes"] == 6
+    # Nucleosomes: dorado_Ma's two Ma nuc calls (MA first) and the three ns/nl calls of scalar_as and after.
+    assert counts["called"] == 4 and counts["nucleosomes"] == 8
 
 
 def test_string_tags_and_scalar_as_do_not_drop_reads(tmp_path):

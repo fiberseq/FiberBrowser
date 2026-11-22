@@ -26,7 +26,7 @@ from port_list import bind_test_port
 _REAL_DEFAULT_PACKAGE_DIR = runtime.default_package_dir
 
 
-def package_files(version="3.2.1", broken=False, missing=False, broken_feature=False):
+def package_files(version="3.2.3", broken=False, missing=False, broken_feature=False):
     files = {"fiberhmm/__init__.py": f'__version__ = "{version}"\n' +
              ('raise RuntimeError("broken overlay")\n' if broken else '')}
     for req in runtime.required_features():
@@ -49,7 +49,7 @@ def package_files(version="3.2.1", broken=False, missing=False, broken_feature=F
     return files
 
 
-def wheel_bytes(version="3.2.1", requires=(), **kwargs):
+def wheel_bytes(version="3.2.3", requires=(), **kwargs):
     files = package_files(version, **kwargs)
     dist = f'fiberhmm-{version}.dist-info'
     files[f'{dist}/METADATA'] = (f'Metadata-Version: 2.1\nName: fiberhmm\nVersion: {version}\n'
@@ -78,12 +78,12 @@ def index(request, tmp_path, monkeypatch):
     monkeypatch.setenv('FIBERBROWSER_APP_SETTINGS', str(tmp_path / 'data/app_settings.json'))
     monkeypatch.setenv('FIBERBROWSER_SETTINGS', str(tmp_path / 'browser_settings.json'))
     monkeypatch.setattr(app_build, 'is_packaged', lambda: True)
-    monkeypatch.setattr(app_build, 'build_info', lambda: {'fiberhmm_min_version': '3.2.0'})
+    monkeypatch.setattr(app_build, 'build_info', lambda: {'fiberhmm_min_version': '3.2.2'})
     monkeypatch.setattr(runtime, '_APP_CHOICE', None)
     monkeypatch.setattr(runtime, '_CONFIGURED_ROOT', None)
     monkeypatch.setattr(runtime, '_OVERLAY_CHECKS', {})
     bundled = tmp_path / 'bundle'
-    for name, data in package_files('3.2.0').items():
+    for name, data in package_files('3.2.2').items():
         dest = bundled / name
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(data)
@@ -128,7 +128,7 @@ def index(request, tmp_path, monkeypatch):
     monkeypatch.setattr(updater, 'PYPI_JSON_URL', base + '/pypi/fiberhmm/json')
     updater.reset()
     class Index:
-        def publish(self, version='3.2.1', digest=None, **kwargs):
+        def publish(self, version='3.2.3', digest=None, **kwargs):
             data = wheel_bytes(version, **kwargs)
             path = f'/fiberhmm-{version}-py3-none-any.whl'
             routes[path] = data
@@ -172,14 +172,14 @@ def test_newest_stable_supported_non_yanked_wheel(index):
     index.publish('3.1.0')
     index.save()
     check = updater.check(force=True)
-    assert check['latest'] == '3.2.1' and check['current'] == '3.2.0'
+    assert check['latest'] == '3.2.3' and check['current'] == '3.2.2'
     assert check['status'] == 'update_available'
     assert index.requests == ['/pypi/fiberhmm/json']
-    index.releases = {'3.2.0': index.releases['3.2.1']}
+    index.releases = {'3.2.2': index.releases['3.2.3']}
     # No wheel whose filename version matches a release means no usable update.
     index.save()
     assert updater.check(force=True)['status'] == 'up_to_date'
-    index.publish('3.2.0')
+    index.publish('3.2.2')
     assert updater.check(force=True)['status'] == 'up_to_date'
 
 
@@ -189,7 +189,7 @@ def test_sha_mismatch_is_rejected_without_activation(index):
     job = finish_install()
     assert job['state'] == 'error' and 'SHA-256' in job['message']
     assert app_settings.load()['fiberhmm']['source'] == 'bundled'
-    assert not updater.overlay_site('3.2.1').exists()
+    assert not updater.overlay_site('3.2.3').exists()
 
 
 @pytest.mark.parametrize('requirement', ['nonexistent-fb-test-dependency>=999', 'packaging>=999',
@@ -199,7 +199,7 @@ def test_requirements_need_new_app(index, requirement):
     updater.check(force=True)
     job = finish_install()
     assert job['state'] == 'needs_app_update'
-    assert job['message'] == 'FiberHMM 3.2.1 needs a newer FiberBrowser app; update the app'
+    assert job['message'] == 'FiberHMM 3.2.3 needs a newer FiberBrowser app; update the app'
     assert app_settings.load()['fiberhmm']['source'] == 'bundled'
     assert not list(updater.overlays_dir().glob('.install-*'))
 
@@ -211,7 +211,7 @@ def test_failed_compatibility_never_activates(index, problem):
     job = finish_install()
     assert job['state'] == 'error' and 'compatibility check failed' in job['message']
     assert app_settings.load()['fiberhmm']['source'] == 'bundled'
-    assert not updater.overlay_site('3.2.1').exists()
+    assert not updater.overlay_site('3.2.3').exists()
 
 
 def test_activation_restart_imports_overlay_and_subprocess_uses_it(index, monkeypatch):
@@ -240,14 +240,14 @@ print(json.dumps([fiberhmm.__version__, child.stdout.strip(), r.fiberhmm_selecti
 '''
     result = subprocess.run([sys.executable, '-c', code, str(runtime.BROWSER_DIR), str(index.bundle)],
                             capture_output=True, text=True, check=True)
-    assert json.loads(result.stdout) == ['3.2.1', '3.2.1', 'updated']
+    assert json.loads(result.stdout) == ['3.2.3', '3.2.3', 'updated']
 
 
 @pytest.mark.parametrize('damage', ['import', 'features', 'feature_import', 'missing'])
 def test_startup_falls_back_with_notice(index, monkeypatch, damage):
     updater.check(force=True)
     assert finish_install()['state'] == 'ready'
-    site = updater.overlay_site('3.2.1')
+    site = updater.overlay_site('3.2.3')
     if damage == 'import':
         (site / 'fiberhmm/__init__.py').write_text('raise RuntimeError("broken")')
     elif damage == 'features':
@@ -260,20 +260,20 @@ def test_startup_falls_back_with_notice(index, monkeypatch, damage):
     monkeypatch.setattr(runtime, '_APP_CHOICE', None)
     selection = runtime.fiberhmm_selection()
     assert selection['source'] == 'bundled' and selection['root'] is None
-    assert selection['version'] == '3.2.0'
+    assert selection['version'] == '3.2.2'
     assert 'could not load' in selection['notices'][0]
 
 
 def test_startup_with_an_overlay_below_the_minimum_says_why(index, monkeypatch):
-    # The owner's real case: an older app installed a FiberHMM 3.1.0 overlay, then this app (minimum 3.2.0) starts.
+    # The owner's real case: an older app installed a FiberHMM 3.1.0 overlay, then this app (minimum 3.2.2) starts.
     monkeypatch.setattr(runtime, '_APP_CHOICE', ('updated', '', '3.1.0'))
     selection = runtime.fiberhmm_selection()
-    assert selection['source'] == 'bundled' and selection['version'] == '3.2.0'
-    assert 'Updated FiberHMM 3.1.0 could not load (this app needs FiberHMM 3.2.0 or newer)' in selection['notices'][0]
+    assert selection['source'] == 'bundled' and selection['version'] == '3.2.2'
+    assert 'Updated FiberHMM 3.1.0 could not load (this app needs FiberHMM 3.2.2 or newer)' in selection['notices'][0]
 
 
 def test_revert_and_pruning_keep_active_and_previous(index, monkeypatch):
-    for version in ['3.2.1', '3.3.0', '3.4.0']:
+    for version in ['3.2.3', '3.3.0', '3.4.0']:
         index.publish(version)
         updater.check(force=True)
         assert finish_install()['state'] == 'ready'
@@ -317,7 +317,7 @@ def test_settings_cadence_and_source_command(index, monkeypatch):
     updater.check(force=True)
     assert len(index.requests) == 2
     monkeypatch.setattr(app_build, 'is_packaged', lambda: False)
-    assert updater.check()['pip_command'] == 'pip install -U "fiberhmm[consensus]>=3.2.0,<4"'
+    assert updater.check()['pip_command'] == 'pip install -U "fiberhmm[consensus]>=3.2.2,<4"'
     for action in [updater.start_install, updater.revert, updater.restart]:
         with pytest.raises(updater.UpdateError, match='pip install'):
             action()
@@ -332,7 +332,7 @@ def test_routes_install_activate_only_verified_wheel_and_revert(index, monkeypat
     monkeypatch.setattr(app_update, 'check', lambda **kw: {'status': 'up_to_date'})
     with TestClient(app) as client:
         check = client.get('/api/app/update?force=1').json()
-        assert check['fiberhmm']['latest'] == '3.2.1'
+        assert check['fiberhmm']['latest'] == '3.2.3'
         assert client.post('/api/app/fiberhmm', json={'source': 'updated', 'overlay_version': '99'}).status_code == 422
         assert client.post('/api/app/fiberhmm/install').status_code == 200
         deadline = time.monotonic() + 10
@@ -360,9 +360,9 @@ def test_restart_handoff_reuses_wait_for_server_and_desktop(index, monkeypatch):
 def test_frozen_module_child_selects_overlay(index, role):
     updater.check(force=True)
     assert finish_install()['state'] == 'ready'
-    script = updater.overlay_site('3.2.1') / 'fiberhmm/overlay_probe.py'
+    script = updater.overlay_site('3.2.3') / 'fiberhmm/overlay_probe.py'
     script.write_text('import fiberhmm\ndef main(): print(fiberhmm.__version__)\nif __name__ == "__main__": main()\n')
-    dist = updater.overlay_site('3.2.1') / 'fiberhmm-3.2.1.dist-info'
+    dist = updater.overlay_site('3.2.3') / 'fiberhmm-3.2.3.dist-info'
     (dist / 'entry_points.txt').write_text('[console_scripts]\nfiberhmm-overlay-probe = fiberhmm.overlay_probe:main\n')
     code = '''
 import sys
@@ -378,7 +378,7 @@ frozen_entry.run(['-m', 'fiberhmm.overlay_probe'] if sys.argv[4] == 'module' els
     repo = runtime.BROWSER_DIR.parent
     result = subprocess.run([sys.executable, '-c', code, str(repo), str(runtime.BROWSER_DIR), str(index.bundle), role],
                             cwd=str(index.bundle), capture_output=True, text=True, check=True)
-    assert result.stdout.strip() == '3.2.1'
+    assert result.stdout.strip() == '3.2.3'
 
 
 @pytest.mark.parametrize("role", ["module", "script", "entry-point"])
@@ -416,10 +416,10 @@ def test_bundled_metadata_does_not_resolve_from_active_overlay(index, monkeypatc
     seen = []
     def distributions(*, path):
         seen.append(path)
-        return [SimpleNamespace(metadata=Parser().parsestr('Name: fiberhmm\n'), version='3.2.0')]
+        return [SimpleNamespace(metadata=Parser().parsestr('Name: fiberhmm\n'), version='3.2.2')]
     monkeypatch.setattr(sys, 'frozen', True, raising=False)
     monkeypatch.setattr('importlib.metadata.distributions', distributions)
-    assert runtime._default_version(index.bundle / 'fiberhmm') == '3.2.0'
+    assert runtime._default_version(index.bundle / 'fiberhmm') == '3.2.2'
     assert seen == [[str(index.bundle)]]
 
 
@@ -446,7 +446,7 @@ def test_bad_wheel_paths_and_declared_python_rejected(index):
     with zipfile.ZipFile(out, 'a') as archive:
         archive.writestr('../escape.py', 'bad')
     with pytest.raises(updater.UpdateError, match='unsafe path'):
-        updater._unpack(out.getvalue(), updater.overlay_site('3.2.1'), '3.2.1')
+        updater._unpack(out.getvalue(), updater.overlay_site('3.2.3'), '3.2.3')
     assert not (updater.overlays_dir() / 'escape.py').exists()
 
 
@@ -465,15 +465,15 @@ def test_override_during_download_prevents_activation(index, monkeypatch):
 def test_running_overlay_is_retained_as_previous_across_multiple_updates(index, monkeypatch):
     updater.check(force=True)
     assert finish_install()['state'] == 'ready'
-    monkeypatch.setattr(runtime, '_APP_CHOICE', ('updated', '', '3.2.1'))
+    monkeypatch.setattr(runtime, '_APP_CHOICE', ('updated', '', '3.2.3'))
     for version in ['3.3.0', '3.4.0']:
         index.publish(version)
         updater.check(force=True)
         assert finish_install()['state'] == 'ready'
-    assert sorted(p.name for p in updater.overlays_dir().iterdir()) == ['3.2.1', '3.4.0']
+    assert sorted(p.name for p in updater.overlays_dir().iterdir()) == ['3.2.3', '3.4.0']
     updater.revert()
     # The current process still needs 3.1; bundled startup releases it for pruning.
-    assert updater.overlay_site('3.2.1').exists()
+    assert updater.overlay_site('3.2.3').exists()
     monkeypatch.setattr(runtime, '_APP_CHOICE', None)
     assert runtime.fiberhmm_selection()['source'] == 'bundled'
     assert sorted(p.name for p in updater.overlays_dir().iterdir()) == ['3.4.0']
@@ -496,7 +496,7 @@ def test_fiberhmm_routes_cannot_be_opened_by_public_allowlist(index, monkeypatch
 
 
 def test_requirement_versions_ignore_overlay_metadata(index, monkeypatch):
-    site = updater.overlay_site('3.2.1')
+    site = updater.overlay_site('3.2.3')
     dist = site / 'packaging-999.dist-info'
     dist.mkdir(parents=True)
     (dist / 'METADATA').write_text('Metadata-Version: 2.1\nName: packaging\nVersion: 999\n')
@@ -518,22 +518,22 @@ def test_restart_handoff_is_idempotent(index, monkeypatch):
 def test_fallback_excludes_overlay_already_on_pythonpath(index, monkeypatch):
     updater.check(force=True)
     assert finish_install()['state'] == 'ready'
-    site = updater.overlay_site('3.2.1')
-    (site / 'fiberhmm/__init__.py').write_text('__version__ = "3.2.1"\nraise RuntimeError("broken")\n')
+    site = updater.overlay_site('3.2.3')
+    (site / 'fiberhmm/__init__.py').write_text('__version__ = "3.2.3"\nraise RuntimeError("broken")\n')
     monkeypatch.setattr(runtime, '_APP_CHOICE', None)
     monkeypatch.setattr(runtime, 'default_package_dir', _REAL_DEFAULT_PACKAGE_DIR)
     monkeypatch.syspath_prepend(str(index.bundle))
     monkeypatch.syspath_prepend(str(site))
     selection = runtime.fiberhmm_selection()
-    assert selection['source'] == 'bundled' and selection['version'] == '3.2.0'
+    assert selection['source'] == 'bundled' and selection['version'] == '3.2.2'
     assert selection['package_dir'] == str(index.bundle / 'fiberhmm')
 
 
 def test_fallback_import_in_fresh_child_ignores_failed_overlay_on_pythonpath(index):
     updater.check(force=True)
     assert finish_install()['state'] == 'ready'
-    site = updater.overlay_site('3.2.1')
-    (site / 'fiberhmm/__init__.py').write_text('__version__ = "3.2.1"\nraise RuntimeError("broken")\n')
+    site = updater.overlay_site('3.2.3')
+    (site / 'fiberhmm/__init__.py').write_text('__version__ = "3.2.3"\nraise RuntimeError("broken")\n')
     code = """
 import sys
 sys.path[:0] = sys.argv[1:]
@@ -545,14 +545,14 @@ print(fiberhmm.__version__)
 """
     result = subprocess.run([sys.executable, '-c', code, str(site), str(index.bundle), str(runtime.BROWSER_DIR)],
                             cwd=str(index.bundle), capture_output=True, text=True, check=True)
-    assert result.stdout.strip() == '3.2.0'
+    assert result.stdout.strip() == '3.2.2'
 
 
 def test_frozen_job_fingerprint_matches_the_overlay_it_runs(index, tmp_path):
     from services import library_jobs as jobs
     updater.check(force=True)
     assert finish_install()['state'] == 'ready'
-    site = updater.overlay_site('3.2.1')
+    site = updater.overlay_site('3.2.3')
     cli = site / 'fiberhmm/cli'
     cli.mkdir()
     (cli / '__init__.py').write_text('')
@@ -568,20 +568,20 @@ def test_frozen_job_fingerprint_matches_the_overlay_it_runs(index, tmp_path):
     command = {'argv': [str(app), '-m', 'fiberhmm.cli.pipeline'], 'env': {}}
     fingerprint = jobs._fiberhmm_identity(command, str(index.bundle))
     ran = subprocess.run(command['argv'], cwd=str(index.bundle), capture_output=True, text=True, check=True)
-    assert ran.stdout.strip() == fingerprint['runs']['version'] == '3.2.1'
+    assert ran.stdout.strip() == fingerprint['runs']['version'] == '3.2.3'
 
 
 def test_revert_then_retry_repairs_broken_existing_overlay(index, monkeypatch):
     updater.check(force=True)
     assert finish_install()['state'] == 'ready'
-    site = updater.overlay_site('3.2.1')
+    site = updater.overlay_site('3.2.3')
     (site / 'fiberhmm/inference/strand_rescue.py').write_text('raise ImportError("damage")\n')
     monkeypatch.setattr(runtime, '_APP_CHOICE', None)
     assert runtime.fiberhmm_selection()['source'] == 'bundled'
     assert updater.revert()['state'] == 'ready'
     updater.check(force=True)
     assert finish_install()['state'] == 'ready'
-    assert runtime.check_overlay(site, '3.2.1') is None
+    assert runtime.check_overlay(site, '3.2.3') is None
     monkeypatch.setattr(runtime, '_APP_CHOICE', None)
     monkeypatch.setattr(runtime, '_OVERLAY_CHECKS', {})
     assert runtime.fiberhmm_selection()['source'] == 'updated'
@@ -592,7 +592,7 @@ def test_repair_preserves_in_use_overlay_and_rolls_back_failed_rename(index, mon
     updater.check(force=True)
     offer = dict(updater._offer)
     assert finish_install()['state'] == 'ready'
-    site = updater.overlay_site('3.2.1')
+    site = updater.overlay_site('3.2.3')
     if problem.startswith('active'):
         monkeypatch.setattr(runtime, '_APP_CHOICE', None)
         assert runtime.fiberhmm_selection()['source'] == 'updated'
@@ -631,14 +631,14 @@ def test_pending_selection_does_not_activate_in_frozen_job(index, tmp_path, monk
         cli.mkdir(exist_ok=True)
         (cli / '__init__.py').write_text('')
         (cli / (name + '.py')).write_text('import fiberhmm\nprint(fiberhmm.__version__)\n')
-    old_version = '3.2.0'
+    old_version = '3.2.2'
     if active == 'updated':
         updater.check(force=True)
         assert finish_install()['state'] == 'ready'
-        old_site = updater.overlay_site('3.2.1')
+        old_site = updater.overlay_site('3.2.3')
         shutil.copytree(index.bundle / 'fiberhmm/cli', old_site / 'fiberhmm/cli')
         monkeypatch.setattr(runtime, '_APP_CHOICE', None)
-        old_version = '3.2.1'
+        old_version = '3.2.3'
     assert runtime.fiberhmm_selection()['version'] == old_version
     index.publish('3.3.0')
     updater.check(force=True)

@@ -419,6 +419,89 @@ def sync_peaks_for_request(jupyter_state, req: SyncPeaksRequest) -> dict:
     return {"success": True, "count": len(req.peaks)}
 
 
+def _canonical_window_quant(wq: dict) -> dict:
+    """One spelling for the card's place (openIn / open_in), kept by presence (an explicit null closes it)."""
+    out = dict(wq)
+    if "openIn" in out:
+        value = out.pop("openIn")
+        out.setdefault("open_in", value)
+    return out
+
+
+MAX_QUEUED_SETTINGS_CALLS = 500
+
+# Settings the tab applies as plain values (a later call's value replaces an earlier one, nothing else changes with
+# them, and every non-null value is applied). Only calls made of these merge when the queue is long; any other call
+# (patches, maps, lists, peak and selection state, follow and toggles, Plots, panels, nulls) stays as it came.
+REPLACING_SETTINGS = frozenset({
+    # Not the analysis inputs (seed, span, cluster method / K, thresholds): changing one cancels a running
+    # refinement (utils/progressiveAnalysis.ts), so an intermediate value matters.
+    "read_row_height", "fill_read_height", "show_coverage_histogram", "max_region_for_reads", "show_genome_overview",
+    "all_reads_display_cap", "legacy_layer_inference", "legacy_nuc_min_size", "show_duplicate_reads", "show_qc_fail_reads", "min_fp_quality",
+    "reversed",
+})
+
+
+def _replacing_only(call: dict) -> bool:
+    # read_row_height is the one Any-typed field: only a value the tab applies ('auto' or a number) merges.
+    return bool(call) and all(
+        k in REPLACING_SETTINGS and v is not None
+        and (k != "read_row_height" or v == "auto" or (isinstance(v, (int, float)) and not isinstance(v, bool)))
+        for k, v in call.items())
+
+
+def compact_settings_calls(calls: list) -> list:
+    """Merge runs of neighbouring calls made only of plain replacing values (REPLACING_SETTINGS, non-null): applying
+    the result in order does exactly what applying the calls in order does. Every other call is kept as it came."""
+    out: list = []
+    for call in calls:
+        if out and _replacing_only(call) and _replacing_only(out[-1]):
+            out[-1] = {**out[-1], **call}
+        else:
+            out.append(dict(call))
+    return out
+
+
+def merge_pending_settings(pending: dict, updates: dict) -> dict:
+    """The calls the tab has not picked up yet, merged into one summary (``settings_update``, what a notebook reads
+    back from get_jupyter_state): maps merge (layer toggles; layer colours, with null kept), Quantify patches merge.
+    The tab applies the calls themselves one by one, in order (``settings_updates``), so order-dependent settings
+    (the metaprofile's follow switch against layer and source toggles) behave as if each call reached it alone."""
+    out = dict(pending)
+    for key, value in updates.items():
+        if key in ("enabled_mod_types", "cached_layer_types", "enabled_meta_profiles") and isinstance(value, dict):
+            out[key] = {**(out.get(key) or {}), **value}
+        elif key in ("layer_color_overrides", "user_layer_colors") and isinstance(value, dict):
+            replace = key == "layer_color_overrides" and bool(updates.get("replace_layer_color_overrides"))
+            out[key] = dict(value) if replace else {**(out.get(key) or {}), **value}
+        elif key == "replace_layer_color_overrides":
+            if value:
+                out[key] = True
+                if "layer_color_overrides" not in updates:
+                    out["layer_color_overrides"] = {}
+        elif key == "window_quant" and isinstance(value, dict) and isinstance(out.get(key), dict):
+            merged = dict(out[key])
+            value = _canonical_window_quant(value)
+            merged = _canonical_window_quant(merged)
+            for part, patch in value.items():
+                if part in ("spec", "axis") and isinstance(patch, dict) and isinstance(merged.get(part), dict):
+                    merged[part] = {**merged[part], **patch}
+                else:
+                    merged[part] = patch
+            out[key] = merged
+        else:
+            out[key] = value
+    # For a tab that applies only this summary (an older build): toggles after a pending follow switch must come
+    # second, so it is told to apply the switch first. The ordered calls (settings_updates) need no hint.
+    toggles = ("enabled_meta_profiles", "enabled_mod_types")
+    if any(k in updates for k in toggles) and "metaprofile_follow_active_layers" not in updates \
+            and "metaprofile_follow_active_layers" in pending:
+        out["metaprofile_follow_first"] = True
+    elif "metaprofile_follow_active_layers" in updates and any(k in pending for k in toggles):
+        out.pop("metaprofile_follow_first", None)
+    return out
+
+
 def queue_browser_settings_update(jupyter_state, req: JupyterBrowserSettingsRequest) -> dict:
     fields_set = getattr(req, "model_fields_set", None)
     if fields_set is None:
@@ -427,22 +510,35 @@ def queue_browser_settings_update(jupyter_state, req: JupyterBrowserSettingsRequ
     if not updates:
         return {"success": True, "updated": []}
 
-    # Merged into what the frontend hasn't picked up yet (later values win), so
-    # two settings calls between polls both apply. Opening and closing panels
-    # are operations, not values: they queue in order in panel_ops.
+    # Opening and closing panels are operations, not values: they queue in order in panel_ops.
     updated = sorted(updates.keys())
-    pending = dict(getattr(jupyter_state, "pending_settings_update", None) or {})
-    ops = list(pending.get("panel_ops") or [])
+    call_ops = []
     for key, verb in (("close_panel", "close"), ("open_panel", "open")):
         panel = updates.pop(key, None)
         if panel:
-            ops.append([verb, panel])
+            call_ops.append([verb, panel])
+    # The summary of what the tab has not picked up yet (get_jupyter_state's settings_update)...
+    pending = dict(getattr(jupyter_state, "pending_settings_update", None) or {})
+    ops = list(pending.get("panel_ops") or []) + call_ops
     if ops:
         pending["panel_ops"] = ops
-    jupyter_state.pending_settings_update = {**pending, **updates}
+    jupyter_state.pending_settings_update = merge_pending_settings(pending, updates)
+    # ...and each call as it came, which the tab applies one by one, in order (settings_updates).
+    call = dict(updates)
+    if call_ops:
+        call["panel_ops"] = call_ops
+    # Never truncated (that would drop accepted settings). Past the limit, neighbouring calls that only set values
+    # merge (their order does not matter); calls whose order matters stay as they are.
+    queue = list(getattr(jupyter_state, "pending_settings_updates", None) or [])
+    queue.append(call)
+    if len(queue) > MAX_QUEUED_SETTINGS_CALLS:
+        queue = compact_settings_calls(queue)
+    jupyter_state.pending_settings_updates = queue
+    # Also kept for figures drawn with no browser tab (services/figure/notebook_settings.py).
+    from services.figure.notebook_settings import record as record_notebook_settings
+    jupyter_state.notebook_settings = record_notebook_settings(getattr(jupyter_state, "notebook_settings", None) or {}, updates)
     jupyter_state.version += 1
     return {"success": True, "updated": updated}
-
 
 def get_browser_settings_payload(jupyter_state) -> dict:
     return {"settings": jupyter_state.browser_settings}

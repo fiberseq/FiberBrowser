@@ -77,6 +77,27 @@ def transient_bam_handle(filepath: str, *, threads: int):
             _transient_pools.release()
 
 
+@contextmanager
+def private_bam_handle(filepath: str):
+    """A reader of its own for short lookups beside an open iterator on the same file (a nested fetch on the shared
+    reader, in the thread that holds its lease, would move that iterator's cursor). Opened and confined as the shared
+    readers are; one thread, closed with the scope."""
+    from services.file_handles import HandleCache
+    cache = HandleCache(max_entries=1)
+    try:
+        reader = _get_bam_handle(filepath, threads=1, cache=cache)
+        if reader is None:
+            yield None
+        else:
+            with reader.lease() as native:
+                try:
+                    yield native
+                finally:
+                    native.close()
+    finally:
+        cache.discard()
+
+
 def _get_bam_handle(filepath, *, threads, cache):
     from services.remote_sources import is_source_ref
     from services.remote_sources import opening as op

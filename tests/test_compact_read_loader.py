@@ -343,7 +343,8 @@ def test_bam_compact_loader_flips_marked_molecular_ma_aq_without_legacy_tags():
         chrom_map={"2L": "chr2L"},
     )
 
-    assert rev[0]["intervals"] == [[0, 200, 0]]
+    # MA first: the MA nuc group is the row's footprints, as ns/nl would be (no neutral row).
+    assert rev[0]["intervals"] == [[70, 190, 120]]
     assert rev[0]["layers"]["nuc"] == {
         "intervals": [[70, 190, 120]],
         "qualities": [[80], [6], [5]],
@@ -440,7 +441,9 @@ def test_bam_compact_loader_preserves_explicit_ma_layers_without_qualities():
         "id": "read1",
         "library_id": str(Path("https://example.test/read.bam").resolve()),
         "reference_start": 100, "reference_end": 300, "alignment_orientation": "forward",
-        "intervals": [[0, 120, 120], [120, 150, -30], [150, 180, 30]],
+        # MA first: the row's footprints are the MA nuc calls (ns/nl beside them, here with a TF call, are not
+        # read); the TF call is its own layer, and the read body still spans it.
+        "intervals": [[0, 120, 120], [120, 180, -60]],
         "layers": {
             "nuc": {
                 "intervals": [[0, 120, 120]],

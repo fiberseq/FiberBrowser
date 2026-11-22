@@ -1,7 +1,7 @@
 /** Footprint size plots: colour values and scales, the log2 ratio, the read-count note and the TSV export. */
 import { describe, expect, it } from 'vitest';
 import {
-  colorScaleFor, densityNote, displayValue, ratioMatrix, scaleRgb, sizeMatrixTsv,
+  colorScaleFor, densityNote, displayValue, scaleRgb, sizeMatrixTsv,
 } from './footprintSizeMatrix';
 import { colormapRgb } from './footprintSizeColormaps';
 import { DEFAULT_FOOTPRINT_SIZE_SETTINGS, withView } from './footprintSizeSettings';
@@ -42,14 +42,6 @@ describe('footprint size matrix helpers', () => {
     expect(seq.kind).toBe('sequential');
     expect(seq.lo).toBe(0);
     expect(seq.hi).toBe(3);
-  });
-
-  it('log2 ratio of two panels: counts compared as fractions of each panel\'s footprints, blanks where either is', () => {
-    const a = [[4, 0, null], [2, 2, 2]];
-    const b = [[1, 1, 1], [1, 2, null]];
-    expect(ratioMatrix(a, b, enrich)).toEqual([[2, null, null], [1, 0, null]]);
-    // Counts: A has twice B's footprints, so 2:1 in raw counts is no difference in distribution.
-    expect(ratioMatrix([[2]], [[1]], counts, 200, 100)).toEqual([[0]]);
   });
 
   it('notes when panels rest on very different numbers of reads', () => {

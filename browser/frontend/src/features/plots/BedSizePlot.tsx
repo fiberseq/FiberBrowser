@@ -35,7 +35,9 @@ export function bedSizesKey(plot: PlotSpec, sets: RegionSet[], target: Footprint
     reads: b.readsPerRegion, occ: b.occlusionRead === 'off' ? 'off' : 'centre', source: plot.source, datasets: [...new Set(target.panels.map(p => p.datasetId))], group: plot.groupBy,
     size: [s.sizeMin, s.sizeMax, s.sizeBin, s.posBin, s.mode, s.normalization, s.sigmaSizeBp, s.sigmaPosBp, s.minFootprints], sampling: plot.sampling, sampleSeed, settingsKey,
     // Compare finishes raw counts (requestSettings), so turning it on or off is a different result.
-    counts: plot.compare === 'log2ratio' || plot.compare === 'diff' });
+    counts: plot.compare === 'log2ratio' || plot.compare === 'diff',
+    // An enrichment comparison (A vs B) finishes the normalised matrices instead: a different result.
+    enr: plot.sizeCompareOn ?? null, mode: plot.compareMode, ab: plot.compareAB, op: plot.compare });
 }
 
 /** The finish settings of a BED size plot with `nGroups` groups: counts when comparing (the groups are summed into

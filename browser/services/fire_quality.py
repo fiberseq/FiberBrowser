@@ -106,18 +106,36 @@ def file_fire_status(bam_path, header=None) -> Dict[str, Any]:
         return dict(hit)
     fire_group_seen, aq_values = False, []
     try:
+        from services.bam_tags import legacy_msps_match_ma, record_ma_call_arrays
         from services.remote_sources.opening import open_alignment_file
         with open_alignment_file(str(bam_path), "rb") as handle:
             if header is None:
                 header = handle.header
+            try:
+                from services.legacy_frame import bam_legacy_frame_for   # the loaders' legacy-tag frame
+                legacy_frame = bam_legacy_frame_for(bam_path, header)
+            except Exception:
+                legacy_frame = None
+            try:   # the loaders' MA group frame and consensus contracts, from this header
+                from services.bam_tags import bam_consensus_contracts, bam_ma_group_frame
+                ma_frame, contracts = bam_ma_group_frame(header), bam_consensus_contracts(header)
+            except Exception:
+                ma_frame, contracts = None, None
             for n, record in enumerate(handle.fetch(until_eof=True)):
                 if n >= SAMPLE_READS or len(aq_values) >= 20 * MIN_SCORED_MSPS:
                     break
                 if record_has_fire_group(record):
                     fire_group_seen = True
                     break
-                if record.has_tag("aq") and record.has_tag("as"):
+                # MA first: a record's MA msp group gives the scores (its AQ bytes), unless its legacy as/al are the
+                # same stretches (a fibertools <= 0.12 FIRE run on FiberHMM output rewrites only their aq, after the
+                # MA); stale legacy tags beside MA never decide. Legacy aq alone: a record without an MA msp group.
+                ma_msp = record_ma_call_arrays(record, ma_frame, contracts).get("msp")
+                legacy_scored = record.has_tag("aq") and record.has_tag("as")
+                if legacy_scored and (ma_msp is None or legacy_msps_match_ma(record, ma_msp, legacy_frame)):
                     aq_values.extend(int(v) for v in record.get_tag("aq"))
+                elif ma_msp is not None:
+                    aq_values.extend(int(v) for v in (ma_msp[2] or ()))
     except Exception:
         pass   # unreadable here (or a test double): the header decides
     status = classify(fire_group_seen, aq_values, header)

@@ -15,10 +15,17 @@ import asyncio
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
-from models.requests import FigureRequest, LiveFigureState, RenderRequest
+from models.requests import FigureRequest, LiveFigureState, RenderClusterRequest, RenderRequest
 from services.render_endpoint import _render_sync
 from services.lift.capability import LiveLiftUnsupported
 from state.dependencies import get_dafc_state, get_state
+
+# engine="playwright" in the Mac app (CLEAN_MAC_AUDIT, 3.1.1): it answered "node not found on PATH".
+BROWSER_ENGINE_IN_APP = ("The browser-render engine (/api/render/figure, engine=\"playwright\") needs a FiberBrowser "
+                         "source install with Node and Playwright; the app does not include them. Use the default "
+                         "headless engine (POST /api/render, or BrowserClient.figure), or the Export button in "
+                         "the browser.")
+
 
 router = APIRouter(tags=["render"])
 
@@ -27,8 +34,11 @@ router = APIRouter(tags=["render"])
 async def render_region(request: RenderRequest, state=Depends(get_state), dafc_state=Depends(get_dafc_state)):
     """Render a browser view as PNG, SVG, or PDF (default: headless, see services/figure)."""
     try:
-        from services.figure.api import render_request, wants_legacy_engine
+        from services.figure.api import BROWSER_ONLY_MESSAGE, BROWSER_ONLY_TRACKS, render_request, wants_legacy_engine
         from services.runtime import get_public_mode
+        if {str(t).lower() for t in (request.tracks or [])} & BROWSER_ONLY_TRACKS:
+            # No engine draws these (Plots, Gallery, Quantify, panels): say so whichever engine was asked for.
+            return JSONResponse(status_code=400, content={"error": BROWSER_ONLY_MESSAGE})
         if get_public_mode():
             if request.engine != "headless" or wants_legacy_engine(request):
                 return JSONResponse(status_code=403, content={"error": "Only the headless engine is available on a public server"})
@@ -39,6 +49,10 @@ async def render_region(request: RenderRequest, state=Depends(get_state), dafc_s
         if request.chrom is None or request.start is None or request.end is None:
             return JSONResponse(status_code=400, content={"error": f"engine={request.engine!r} needs chrom, start and end"})
         if request.engine == "playwright":
+            from services.app_build import is_frozen
+            if is_frozen():
+                # The Mac app bundles neither Node nor Playwright (nor the frontend sources the worker builds).
+                return JSONResponse(status_code=501, content={"error": BROWSER_ENGINE_IN_APP})
             # Lazy import so callers that never use the Playwright engine
             # don't pay the import cost (which probes the Node binary).
             from services.playwright_render import render_with_playwright
@@ -51,6 +65,22 @@ async def render_region(request: RenderRequest, state=Depends(get_state), dafc_s
             status_code=500,
             content={"error": str(exc)},
         )
+
+
+@router.post("/api/render/cluster")
+async def recluster_for_figure(request: RenderClusterRequest, state=Depends(get_state), dafc_state=Depends(get_dafc_state)):
+    """Re-cluster a session's panels with a fixed method, k and seed; returns the updated session and assignments."""
+    from services.runtime import get_public_mode
+    from services.figure_render import FigureError
+    if get_public_mode():
+        return JSONResponse(status_code=403, content={"error": "Not available on a public server"})
+    try:
+        from services.figure.recluster import recluster_request
+        return await asyncio.to_thread(recluster_request, request, state, dafc_state)
+    except FigureError as exc:
+        return JSONResponse(status_code=exc.status, content={"error": str(exc), **exc.extra})
+    except (ValueError, KeyError, TypeError) as exc:
+        return JSONResponse(status_code=400, content={"error": str(exc)})
 
 
 @router.post("/api/render/live_state")
@@ -77,7 +107,11 @@ async def render_figure_route(request: FigureRequest, state=Depends(get_state), 
     Uses the open browser's current view (default) or a saved session, with
     optional region/size overrides. Requires Node + Playwright Chromium.
     """
+    from services.app_build import is_frozen
     from services.figure_render import render_figure
+    if is_frozen():
+        # The Mac app bundles neither Node nor Playwright (it answered "node not found on PATH").
+        return JSONResponse(status_code=501, content={"error": BROWSER_ENGINE_IN_APP})
     try:
         return await asyncio.to_thread(render_figure, request, state, dafc_state)
     except LiveLiftUnsupported:

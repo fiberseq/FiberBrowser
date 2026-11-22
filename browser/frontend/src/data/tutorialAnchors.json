@@ -914,15 +914,13 @@
   },
   {
    "id": "clusters-vplot",
-   "label": "Clusters > Footprint sizes tab",
-   "selector": "[data-panel-content-type=\"cluster-detail\"] [data-analysis-tab=\"vplot\"]",
+   "label": "Clusters > Footprint sizes → Plots",
+   "selector": "[data-testid=\"cluster-detail-sizes-in-plots\"]",
    "where": "Clusters panel",
    "reveal": {
-    "panel": "cluster-detail",
-    "tab": "vplot"
+    "panel": "cluster-detail"
    },
-   "description": "Footprint size against position: Size enrichment (where each size is enriched) or V-plot (midpoints), per dataset or per cluster.",
-   "needs": "has_clusters"
+   "description": "Opens Plots on footprint size against position: Size enrichment (where each size is enriched) or V-plot (midpoints), one plot per cluster when clustered, else one per dataset from all reads in view."
   },
   {
    "id": "clusters-projection",
@@ -2229,15 +2227,23 @@
   },
   {
    "id": "clusters-vplot-settings",
-   "label": "Footprint size settings",
-   "selector": "[data-tour=\"clusters-vplot-settings\"]",
-   "where": "Clusters > Footprint sizes",
+   "label": "Footprint size settings (Plots)",
+   "selector": "[data-testid=\"plots-display\"]",
+   "where": "Plots > More options > Display (Size enrichment or V-plot)",
    "reveal": {
-    "panel": "cluster-detail",
-    "tab": "vplot"
+    "expand": "plots-sizes-more-options"
    },
-   "description": "Size range, guard, colour scale and layer of the footprint size plots (bins and Gaussian sigmas sit above them).",
-   "needs": "has_clusters"
+   "description": "Normalisation, footprint as full span or midpoint, Gaussian sigmas, size and position bins, size range, guard, colour scale and limit of the footprint size plots."
+  },
+  {
+   "id": "plots-sizes-more-options",
+   "label": "More options (footprint size plot)",
+   "selector": "[data-testid=\"plots-more-options\"][data-plot-type=\"size-enrichment\"], [data-testid=\"plots-more-options\"][data-plot-type=\"vplot\"]",
+   "where": "Plots builder, after Footprint sizes → Plots",
+   "reveal": {
+    "expand": "clusters-vplot"
+   },
+   "description": "Opens the size plot's Where and Display settings in the Plots builder."
   },
   {
    "id": "clusters-projection-controls",

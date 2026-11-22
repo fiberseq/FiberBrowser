@@ -596,8 +596,12 @@ class JupyterState:
         self.pending_peak_import: Optional[dict] = None
         self.pending_peak_rules_update: Optional[dict] = None
         self.pending_settings_update: Optional[dict] = None
+        self.pending_settings_updates: List[dict] = []
         self.pending_browser_actions: List[dict] = []
         self.browser_settings: Dict[str, Any] = {}
+        # Every setting the notebook pushed, merged call by call (never consumed by a poll): figures drawn
+        # with no browser tab start from it (services/figure/notebook_settings.py).
+        self.notebook_settings: Dict[str, Any] = {}
         self.custom_motifs: Dict[str, dict] = {}
 
     def clear_all(self):
@@ -615,6 +619,8 @@ class JupyterState:
         self.pending_peak_import = None
         self.pending_peak_rules_update = None
         self.pending_settings_update = None
+        self.pending_settings_updates = []
+        self.notebook_settings = {}
         self.pending_browser_actions.clear()
         self.browser_settings.clear()
         self.custom_motifs.clear()

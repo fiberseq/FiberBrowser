@@ -164,4 +164,15 @@ describe('SizePlot stale-state guard', () => {
     expect(api.fetchFootprintSizes).toHaveBeenCalledTimes(1);
     expect(state()).toBe('current');
   });
+
+  it('a comparison that comes back with one group (sampling) is never drawn as the plot (audit 3.1.1)', async () => {
+    // Two datasets compared (counts requested); only one answers with footprints.
+    const two = { chrom: 'chrT', start: 1000, end: 1020, genome: null, panels: [{ key: 'p1', datasetId: 'd1', label: 'Early' }, { key: 'p2', datasetId: 'd2', label: 'Late' }] };
+    api.fetchFootprintSizes.mockResolvedValue({ success: true, data: { d1: { '-1': { ...matrix(1), normalization: 'raw' } } } });
+    const cmp = newPlot({ type: 'size-enrichment', compare: 'diff' });
+    act(() => { root.render(<SizePlot plot={cmp} target={two} clusters={null} pending={false} width={600} wanted={null} />); });
+    await flush();
+    expect(q('plots-size-one-group')).not.toBeNull();
+    expect(q('plots-size-panel')).toBeNull();
+  });
 });

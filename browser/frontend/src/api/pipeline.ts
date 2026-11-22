@@ -88,6 +88,9 @@ export interface PipelineOptions {
   prob_threshold: number | null;
   use_m5c: TriState;
   cpg_mask_policy: 'unmethylated-only' | 'methylated-only';
+  /** Nucleosome recall (Hia5 and DddB): conservative (FiberHMM's default) or topology (--nuc-recall-policy topology).
+   *  Never sent for DddA, whose recall ignores it. A draft from before 3.1.1 has none (conservative). */
+  nuc_recall_policy?: 'conservative' | 'topology';
   /** Minimum MAPQ, always passed to a new run as --min-mapq (owner, 20 Nov 2026): 0 unless changed. */
   min_mapq: number;
 }

@@ -2409,8 +2409,20 @@ export async function executeBrowserAction(
     return result.message || `Loaded JASPAR motif track(s): ${names.join(', ')}.`;
   }
 
+  // Meta-locus and Plots actions a notebook queues (actions/notebookActions.ts), loaded only when one comes.
+  if (NOTEBOOK_ACTION_TYPES.has(type)) {
+    const { executeNotebookAction } = await import('./notebookActions');
+    const notebook = await executeNotebookAction(action as { type: string; [key: string]: unknown });
+    if (notebook !== null) return notebook;
+  }
+
   return `Skipped unsupported action type "${type}".`;
 }
+
+const NOTEBOOK_ACTION_TYPES = new Set([
+  'open_meta_locus', 'meta_locus_more_reads', 'meta_locus_resample', 'meta_locus_find_more', 'meta_locus_clear_extra',
+  'meta_locus_back', 'meta_locus_return', 'plots_keep',
+]);
 
 export async function executeBrowserActions(
   actions: BrowserAction[],

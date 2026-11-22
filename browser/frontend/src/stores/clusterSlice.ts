@@ -24,7 +24,6 @@ import { fetchApiResponse } from '../api/sharedFetch';
 import { isPublicServerPage } from '../utils/publicServerFlag';
 import { computeRuleOffset } from './peakRuleSlice';
 import { DEFAULT_CLUSTER_VIEW_SETTINGS, normalizeClusterViewSettings, type ClusterViewSettings } from '../utils/clusterViewSettings';
-import { DEFAULT_FOOTPRINT_SIZE_SETTINGS, normalizeFootprintSizeSettings, type FootprintSizeSettings } from '../utils/footprintSizeSettings';
 import {
   mergeLogStatus,
   normalizeMergeLog,
@@ -472,7 +471,9 @@ export type ReadFilterSourceTarget =
   | 'footprint-cooccurrence'
   | 'transcription-filters'
   /** The feature hub's "Use as filter" (features/hub). */
-  | 'feature-hub';
+  | 'feature-hub'
+  /** Quantify a window: the reads behind a bar or table row (features/windowQuant). */
+  | 'window-quant';
 
 export interface ReadFilterSource {
   target: ReadFilterSourceTarget;
@@ -530,9 +531,6 @@ export interface ClusterSlice {
   /** Cluster views: the metaprofile channels, the map's colour and its input features (utils/clusterViewChannels). */
   clusterViewSettings: ClusterViewSettings;
   setClusterViewSettings: (patch: Partial<ClusterViewSettings>) => void;
-  /** Footprint size plots (Clusters › Footprint sizes): view, bins, Gaussian sigmas, normalisation (saved with the session). */
-  footprintSizeSettings: FootprintSizeSettings;
-  setFootprintSizeSettings: (patch: Partial<FootprintSizeSettings>) => void;
   readSortOrder: Record<string, string[]>;  // datasetId -> sorted read ID list
   filteredReadIds: Record<string, Set<string> | null>;  // datasetId -> read ids (from filter operation)
   readFilterSources: Record<string, ReadFilterSource | null>;  // datasetId/stateKey -> provenance for active read filters
@@ -936,7 +934,6 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
   restoredClusterViewport: null,
   dynamicOverlapMode: 'aggressive',  // Default: a read is Unassigned only if it overlaps NO clustering peak; partial overlaps still get reassigned
   clusterViewSettings: DEFAULT_CLUSTER_VIEW_SETTINGS,
-  footprintSizeSettings: DEFAULT_FOOTPRINT_SIZE_SETTINGS,
   readSortOrder: {},
   filteredReadIds: {},
   readFilterSources: {},
@@ -1458,10 +1455,6 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
   // Display only: never re-clusters or reloads reads (a map feature mode refetches the map alone).
   setClusterViewSettings: (patch) => set(state => ({
     clusterViewSettings: normalizeClusterViewSettings({ ...state.clusterViewSettings, ...patch }),
-  })),
-  // Display only: a new plot is fetched; reads and clusters are left as they are.
-  setFootprintSizeSettings: (patch) => set(state => ({
-    footprintSizeSettings: normalizeFootprintSizeSettings({ ...state.footprintSizeSettings, ...patch }),
   })),
   setClusterWindowPeaks: (value) => set(state => ({
     clusterWindowPeaks: value,

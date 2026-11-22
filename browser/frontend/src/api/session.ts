@@ -1,4 +1,4 @@
-import { metaLocusSessionPayload, restoreMetaLocusSession } from '../features/metaLocus/metaLocusStore';
+import { alignImportedMetaChrom, metaLocusSessionPayload, restoreMetaLocusSession } from '../features/metaLocus/metaLocusStore';
 import { isMetaChrom } from '../features/metaLocus/metaChrom';
 import { migratePeakSnapshot } from '../features/hub/peakMigration';
 import { adoptLegacyRuns, resetLegacyRuns } from '../features/hub/legacyRuns';
@@ -6,6 +6,7 @@ import { resetGraphHub } from '../features/graphPanel/hubProvider';
 import { dualWriteFrontend, migrateHubSession, restoreHubOnly } from '../features/hub/migration';
 import { normalizeSvConflictOptions } from '../utils/svConflicts';
 import { duringSessionRestore } from '../utils/sessionRestore';
+import { bumpDatasetGeneration } from '../utils/startupDatasets';
 import { validateMatchedState } from '../utils/matchedRegions';
 import { normalizeFeatureRefs } from '../stores/featureStore';
 import { useSplitPanelStore } from '../stores/splitPanelStore';
@@ -19,7 +20,6 @@ import { useBrowserStore } from '../stores/browserStore';
 import { DEFAULT_MIN_FOOTPRINTS } from '../stores/uiSlice';
 import { restoredMergeSettings, serializeState } from '../stores/historySlice';
 import { normalizeClusterViewSettings } from '../utils/clusterViewSettings';
-import { normalizeFootprintSizeSettings } from '../utils/footprintSizeSettings';
 import { galleryForSave, restoreGallery } from '../features/plots/gallery';
 import { normalizeMergeLog } from '../stores/clusterMergeLog';
 import type { SerializedDataset, Snapshot } from '../stores/historySlice';
@@ -56,7 +56,7 @@ const API_BASE = '/api';
 export const SESSION_PRE_VIEWPORT_KEYS = [
   'viewMode', 'sortMode', 'sortSelection', 'filterMode', 'spanningOnly', 'downsampleCount', 'readDisplayMode', 'allReadsDisplayCap', 'backgroundReadCap', 'clusterPreparationCount', 'clusterPreparationSamples', 'analysisSampleCount', 'analysisSampleSeed', 'classRegionMode',
   'clusterK', 'clusterResolution', 'clusterMethod', 'clusterPeakMode', 'clusterFeatureRules', 'analysisSortRules', 'analysisFilterRules', 'subnucleosomalThreshold', 'accessibilityThreshold',
-  'mergeMinFraction', 'mergeMaxSimilarity', 'mergeStrategy', 'mergeThresholds', 'clusterViewSettings', 'footprintSizeSettings',
+  'mergeMinFraction', 'mergeMaxSimilarity', 'mergeStrategy', 'mergeThresholds', 'clusterViewSettings',
   'enabledModTypes', 'cachedLayerTypes', 'legacyLayerInference', 'legacyNucMinSize', 'clickTargetLayer', 'footprintAnalysisLayer',
   'fillSmallGaps', 'fillGapSize', 'hideTerminalGaps', 'terminalGapThreshold', 'hideShortEndFootprints', 'minFpQuality', 'minFootprints', 'minFootprintsAuto', 'minFootprintsBeforeAllReads', 'showDuplicateReads', 'showQcFailReads', 'signalFilters',
   'enabledCigarTypes', 'svDisplayEnabled', 'svMinLen', 'svMinSupport', 'svConflictOptions', 'isReversed', 'darkMode', 'peakSettings', 'activeColormap', 'fillReadHeight', 'showHiddenTrackStrip',
@@ -114,8 +114,6 @@ export function collectFrontendState(): Record<string, unknown> {
   const s = useBrowserStore.getState();
   const frontendState = serializeState(s) as unknown as Record<string, unknown>;
   frontendState.dafcSettings = serializeDafcSettings();
-  // Footprint size plots' settings (display only: not part of undo history).
-  frontendState.footprintSizeSettings = s.footprintSizeSettings;
   frontendState.annotationSettings = {
     annotationFiles: s.annotationFiles,
     enabledAnnotationTypes: s.enabledAnnotationTypes,
@@ -350,7 +348,9 @@ async function importSessionNow(
   // Split panels resolve their reads again from their rules (the session's runs), else from the names it kept.
   useSplitPanelStore.setState(s => ({ reads: {}, pending: null, generation: s.generation + 1 }));
   setSplitSessionFallback((result.frontend as Record<string, unknown> | undefined)?.splitPanelReads);
-  applyImportedState(result);
+  // A meta-locus whose pool comes back under another id: its contig first, so the restore keeps the analysis on it.
+  const aligned = await alignImportedMetaChrom(result);
+  applyImportedState(aligned);
   // Parts written by plugin packs this build doesn't have: left out, and said in one line (with the server's view).
   const frontend = result.frontend as Record<string, unknown> | undefined;
   const missing = missingSessionPacks(frontend).filter(p => usesPackParts(frontend, p)).map(p => p.label);
@@ -424,6 +424,8 @@ export function applyImportedState(result: Record<string, unknown>): void {
   // 1. Set datasets from server response
   if (Array.isArray(result.datasets)) {
     batch.datasets = result.datasets;
+    // Even an empty session replaces the datasets: a startup list fetched before it must not put them back.
+    bumpDatasetGeneration();
   }
 
   // 2. Set modification overlays
@@ -487,8 +489,8 @@ export function applyImportedState(result: Record<string, unknown>): void {
     Object.assign(batch, restoredMergeSettings(frontend));
     // Cluster views (metaprofile channels, map colour / features): the session's, else the defaults.
     batch.clusterViewSettings = normalizeClusterViewSettings(frontend.clusterViewSettings);
-    // Footprint size plots: the session's settings, else the defaults (sessions before them have none).
-    batch.footprintSizeSettings = normalizeFootprintSizeSettings(frontend.footprintSizeSettings);
+    // 3.0.4–3.1.0 sessions also carry `footprintSizeSettings` (the retired Clusters › Footprint sizes tab's): not
+    // in SESSION_PRE_VIEWPORT_KEYS, so read past; Plots keeps each plot's own size settings.
     if ('analysisSortRules' in batch) {
       batch.analysisSortRules = normalizeAnalysisSortRules(batch.analysisSortRules);
     }

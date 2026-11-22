@@ -1,0 +1,31 @@
+{
+  "note": "Specs left out of test:e2e:release (CI's nightly list), each with why. A new spec must go in the release list or here (src/e2eReleaseList.test.ts). They run in the full local e2e (npm run e2e:full) where their data is configured.",
+  "specs": {
+    "tests/e2e/graph-cluster.spec.ts": "graph helper, graph packages and lift data (FIBERBROWSER_TEST_GRAPH_*, FIBERBROWSER_TEST_LIFT_*)",
+    "tests/e2e/graph-features.spec.ts": "graph helper, graph packages and lift data",
+    "tests/e2e/graph-generality.spec.ts": "graph helper and generality packages",
+    "tests/e2e/graph-panel.spec.ts": "graph helper, graph packages and lift data",
+    "tests/e2e/graph-primary.spec.ts": "graph helper, graph packages and lift data",
+    "tests/e2e/diffmatch-gates.spec.ts": "graph helper, packages, lift BAMs and maps",
+    "tests/e2e/live-lift.spec.ts": "lift BAMs, lift map and source FASTA (FIBERBROWSER_TEST_LIFT_*)",
+    "tests/e2e/sv-equivalence.spec.ts": "hg38 FASTA (FIBERBROWSER_TEST_FASTA)",
+    "tests/e2e/lab-prefix.spec.ts": "lab mode profile (a multi-member server)",
+    "tests/e2e/s3-remote.spec.ts": "an S3 endpoint (FIBERBROWSER_TEST_S3_*)",
+    "tests/e2e/performance.spec.ts": "measurement only (FIBERBROWSER_RUN_PERF_E2E)",
+    "tests/e2e/performance-modes.spec.ts": "timing measurements; noisy on shared CI runners",
+    "tests/e2e/ui-capture-webkit.spec.ts": "a WebKit executable (FIBERBROWSER_PLAYWRIGHT_EXECUTABLE)",
+    "tests/e2e/footprint-panel-position.spec.ts": "real data (FIBERBROWSER_POSITION_REAL)",
+    "tests/e2e/signal-filter.spec.ts": "real signal data (FIBERBROWSER_SIGNAL_DATA)",
+    "tests/e2e/export-read-ink.spec.ts": "test BAM / BigBed (FIBERBROWSER_TEST_BAM, FIBERBROWSER_TEST_BIGBED)",
+    "tests/e2e/sort.spec.ts": "a test BAM (FIBERBROWSER_TEST_BAM)",
+    "tests/e2e/cluster-preparation.spec.ts": "known nondeterminism on slow runners (3.1.0 release notes); runs in the full local e2e",
+    "tests/e2e/cluster-targets.spec.ts": "not yet in the nightly list (runs in the full local e2e); candidate for a CI shard",
+    "tests/e2e/docking-policy.spec.ts": "not yet in the nightly list (runs in the full local e2e); candidate for a CI shard",
+    "tests/e2e/bigbed-local.spec.ts": "not yet in the nightly list (runs in the full local e2e); candidate for a CI shard",
+    "tests/e2e/metaprofile-bounds.spec.ts": "not yet in the nightly list (runs in the full local e2e); candidate for a CI shard",
+    "tests/e2e/read-transport.spec.ts": "not yet in the nightly list (runs in the full local e2e); candidate for a CI shard",
+    "tests/e2e/reader-lifecycle.spec.ts": "not yet in the nightly list (runs in the full local e2e); candidate for a CI shard",
+    "tests/e2e/ui-layout-u2.spec.ts": "drag timing; noisy on shared CI runners (runs in the full local e2e)",
+    "tests/e2e/ui-layout-u3.spec.ts": "drag timing; noisy on shared CI runners (runs in the full local e2e)"
+  }
+}

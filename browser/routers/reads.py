@@ -360,7 +360,8 @@ async def get_reads_compact_all(
         decode_workers = int(getattr(state, "performance", {}).get("decode_workers", 1) or 1)
         return plan_first_paint(state, query, dataset_id, chrom=chrom, start=start, end=end, max_reads=max_reads,
                                 build_options=build_options, fill_gap_size=fill_gap_size, pins=pins,
-                                on_partial=start_full_set,
+                                on_partial=start_full_set, include_duplicates=include_duplicates,
+                                include_qcfail=include_qcfail,
                                 workers=min(_first_paint_workers(), decode_workers // max(1, len(dataset_ids))))
 
     from services.read_pins import parse_pin_ids, pinned_reads

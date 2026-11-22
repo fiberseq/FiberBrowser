@@ -74,7 +74,12 @@ export function openSidebarSection(section: string, subsection?: string): void {
 }
 
 /** Switch an open analysis panel to a tab (the panel may still be mounting). */
-export async function showPanelTab(panel: string, tab: string, timeoutMs = 3000): Promise<boolean> {
+/** Tabs a panel retired, by the tab that took their place (the Clusters panel's Footprint sizes tab, 3.1.1: Overview,
+ *  where "Footprint sizes → Plots" sits). Older tour steps, Copilot plans and links may still name them. */
+export const RETIRED_PANEL_TABS: Readonly<Record<string, Readonly<Record<string, string>>>> = { 'cluster-detail': { vplot: 'overview' } };
+
+export async function showPanelTab(panel: string, requested: string, timeoutMs = 3000): Promise<boolean> {
+  const tab = RETIRED_PANEL_TABS[panel]?.[requested] ?? requested;
   const tabButton = await waitForVisible(
     `[data-panel-content-type="${panel}"] [data-analysis-tab="${tab}"]`, timeoutMs,
   );

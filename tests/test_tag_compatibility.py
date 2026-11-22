@@ -100,17 +100,24 @@ def test_bothstrand_bigbed_loads_as_its_own_interval_layer():
 # ---------------------------------------------------------------- MA-only reads and min_footprints
 
 def test_min_footprints_counts_footprints_carried_only_in_ma():
+    # MA first: an MA nuc group counts as ns/nl would (its placed calls); a record with MA footprint groups but no
+    # nuc or msp group (TF calls alone) counts those.
     reads = [
-        FakeBamRead("ma_many", 100, 300, tags={"MA": "200;nuc+QQQ:1-10,31-10,61-10;tf+QQQ:91-10,121-10,151-10",
+        FakeBamRead("ma_many", 100, 300, tags={"MA": "200;nuc+QQQ:1-10,31-10,61-10,91-10,121-10;tf+QQQ:151-10",
                                                 "AQ": [1] * 18}),
+        FakeBamRead("ma_nuc_tf", 100, 300, tags={"MA": "200;nuc+QQQ:1-10,31-10,61-10;tf+QQQ:91-10,121-10,151-10",
+                                                  "AQ": [1] * 18}),
+        FakeBamRead("ma_tf_only", 100, 300, tags={"MA": "200;tf+QQQ:1-10,31-10,61-10,91-10,121-10",
+                                                   "AQ": [1] * 15}),
         FakeBamRead("ma_few", 100, 300, tags={"MA": "200;nuc+QQQ:1-10;msp+Q:21-60", "AQ": [1, 1, 1, 1]}),
         FakeBamRead("no_tags", 100, 300),
     ]
     result = compact_read_loader.build_compact_reads_from_bam(
         "https://example.test/reads.bam", "chr2L", 100, 300, spanning_only=False, min_footprints=5,
         bam_handle_getter=lambda _path: FakeBam(reads))
-    assert [r["id"] for r in result] == ["ma_many"]
+    assert [r["id"] for r in result] == ["ma_many", "ma_tf_only"]
     assert result[0]["layers"]["nuc"]["intervals"][0][:2] == [0, 10]
+    assert result[0]["intervals"][0][:2] == [0, 10]
 
 
 # ---------------------------------------------------------------- fibertools frame and Ma

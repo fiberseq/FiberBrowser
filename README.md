@@ -12,7 +12,20 @@ behind them.
 
 FiberBrowser shows the footprints called by
 [FiberHMM](https://github.com/fiberseq/FiberHMM). FiberBrowser 3.1 needs
-FiberHMM 3.2.0 or later (`fiberhmm[consensus]>=3.2.0,<4`) and installs it.
+FiberHMM 3.2.2 or later (`fiberhmm[consensus]>=3.2.2,<4`) and installs it.
+
+> **Mac app on 3.0.0 to 3.1.0? Download 3.1.1 by hand.** Those Mac apps can't
+> check for updates, so they will never offer 3.1.1 themselves. They looked for
+> HTTPS certificates in a folder that exists only on the computer that built
+> them, so on other Macs most internet features fail with a certificate error.
+> That covers the app and FiberHMM update checks, genome and annotation
+> downloads (the run wizard's too), remote `https://` BAMs, UCSC tracks, ENCODE
+> search, track hubs and share links, and Dfam TE downloads. Local files, runs,
+> BLAST and primers, graph mode, exports, `s3://` BAMs and remote bigWigs keep
+> working. Get `FiberBrowser-3.1.1-arm64.dmg` from
+> [Releases](https://github.com/fiberseq/FiberBrowser/releases/latest); from
+> 3.1.1 on, updates work again. Pip installs are not affected, and the Windows
+> app is not known to be.
 
 **Documentation:** [docs/index.md](https://github.com/fiberseq/FiberBrowser/blob/main/docs/index.md)
 · [User guide](https://github.com/fiberseq/FiberBrowser/blob/main/docs/guide.md)
@@ -26,7 +39,7 @@ FiberHMM 3.2.0 or later (`fiberhmm[consensus]>=3.2.0,<4`) and installs it.
 |----------|---------|
 | The Mac app (Apple silicon, macOS 14+) | Download `FiberBrowser-<version>-arm64.dmg` from [Releases](https://github.com/fiberseq/FiberBrowser/releases) and drag it to Applications. It bundles Python, FiberHMM 3.2, minimap2 and BLAST+. |
 | The Windows app (Windows 10 2004+ or 11, x64) | Run `FiberBrowser-<version>-Setup.exe` from [Releases](https://github.com/fiberseq/FiberBrowser/releases). It runs in WSL 2 and opens in its own window. |
-| The `fiberbrowser` command (macOS, Linux, or WSL; Python 3.10+) | `pipx install "fiberbrowser[app]"` (or `python3 -m pip install "fiberbrowser[app]"`). This installs FiberHMM 3.2.0 or later from PyPI. |
+| The `fiberbrowser` command (macOS, Linux, or WSL; Python 3.10+) | `pipx install "fiberbrowser[app]"` (or `python3 -m pip install "fiberbrowser[app]"`). This installs FiberHMM 3.2.2 or later from PyPI. |
 | A source checkout | `git clone https://github.com/fiberseq/FiberBrowser && cd FiberBrowser`, then `bash scripts/install.sh` and `.venv/bin/python browser.py` (or, in a Python you manage yourself, `python3 -m pip install -r requirements.txt` and `python browser.py`). |
 | A read-only server for reviewers | The Docker image `ghcr.io/fiberseq/fiberbrowser:<version>` (runs `--public`). |
 

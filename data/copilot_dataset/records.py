@@ -2633,10 +2633,10 @@ RECORDS: list[dict] = [
     _r(id='cluster_vplot', category='clustering',
        command='render a V-plot of the current clusters',
        context=V_DM6_2R,
-       thinking='"render a V-plot of the current clusters": I guide them through it rather than doing it. Then the controls in the order they\'d use them: Clusters > V-Plot tab. Where a control needs something first, the step asks for it.',
-       summary='Clusters > V-Plot tab',
+       thinking='"render a V-plot of the current clusters": I guide them through it rather than doing it. Then the controls in the order they\'d use them: Clusters > Footprint sizes → Plots. Where a control needs something first, the step asks for it.',
+       summary='Clusters > Footprint sizes → Plots',
        actions=[
-           {'type': 'explain', 'text': 'The V-Plot tab plots footprint size against position for each cluster.', 'anchor': 'clusters-vplot', 'requires': 'has_clusters'},
+           {'type': 'explain', 'text': 'Footprint sizes → Plots plots footprint size against position for each cluster.', 'anchor': 'clusters-vplot', 'requires': 'has_clusters'},
        ]),
 
     _r(id='cluster_projection', category='clustering',
@@ -4916,7 +4916,7 @@ RECORDS: list[dict] = [
            {'type': 'explain', 'text': 'Each cluster with its read count: click to focus, eye to hide, right-click to dissolve or select its reads.', 'anchor': 'clusters-overview', 'requires': 'has_clusters'},
            {'type': 'explain', 'text': "Profiles overlays the clusters' average profiles.", 'anchor': 'clusters-profiles', 'requires': 'has_clusters'},
            {'type': 'explain', 'text': "Composition shows each cluster's mix of footprint types.", 'anchor': 'clusters-composition', 'requires': 'has_clusters'},
-           {'type': 'explain', 'text': 'V-Plot plots footprint size against position per cluster.', 'anchor': 'clusters-vplot', 'requires': 'has_clusters'},
+           {'type': 'explain', 'text': 'Footprint sizes → Plots plots footprint size against position per cluster.', 'anchor': 'clusters-vplot', 'requires': 'has_clusters'},
            {'type': 'explain', 'text': 'Projection shows the reads in 2-D, and previews Merge similar clusters.', 'anchor': 'clusters-projection', 'requires': 'has_clusters'},
        ]),
 
@@ -6502,11 +6502,11 @@ RECORDS: list[dict] = [
            'make the vplot window bigger',
        ],
        context=V_DM6_2R,
-       thinking='V-plots live on saved footprints and in the Clusters panel.',
-       summary='V-plot controls on saved footprints and clusters',
+       thinking='V-plots live on saved footprints and in Plots (Footprint sizes → Plots from the Clusters panel).',
+       summary='V-plot controls on saved footprints and in Plots',
        actions=[
            {'type': 'explain', 'text': "Open a saved footprint's V-plot here: the controls set the window around it, the size range, the resolution and a log colour scale.", 'anchor': 'footprints-saved', 'requires': 'has_saved_footprints'},
-           {'type': 'explain', 'text': 'The Clusters panel has a V-Plot tab per cluster too.', 'anchor': 'clusters-vplot', 'requires': 'has_clusters'},
+           {'type': 'explain', 'text': 'Footprint sizes → Plots in the Clusters panel draws V-plots per cluster too, with their own size range and bins.', 'anchor': 'clusters-vplot', 'requires': 'has_clusters'},
        ]),
 
     _r(id='explain_motif_organism', category='tutorial_intent',

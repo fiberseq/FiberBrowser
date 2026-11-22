@@ -1065,12 +1065,13 @@ class BrowserState:
         return True
 
     def set_legacy_layer_inference(self, enabled: bool = True, nuc_min_size: int = 90):
-        """Set legacy layer inference policy and clear read caches."""
+        """Set legacy layer inference policy and clear read caches when it changes. Returns whether it changed."""
         if self.infer_legacy_layers == bool(enabled) and self.legacy_nuc_min_size == max(1, int(nuc_min_size or 90)):
-            return
+            return False
         self.infer_legacy_layers = bool(enabled)
         self.legacy_nuc_min_size = max(1, int(nuc_min_size or 90))
         self.clear_cache()
+        return True
 
     def set_short_terminal_footprints(self, enabled: bool) -> bool:
         """Drop (or keep) read-end footprints under the cutoff; clears the read

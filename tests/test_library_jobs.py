@@ -335,11 +335,11 @@ def test_retired_options_in_the_recorded_call_args_are_dropped_and_listed(tmp_pa
     plan = jobs.plan_recall(_entry(run["called_bam"]), outdir=str(tmp_path / "recall"))
     assert plan["settings"]["rewrites"] == [
         {"flag": "--call-args --phase-nrl", "from": "auto", "to": None,
-         "why": "retired in FiberHMM 3.0: caused artifacts"},
-        {"flag": "--call-args --nuc-recall-policy", "from": "topology", "to": None,
          "why": "retired in FiberHMM 3.0: caused artifacts"}]
-    # The recorded chimera mode (FiberHMM 3.0.3 writes it in call_args for DAF) stays, once.
-    assert _recalled_settings(tmp_path, plan, parser_module)["call_args"] == ["--min-llr", "6", "--chimeras", "flag"]
+    # --nuc-recall-policy is offered again (3.1.1) and replayed; the recorded chimera mode (FiberHMM 3.0.3 writes it
+    # in call_args for DAF) stays, once.
+    assert _recalled_settings(tmp_path, plan, parser_module)["call_args"] == [
+        "--min-llr", "6", "--nuc-recall-policy=topology", "--chimeras", "flag"]
 
 
 @pytest.mark.parametrize("mode", ["flag", "keep", "remove"])

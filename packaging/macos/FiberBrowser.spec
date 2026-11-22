@@ -72,8 +72,10 @@ hiddenimports = backend_modules + collect_submodules("fiberhmm") + [
     "multiprocessing.resource_tracker",
     "uvicorn.logging", "uvicorn.loops.auto", "uvicorn.protocols.http.auto",
     "uvicorn.protocols.websockets.auto", "uvicorn.lifespan.on",
-    "multipart", "python_multipart", "pyBigWig",
+    "multipart", "python_multipart", "pyBigWig", "certifi",
 ]
+# The CA file the app's HTTPS uses (fiberbrowser.frozen_entry.configure_tls_trust): never the build machine's.
+datas += collect_data_files("certifi")
 # Optional features bundled in the app; skipped when not installed in the build venv.
 OPTIONAL_PACKAGES = ("primer3", "seqfold", "cooler", "h5py", "umap", "pynndescent", "s3fs", "fsspec")
 for package in ("pysam", "pyjaspar") + tuple(

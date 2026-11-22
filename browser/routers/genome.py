@@ -888,12 +888,18 @@ def attach_panel_genome_endpoint(
     gtf_path: str | None = Body(None, embed=True),
     contigs: bool = Body(False, embed=True),
     span: int = Body(10_000, embed=True),
+    confirm_large: bool = Body(False, embed=True),
     state=Depends(get_state),
 ):
     """Give these datasets a reference of their own (a registry genome, a FASTA
     and annotation, or their own contigs). The genome is loaded once and shared
     by every dataset on it; the main genome is unchanged. Returns the reference
-    and each dataset's best-covered window on it (where its panel opens)."""
+    and each dataset's best-covered window on it (where its panel opens).
+
+    A registry download over the warning size asks first, as /api/load_genome does: unconfirmed, the answer has
+    ``needs_confirmation`` and ``download`` (``url``, ``bytes``, ``threshold``). Its FASTA: nothing is attached.
+    Its annotation: the sequence is attached and the annotation waits (``genome.annotation_pending``).
+    ``confirm_large=true`` goes ahead (the retry finishes the same reference)."""
     _refuse_panel_genomes()
     from services.panel_genomes import attach, is_view
     if is_view(state):
@@ -909,9 +915,16 @@ def attach_panel_genome_endpoint(
         paths[name] = path
     if genome_id and genome_id not in GENOME_REGISTRY:
         raise HTTPException(status_code=404, detail=f"Unknown genome: {genome_id}")
+    from services.http_download import download_policy
+    events: list = []
     try:
-        return attach(state, list(dataset_ids or []), genome_id=genome_id, contigs=bool(contigs),
-                      span=span, **paths)
+        with download_policy(confirmed=bool(confirm_large), events=events):
+            result = attach(state, list(dataset_ids or []), genome_id=genome_id, contigs=bool(contigs),
+                            span=span, **paths)
+        large = [e for e in events if e.get("kind") in ("large_confirmed", "large_unknown_size")]
+        if large:
+            result["download_warnings"] = large
+        return result
     except KeyError as exc:
         return {"success": False, "error": str(exc.args[0] if exc.args else exc)}
     except Exception as exc:

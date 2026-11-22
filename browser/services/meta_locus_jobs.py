@@ -14,6 +14,7 @@ sends a new seed and an empty cursor, and a saved session restores both.
 from __future__ import annotations
 
 import concurrent.futures
+import json
 import threading
 import time
 from dataclasses import dataclass, field
@@ -39,12 +40,14 @@ WORKING_DEFAULTS = {
     "include_duplicates": False,
 }
 MAX_POOLS = 8  # pools kept in memory (least recently used dropped; their caches stay on disk)
-# All owners together (a lab server): past this a new pool is refused, never made by dropping another member's.
+# All owners together (a lab server): past this a new pool replaces the requester's own least recently used idle
+# pool, or is refused when they have none; never made by dropping another member's.
 MAX_POOLS_TOTAL = 64
 
 
 class PoolsFull(ValueError):
-    """The server holds MAX_POOLS_TOTAL pools of other members; a new one is refused (nothing of theirs is dropped)."""
+    """The server holds MAX_POOLS_TOTAL pools and none idle of the requester's; a new one is refused (nothing of
+    other members' is dropped)."""
 
 _lock = threading.RLock()
 # View generations are unique for the process (a pool rebuilt under the same id never reuses one: read caches key on it).
@@ -89,6 +92,9 @@ class PoolState:
     anchor_label: str = ""
     view_set: bool = False                            # a view was asked for (provisional or final): reads are shown
     owner: Optional[str] = None                       # _owner() of the request that started it
+    base_pool_id: Optional[str] = None                # a view clone's pool (view_clone); None for a pool itself
+    leases: int = 0                                   # a view clone's requests in progress (never evicted while > 0)
+    instance: int = field(default_factory=lambda: next(_GENERATIONS))  # this object's own number (a rebuilt pool: another)
 
     def index_for(self, dataset_id: str) -> Optional[mp.DatasetIndex]:
         if dataset_id in self.indexes:
@@ -181,8 +187,15 @@ def start_pool(state, body: dict, regions: list, name: str = "") -> PoolState:
             return hit
         own = sum(1 for p in _pools.values() if p.owner == owner)
         if own < MAX_POOLS and len(_pools) >= MAX_POOLS_TOTAL:
-            raise PoolsFull(f"The server already holds {len(_pools)} meta-locus pools; close one of yours or try "
-                            "again later (other members' pools are not dropped to make room)")
+            # The server is full: the requester's own least recently used idle pool makes room (its index stays in
+            # the disk cache, so it reopens at once); refused only when they have none. Others' are never dropped.
+            idle = [p for p in _pools.values() if p.owner == owner and p.status != "building"]
+            if not idle:
+                raise PoolsFull(f"The server already holds {len(_pools)} meta-locus pools; close one of yours or try "
+                                "again later (other members' pools are not dropped to make room)")
+            victim = min(idle, key=lambda p: p.used)
+            victim.cancel.set()
+            _pools.pop((victim.owner, victim.pool_id), None)
         sites = mp.build_sites(regions, spec["anchor"], spec["flank_bp"])
         pool = PoolState(pool_id, name or "regions", spec, sites, ids, paths, chrom_map, cache_keys,
                          anchor_label=str(body.get("anchor_label") or ""), owner=owner)
@@ -294,6 +307,65 @@ def _trim(owner: Optional[str]) -> None:
         victim = min(idle, key=lambda p: p.used)
         victim.cancel.set()
         _pools.pop((victim.owner, victim.pool_id), None)
+
+
+# View clones (headless figures and numbers, services/figure/meta_locus.py): a ready pool's index, sites and files with
+# a view of their own (seed, count, added reads), under an id of their own (``<pool>.v<hash>``) so the read caches,
+# which key on the contig and its generation, never mix them with the pool's. The pool's own view (what an open tab
+# shows) is never changed by a script. Kept apart from ``_pools``: they never count against MAX_POOLS.
+_view_pools: "dict[tuple, PoolState]" = {}
+MAX_VIEW_CLONES = 6  # idle clones kept per owner; each keeps up to DECODED_CACHE decoded views (tagged reads are heavy)
+
+
+def _trim_view_clones(owner) -> None:
+    """Keep at most MAX_VIEW_CLONES idle clones of ``owner`` (least recently used dropped); leased ones always stay."""
+    idle = sorted((p for p in _view_pools.values() if p.owner == owner and p.leases <= 0), key=lambda p: p.used)
+    for victim in idle[:max(0, len(idle) - MAX_VIEW_CLONES)]:
+        _view_pools.pop((victim.owner, victim.pool_id), None)
+
+
+def release_view_clone(clone: PoolState) -> None:
+    """End a request's lease on a clone (view_clone took it); idle clones over the cap are then dropped."""
+    with _lock:
+        clone.leases = max(0, clone.leases - 1)
+        clone.used = time.monotonic()
+        _trim_view_clones(clone.owner)
+
+
+def view_clone(pool: PoolState, *, seed: int, count: int, extra_entries=None) -> PoolState:
+    """A clone of a ready ``pool`` showing the working set (seed, count) plus ``extra_entries`` ([[dataset, read name,
+    site]], a session's refill / find-more reads): exactly the view ``set_view`` would give the pool itself. The caller
+    holds a lease on it until ``release_view_clone`` (a leased clone is never evicted)."""
+    import dataclasses
+    import hashlib
+    if pool.status != "ready":
+        raise ValueError(f"The meta-locus pool {pool.pool_id} is {pool.status}, not ready")
+    extra = _resolve_extra(pool, extra_entries) if extra_entries else []
+    count = max(0, min(200_000, int(count)))
+    # The base pool's own instance is part of the id: a rebuilt pool (same pool id, new index) gets new clones and a
+    # clone a request still holds is never replaced under it.
+    key = hashlib.sha256(json.dumps([int(seed), count, sorted(extra), pool.instance]).encode()).hexdigest()[:10]
+    clone_id = f"{pool.pool_id}.v{key}"
+    with _lock:
+        hit = _view_pools.get((pool.owner, clone_id))
+        if hit is not None:
+            hit.used = time.monotonic()
+            hit.leases += 1
+            return hit
+        clone = dataclasses.replace(
+            pool, pool_id=clone_id, view_seed=int(seed), view_count=count, view_extra=list(extra), view_set=True,
+            view_generation=next(_GENERATIONS), _decoded={}, cancel=threading.Event(), lock=threading.Lock(),
+            used=time.monotonic(), _provisional={}, base_pool_id=pool.pool_id, leases=1)
+        _view_pools[(pool.owner, clone_id)] = clone
+        # Idle clones over the cap go (least recently used first); a leased clone, one a request is still reading,
+        # is never dropped: its contig would stop resolving mid-render.
+        _trim_view_clones(pool.owner)
+    return clone
+
+
+def drop_view_clone(clone: PoolState) -> None:
+    with _lock:
+        _view_pools.pop((clone.owner, clone.pool_id), None)
 
 
 def get_pool(pool_id: str) -> Optional[PoolState]:
@@ -468,8 +540,14 @@ DECODED_CACHE = 4
 def pool_for_chrom(chrom: str) -> Optional[PoolState]:
     if not str(chrom).startswith("meta:"):
         return None
+    key = (_owner(), str(chrom)[5:])
     with _lock:
-        return _pools.get((_owner(), str(chrom)[5:]))
+        hit = _pools.get(key)
+        if hit is None:
+            hit = _view_pools.get(key)
+            if hit is not None:
+                hit.used = time.monotonic()
+        return hit
 
 
 def meta_chrom_size(chrom: str) -> Optional[int]:

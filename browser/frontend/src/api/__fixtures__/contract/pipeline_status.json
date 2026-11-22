@@ -22,12 +22,13 @@
   "dedup": "auto",
   "dedup_mode": "flag",
   "min_mapq": 0,
+  "nuc_recall_policy": "conservative",
   "prob_threshold": null,
   "snp_mask": "",
   "snp_screen": "auto",
   "use_m5c": "auto"
  },
- "default_output_root": "/data/2026-11-20_run",
+ "default_output_root": "/data/2026-11-21_run",
  "dorado": {
   "hint": "",
   "label": "dorado 2.0.0+20e87c8 (/data/dorado)",

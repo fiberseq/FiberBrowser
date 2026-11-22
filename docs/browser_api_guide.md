@@ -179,7 +179,10 @@ legacy `numpy` compositor is used when a request relies on its legacy-only
 options without choosing an engine. `engine: "playwright"` drives the
 live React app through a long-lived headless Chromium worker, so exports match
 the on-screen browser's color rules, layer toggles, filters, read order, and
-multi-dataset panels.
+multi-dataset panels. It needs a source install with Node 18+ and Playwright
+(`cd browser/frontend && npm install && npx playwright install chromium`); the
+Mac app does not include them and answers 501 with a message to use the
+default `headless` engine or the Export button.
 
 Common Playwright request fields include `tracks`, `dataset_id`,
 `dataset_ids`, `read_ids`, `read_sort_order`, `cluster_order`, `show_layers`,
@@ -201,6 +204,27 @@ the timeout reason in `X-Render-Reason`.
 
 Use read order APIs when exports need to match the current top-to-bottom viewer
 order rather than alphabetical read names.
+
+Read routes take the read track's toggles. Duplicate and QC-fail reads are
+hidden unless asked for, and reads without footprint calls are hidden at every
+Min footprints threshold unless the request says otherwise. The parameters are
+`include_duplicates`, `include_qcfail`, `hide_uncalled=false` (or
+`min_footprints=-1`) and `min_fp_quality`:
+
+| Route | Takes |
+|---|---|
+| `GET /api/reads/compact`, `GET /api/reads/compact_all` | all four |
+| `POST /api/reads/stats` | all four, plus `min_footprints` |
+| `GET /api/coverage` | `include_duplicates`, `include_qcfail`, `hide_uncalled` |
+| `GET /api/jupyter/reads`, `POST /api/cluster` | `hide_uncalled` (the working set always hides duplicates and QC-fail reads) |
+
+With no browser tab, a headless figure (`POST /api/render`) drawn from the
+defaults starts from the settings the notebook pushed through
+`/api/jupyter/settings` (`services/figure/notebook_settings.py`). Render
+options in the request still win. A request whose `tracks` names Plots,
+Gallery, Quantify or analysis-panel charts (`plots`, `gallery`, `quantify`,
+`panels`) is refused with a message: the browser draws those charts, not the
+figure engines.
 
 ### Peaks
 
@@ -256,6 +280,32 @@ When a `peak_regions` entry uses `mode:"cluster_rule:<id>"`, include the matchin
 | `GET /api/jupyter/settings` | Capture layer visibility, labeling, quality, display, peaks, and reproducibility settings. |
 | `POST /api/jupyter/settings` | Apply browser settings from Python/Copilot workflows. |
 | `POST /api/jupyter/settings/sync` | Sync a frontend settings snapshot into the bridge. |
+| `GET/PUT /api/preferences/analysis` | This computer's analysis preferences, including the saved default layer colours (`layer_colors`; a `null` value forgets one). `PUT` is refused on a public server and in a tour tab. |
+
+Settings added in 3.1, accepted by `POST /api/jupyter/settings` and reported
+back by `GET /api/jupyter/settings`:
+
+- `min_footprints`: -1 is "All reads, including uncalled".
+- `min_fp_quality`, `show_duplicate_reads`, `show_qc_fail_reads`.
+- `metaprofile_follow_active_layers`.
+- `layer_color_overrides`: merged in, `null` forgets one. Add
+  `replace_layer_color_overrides` to replace the whole set.
+- `user_layer_colors`.
+- `window_quant`: window, spec, axis and `open_in`.
+- `plot`: a PlotSpec to open in Plots.
+- `workspace`: `browser`, `plots` or `hub`.
+- `reversed`.
+
+The snapshot also carries `plots_workspace`, `plots_gallery` (cards without
+data) and `meta_locus`.
+
+`POST /api/jupyter/actions` adds these notebook actions:
+
+- `open_meta_locus` with `bed_path`, `anchor`, `flank_bp`, `dataset_ids`,
+  `count`, `seed` and `enable_preview`.
+- `meta_locus_more_reads`, `meta_locus_resample`, `meta_locus_find_more`,
+  `meta_locus_clear_extra`, `meta_locus_back` and `meta_locus_return`.
+- `plots_keep` with `name`.
 
 Layer defaults should preserve the semantic layer split: `nuc` for nucleosomes,
 `tf` for TF/subnucleosomal footprints, `fire` for FIRE/MSP accessibility gaps,
@@ -349,6 +399,13 @@ families include:
 | `get_coacc_matrix`, `get_microc_matrix`, `get_linked_session` | Contact/co-accessibility/split-view workflows. |
 | `get_copilot_capabilities`, `plan_natural_language_command`, `stream_natural_language_command`, `set_copilot_backend` | Script local Copilot planning/backends from notebooks. |
 | `render`, `render_view` | Scripted image/PDF-style exports. |
+| `set_read_policy`, `set_read_filters`, `get_read_filters` | Duplicate, QC-fail, uncalled-read and quality rules for this client's reads and for the browser's toggles. |
+| `set_layer_colors`, `get_layer_colors`, `set_default_layer_colors`, `set_metaprofile_follow` | Layer colours (session over saved defaults) and the default metaprofile's follow mode. |
+| `set_window_quant`, `set_quant_window`, `set_quant_spec`, `set_metaprofile_axis`, `set_reverse_view` | Quantify a window, the relative axis, and flipping to gene direction. |
+| `open_plot`, `keep_plot`, `get_plots_state`, `set_workspace` | Plots and the Gallery (charts drawn by the browser). |
+| `start_meta_locus_pool`, `get_meta_locus_reads`, `open_meta_locus`, `meta_locus_more_reads`, `meta_locus_resample` | Meta-locus pools and the live meta-locus. |
+| `figure(meta_locus=...)`, `recluster_session(meta_locus=...)`, `quantify_window`, `get_meta_locus_profile` | Headless pooled loci: figures aligned on the anchor, re-clustering, the Quantify card's table and the metaprofile (`POST /api/render` with `meta_locus`, `POST /api/render/cluster`, `POST /api/meta_locus/quantify`, `POST /api/meta_locus/profile`; not on public servers). See jupyter-api.md, "Pooled loci (meta-locus) from Python and the command line". |
+| `find_sequence`, `get_recent_genomes`, `open_recent_genome`, `reset_annotation`, `run_fiberhmm`, `recall_library_entry` | Find sequence, recent and pinned genomes, FiberHMM runs and re-calls. |
 
 See `JUPYTER_INTEGRATION.md` for notebook examples and the complete method list.
 

@@ -90,3 +90,17 @@ def test_real_graph_rows_match_lists(monkeypatch):
     for row, origin, did, binding in captured:
         for w in (None, [[131_180_000, 131_182_000], [131_185_000, 131_186_000]]):
             assert R.compact_row(row, origin, did, binding, w) == R.compact_row(_plain(row), origin, did, binding, w)
+
+
+
+def test_a_truncated_batch_never_caches_its_supplementaries_as_settled():
+    """Codex R23: a truncated load may keep a supplementary whose primary's calls the lookup allowance could not
+    reach (services/supplementary_primary); its row is returned but never cached as settled, so a later request
+    decodes it again instead of serving it from the cache with ``truncated`` false."""
+    base = ("lifted", 0, "p", "chr3_MATERNAL")
+    primary = ("lib", "m1", 100, 0, 900, 0)
+    supplementary = ("lib", "m1", 5000, 0x800, 5400, 0)
+    entries = {R._record_key(base, primary): ("p",), R._record_key(base, supplementary): ("s",)}
+    assert R._cacheable_entries(entries, [primary, supplementary], base, truncated=False) == entries
+    kept = R._cacheable_entries(entries, [primary, supplementary], base, truncated=True)
+    assert list(kept) == [R._record_key(base, primary)]

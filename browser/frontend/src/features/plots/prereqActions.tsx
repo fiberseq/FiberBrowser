@@ -10,6 +10,7 @@
  * - geometries: the Nucleosomes panel on this view (it analyses, then calls patches and shared geometries).
  * - cluster: Cluster the reads (the toolbar's Cluster, current settings).
  * - groups: read groups need a choice (which split, which classes): opens Footprints › Classes.
+ * - nfr: an NFR run needs its choices (regions, datasets): opens the Accessibility panel.
  */
 import { useEffect, useRef, useState } from 'react';
 import { useBrowserStore } from '../../stores/browserStore';
@@ -24,7 +25,7 @@ import { AnalysisProgressStatus } from '../../components/controls/AnalysisProgre
 import { NucJobLine } from '../nucleosomes/NucJobLine';
 import { isLiveJob, useNucJob } from '../nucleosomes/nucJob';
 
-export type PrereqKind = 'peaks' | 'select-peaks' | 'classes' | 'geometries' | 'cluster' | 'groups';
+export type PrereqKind = 'peaks' | 'select-peaks' | 'classes' | 'geometries' | 'cluster' | 'groups' | 'nfr';
 
 export interface PrereqAction {
   label: string;
@@ -82,6 +83,11 @@ export const PREREQ_ACTIONS: Record<PrereqKind, PrereqAction> = {
     label: 'Choose groups in Footprints', running: 'Opening Footprints…', opensPanel: true,
     title: 'Read groups need a choice (which split, which classes): opens Footprints › Classes to pick them',
     run: () => { setWorkspace('browser'); openPanelOnTab('footprint-analysis', 'states'); return true; },
+  },
+  nfr: {
+    label: 'Open Accessibility', running: 'Opening Accessibility…', opensPanel: true,
+    title: 'NFR families come from an NFR run, which needs its choices (regions, datasets): opens the Accessibility panel on this view',
+    run: () => { setWorkspace('browser'); useBrowserStore.getState().openAnalysisPanel('accessibility' as never); return true; },
   },
 };
 

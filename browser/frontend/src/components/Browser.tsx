@@ -1,5 +1,5 @@
 import { idSetHas, recordKey } from '../utils/recordKeys';
-import { startupDatasetsApply } from '../utils/startupDatasets';
+import { startupDatasetsGuard } from '../utils/startupDatasets';
 import { adoptLinearSources } from '../features/graphPanel/linearSources';
 import { beginProgressiveAnalysis, cancelProgressiveAnalysis, displayedScope, needsDisplayPreview } from '../utils/progressiveAnalysis';
 import { AnalysisProgressLine } from './controls/AnalysisProgressLine';
@@ -26,6 +26,7 @@ import { useBrowserStore, getTargetDatasetIds, getStateKeyMap, isLinkedGroup } f
 import type { ErrorAction } from '../stores/viewportSlice';
 import { useShallow } from 'zustand/react/shallow';
 import { CrashRecoveryBanner } from './controls/CrashRecoveryBanner';
+import { WindowQuantHost } from '../features/windowQuant/WindowQuantHost';
 import { GenomeMismatchBanner } from './controls/GenomeMismatchBanner';
 import { ReferenceNotices } from './controls/ReferenceNotices';
 import { PreviewSessionPrompt } from './controls/PreviewSessionPrompt';
@@ -41,7 +42,7 @@ import { fetchApiResponse } from '../api/sharedFetch';
 import { useDafcStore } from '../stores/dafcStore';
 import { scanPeaks } from '../api/peaks';
 import { clusterAllReads, assignToClusters } from '../api/clustering';
-import { matchRefinedLabels, relabelClusterResponse } from '../utils/clusterLabelMatch';
+import { CANONICAL_CLUSTER_METHODS, carryPreviewClusterState, matchRefinedLabels, refitTakesPreviewNumbers, relabelClusterResponse } from '../utils/clusterLabelMatch';
 import { adoptClusterFit } from '../utils/adoptClusterFit';
 import { performanceSamplingNote } from '../utils/performanceProfile';
 import { mergeClusterOrder } from '../utils/clusterOrder';
@@ -108,6 +109,7 @@ import { formatCoordinates } from '../utils/coordinates';
 import { isCurrentSortRequest, nextSortRequest } from '../utils/sortRequests';
 import { installRenderFigureBridge } from '../utils/renderFigureBridge';
 import { useQualityFilterSync } from '../hooks/useQualityFilterSync';
+import { useLegacyLayerInferenceSync, useReadEndFootprintsSync } from '../hooks/useReadSettingsSync';
 import { SessionRestoreHost } from './controls/sidebar/file/SessionRestoreHost';
 import { ConnectClusterHost } from './controls/sidebar/file/ConnectClusterDialog';
 import { isLabServerPage } from '../utils/labServer';
@@ -315,36 +317,12 @@ export function Browser() {
   const initialQualityFilterSync = useQualityFilterSync(activeQualityFilters, !isRenderMode);
 
   // Legacy layer inference affects broad/working-set cache construction and
-  // therefore every analysis that consumes compact reads.
-  useEffect(() => {
-    if (isRenderMode) return;
-    fetchApiResponse('/api/legacy_layer_inference', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ enabled: legacyLayerInference, nuc_min_size: legacyNucMinSize }),
-    }).catch(err => console.error('Failed to sync legacy layer inference settings:', err));
-  }, [legacyLayerInference, legacyNucMinSize, isRenderMode]);
-
-  // Read-end footprints under 90 bp are dropped when the server loads reads, so
-  // the read track and every analysis see the same calls. Reads (and analysis
-  // results) already loaded are fetched again once the server has the setting.
-  useEffect(() => {
-    if (isRenderMode) return;
-    fetchApiResponse('/api/read_end_footprints', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ hide_short: hideShortEndFootprints }),
-    })
-      .then(res => res.json())
-      .then((body: { changed?: boolean; hide_short?: boolean }) => {
-        const store = useBrowserStore.getState();
-        // Reads are fetched again under the confirmed setting (it is in their URL);
-        // analyses through the refresh generation.
-        if (typeof body?.hide_short === 'boolean') store.setAppliedHideShortEndFootprints(body.hide_short);
-        if (body?.changed) store.triggerRefresh();
-      })
-      .catch(err => console.error('Failed to sync the read-end footprint setting:', err));
-  }, [hideShortEndFootprints, isRenderMode]);
+  // therefore every analysis that consumes compact reads. Read-end footprints
+  // under 90 bp are dropped when the server loads reads, so the read track and
+  // every analysis see the same calls. Both confirm the server's applied values
+  // (graph rows reload on them, not on the local edit).
+  useLegacyLayerInferenceSync(legacyLayerInference, legacyNucMinSize, !isRenderMode);
+  useReadEndFootprintsSync(hideShortEndFootprints, !isRenderMode);
 
   // Fetch available tracks, datasets, and config on mount
   useEffect(() => {
@@ -376,9 +354,9 @@ export function Browser() {
     }).catch(() => {});
     getTracks().then(res => setTrackList(res.tracks)).catch(() => {});
     const initialDatasets = getDatasets();
-    // A session opened (or a dataset added) while these startup requests are out sets the store's datasets first;
-    // the startup list, fetched before it, must not overwrite them.
-    const datasetsAtStartup = useBrowserStore.getState().datasets;
+    // A session opened (even an empty one), or a dataset added or closed, while these startup requests are out
+    // replaces the store's datasets first; the startup list, fetched before it, must not overwrite them.
+    const startupDatasets = startupDatasetsGuard();
     const initialStatus = getStatus(!initialPositionSet.current && !linkChoseViewport()).then(res => {
       if (res.config?.prefetch_multiplier) {
         useBrowserStore.getState().setPrefetchMultiplier(res.config.prefetch_multiplier);
@@ -426,9 +404,9 @@ export function Browser() {
     // Settle reference, position and quality gates before the first reads;
     // the initial quality confirmation must not restart an already loading view.
     Promise.all([initialDatasets, initialStatus, initialQualityFilterSync]).then(([res]) => {
-      // A session restore (or dataset add) that won the startup race holds datasets of its own; a metadata refresh that
-      // only re-mapped the still-empty list (e.g. the hub refreshing layers) does not count.
-      if (!startupDatasetsApply(datasetsAtStartup, useBrowserStore.getState().datasets)) return;
+      // A replacement that won the startup race (utils/startupDatasets: dataset generation) keeps its datasets; a
+      // metadata refresh that only re-mapped the still-empty list (e.g. the hub refreshing layers) does not count.
+      if (!startupDatasets.stillApplies()) return;
       useBrowserStore.getState().setDatasets(res.datasets);
       useBrowserStore.getState().initModTypeDefaults();
     }).catch(() => {});
@@ -1517,8 +1495,9 @@ export function Browser() {
         { resolution: original.clusterResolution, panelGenome: runGenome, signal: progressive.signal },
       );
       // A refit after a preview keeps the preview's cluster numbers (colours, labels, profiles stay with their
-      // molecules); combinatorial labels are patterns and keep their meaning as they are.
-      const res: typeof fitted = !isPreview && previewAssignments && clusterMethod !== 'combinatorial' && !Object.keys(fitted.cluster_patterns ?? {}).length
+      // molecules) when the numbers mean nothing; combinatorial labels are patterns and k-means numbers are
+      // canonical (largest first), so both keep the server's numbers (a full-only run gives the same ones).
+      const res: typeof fitted = !isPreview && previewAssignments && refitTakesPreviewNumbers(clusterMethod, fitted)
         ? relabelClusterResponse(fitted, matchRefinedLabels(previewAssignments,
           Object.fromEntries(Object.entries(fitted.results).map(([k, r]) => [k, r.assignments ?? {}]))))
         : fitted;
@@ -1617,6 +1596,11 @@ export function Browser() {
         });
       } else {
         useBrowserStore.setState({ clusterPreparationSamples: preparationSamples });
+        // A k-means refit keeps its canonical numbers: what was set on the preview's clusters follows them.
+        if (!isPreview && previewAssignments && CANONICAL_CLUSTER_METHODS.has(clusterMethod)) {
+          useBrowserStore.setState(carryPreviewClusterState(useBrowserStore.getState(), Object.keys(resultsByKey),
+            previewAssignments, resultsByKey));
+        }
         for (const [sk, assigns] of Object.entries(resultsByKey)) {
           const completed = subclusterRun && previewApplied
             ? { ...Object.fromEntries(Object.keys(now.clusterAssignments[sk] ?? {}).map(id => [id, UNASSIGNED_CLUSTER_ID])), ...assigns }
@@ -2293,6 +2277,7 @@ export function Browser() {
       )}
       {/* Crash recovery banner — disabled in public mode (no session save) */}
       {!publicMode && !isSandboxPage() && <CrashRecoveryBanner />}
+      {!publicMode && <WindowQuantHost />}
       {!isRenderMode && <GenomeMismatchBanner />}
       {!isRenderMode && <ReferenceNotices />}
       {!isRenderMode && <PreviewSessionPrompt />}

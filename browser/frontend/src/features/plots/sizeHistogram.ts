@@ -36,6 +36,9 @@ export function histogramAccumulate(reads: ProfileRead[], region: { start: numbe
       // taken as one inside the region (its reference span exceeds the margin: rarely centred on the window). Overlap
       // and clipped are exact (the cut is outside the region).
       if (r.whole && iv[3] === 1 && h.inclusion === 'midpoint') continue;
+      // A compact footprint cut at both ends of the fetched window (wider than it): where it starts is unknown, so its
+      // midpoint is too; it is not counted as one inside (as the Quantify size band). Overlap and clipped are exact.
+      if (!r.whole && h.inclusion === 'midpoint' && cutAtBothEnds(a0, b0, iv[2], region)) continue;
       const mid = (a + b) / 2;
       const inside = h.inclusion === 'midpoint' ? mid >= region.start && mid < region.end : a < region.end && b > region.start;
       if (!inside) continue;
@@ -54,6 +57,11 @@ export function histogramAccumulate(reads: ProfileRead[], region: { start: numbe
     p.coverage.fill(denom);
     return { group: p.group, nReads: p.nReads, coverage: p.coverage, signal: p.signal };
   });
+}
+
+/** A compact interval clipped at both ends of the fetched window (its whole size is longer than what was sent). */
+export function cutAtBothEnds(a: number, b: number, size: number | undefined, region: { start: number; end: number }): boolean {
+  return size != null && size > b - a && a <= region.start && b >= region.end;
 }
 
 /** A clipped interval's whole bounds from its size: cut at the region's start, it ends at b; cut at the end, it starts

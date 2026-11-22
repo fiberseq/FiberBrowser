@@ -15,6 +15,26 @@ feature kinds, session state and analysis preferences. Keep feature-specific tes
 beside their source, in `tests/lab_tests/`, or in `browser/frontend/tests/e2e/lab/`.
 All of these tests run in the normal release suite.
 
+## Python client and headless support for every feature
+
+Every user-facing feature ships with Python client and headless support, or with an explicit, tested refusal
+that says what to do instead. The drift tests enforce this:
+
+- `browser/frontend/src/hooks/useLiveFigureState.parity.test.ts`: every frontend field the headless figure engine
+  reads is saved and pushed live, and every saved session field is drawn by the engine or listed as not drawn, with a
+  reason.
+- `browser/frontend/src/features/metaLocus/headlessCoverage.test.ts` and `tests/test_headless_meta_locus_drift.py`:
+  every meta-locus and Quantify setting the browser saves is handled by the headless path (figures, re-clustering,
+  `quantify_window`) or listed as not drawn, with a reason. The rows hidden on a meta-locus match the browser's.
+- `browser/frontend/src/features/windowQuant/pythonTwinGolden.test.ts` and `tests/test_window_quant_twin.py`: the
+  Quantify engine and its Python twin compute the same golden table.
+- `tests/test_notebook_figure_settings.py`: every notebook setting reaches a figure or says why it does not.
+- `tests/test_jupyter_api_docs.py`: every public `BrowserClient` method is documented in `docs/jupyter-api.md`.
+
+When you add a setting, a panel or a number, extend the Python side in the same change, or list the field in the
+matching table with its reason. A chart that only the browser draws refuses headless requests with a message
+(`BROWSER_ONLY_TRACKS` in `browser/services/figure/api.py`), and a test checks that refusal.
+
 ## Validation
 
 From `browser/frontend`, run `npm run build`, `npm run test:run` and

@@ -15,7 +15,7 @@ _module = None
 
 
 #: what the panel needs (FiberHMM's nuc scan module and its live-panel API)
-REQUIRES = ('The nucleosome panel needs FiberHMM 3.2.0 or later (the nuc scan module, '
+REQUIRES = ('The nucleosome panel needs FiberHMM 3.2.2 or later (the nuc scan module, '
             'fiberhmm.scan.modules.nuc)')
 
 

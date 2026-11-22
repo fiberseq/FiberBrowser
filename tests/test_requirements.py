@@ -11,7 +11,7 @@ def _requirements(name):
 
 def test_runtime_requirements_declare_fiberhmm_3_and_requests():
     reqs = _requirements("requirements.txt")
-    assert "fiberhmm[consensus]>=3.2.0,<4" in reqs
+    assert "fiberhmm[consensus]>=3.2.2,<4" in reqs
     assert any(r.startswith("requests") for r in reqs)
     # FastAPI has a tested upper bound (0.142 changed router internals).
     assert any(r.startswith("fastapi>=") and "<" in r for r in reqs)
@@ -30,7 +30,7 @@ def test_install_script_checks_requests_and_fiberhmm():
 
 
 def test_install_script_fiberhmm_check_uses_the_declared_floor(tmp_path):
-    """Release audit 3.1.0 (recheck): the installer's import check follows requirements.txt (>=3.2.0,<4), not
+    """Release audit 3.1.0 (recheck): the installer's import check follows requirements.txt (>=3.2.2,<4), not
     major >= 3."""
     import re
     import subprocess
@@ -41,7 +41,8 @@ def test_install_script_fiberhmm_check_uses_the_declared_floor(tmp_path):
     check = re.search(r"if ! \"\$PY\" -c ('import sys, fiberhmm.*?' \"\$FIBERHMM_MIN\" \"\$FIBERHMM_MAX_MAJOR\")",
                       script, re.S)
     assert check, "the FiberHMM version check moved"
-    for version, ok in [("3.1.0", False), ("3.2.0", True), ("3.4.1", True), ("4.0.0", False), ("2.9", False)]:
+    for version, ok in [("3.1.0", False), ("3.2.0", False), ("3.2.1", False), ("3.2.2", True), ("3.4.1", True),
+                        ("4.0.0", False), ("2.9", False)]:
         fake = tmp_path / version / "fiberhmm"
         fake.mkdir(parents=True)
         (fake / "__init__.py").write_text(f"__version__ = {version!r}\n")

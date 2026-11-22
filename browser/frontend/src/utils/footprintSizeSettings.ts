@@ -1,5 +1,5 @@
 /**
- * Footprint size plots (Clusters › Charts › Footprint sizes): footprint size (y) by position (x).
+ * Footprint size plots (Plots: Size enrichment and V-plot): footprint size (y) by position (x).
  *
  * Two views, one click each:
  * - Size enrichment (the default from every entry point): each footprint fills every position it covers, each
@@ -186,12 +186,6 @@ export const DEFAULT_FOOTPRINT_SIZE_SETTINGS: FootprintSizeSettings = Object.fre
   ratio: null,
 }) as FootprintSizeSettings;
 
-/** One sentence per view (the toggle's tooltips). */
-export const FOOTPRINT_SIZE_VIEW_HELP: Record<FootprintSizeView, string> = {
-  enrichment: 'Size enrichment: each footprint fills the positions it covers, and each size row is divided by its average across the window, so colour shows where each footprint size is enriched (log2, 0 = average; brighter = more, darker = less).',
-  vplot: 'V-plot: the classic plot, each footprint counted once at its midpoint, coloured by how many footprints of that size are centred there.',
-};
-
 export const FOOTPRINT_SIZE_NORMALIZATION_LABELS: Record<FootprintSizeNormalization, { label: string; help: string }> = {
   row: { label: 'Per size row', help: 'Each size row over its mean across the window: where each footprint size is enriched (1 = average for that size).' },
   column: { label: 'Per position', help: 'Each position column over its mean across sizes: which sizes are over-represented at each position.' },
@@ -201,16 +195,6 @@ export const FOOTPRINT_SIZE_NORMALIZATION_LABELS: Record<FootprintSizeNormalizat
 
 /** The normalisation gives a ratio around 1 (diverging scale) rather than counts (sequential). */
 export const isEnrichment = (n: FootprintSizeNormalization): boolean => n !== 'raw';
-
-/** The view the settings match (null: edited away from both presets). */
-export function matchingView(s: FootprintSizeSettings): FootprintSizeView | null {
-  for (const view of ['enrichment', 'vplot'] as const) {
-    const p = FOOTPRINT_SIZE_VIEW_PRESETS[view];
-    if (s.mode === p.mode && s.normalization === p.normalization && s.sigmaSizeBp === p.sigmaSizeBp
-      && s.sigmaPosBp === p.sigmaPosBp) return view;
-  }
-  return null;
-}
 
 const num = (v: unknown, lo: number, hi: number, fallback: number, int = false): number => {
   if (typeof v !== 'number' || !Number.isFinite(v)) return fallback;
@@ -264,20 +248,6 @@ export function normalizeFootprintSizeSettings(raw: unknown): FootprintSizeSetti
 /** Settings after choosing a view: its preset over the current settings. */
 export function withView(s: FootprintSizeSettings, view: FootprintSizeView): FootprintSizeSettings {
   return normalizeFootprintSizeSettings({ ...s, ...FOOTPRINT_SIZE_VIEW_PRESETS[view] });
-}
-
-/** A short line of the current settings (the settings section's summary). */
-export function footprintSizeSummary(s: FootprintSizeSettings): string {
-  const sigma = (v: number) => (v > 0 ? `${v} bp` : 'off');
-  const source = footprintSizeLayerLabel(s.layer);
-  return [
-    source,
-    s.mode === 'span' ? 'Full footprint' : 'Midpoint',
-    FOOTPRINT_SIZE_NORMALIZATION_LABELS[s.normalization].label,
-    `${s.sizeMin}-${s.sizeMax} bp`,
-    `bins ${s.sizeBin} x ${s.posBin} bp`,
-    `Gaussian σ size ${sigma(s.sigmaSizeBp)}, position ${sigma(s.sigmaPosBp)}`,
-  ].join(' · ');
 }
 
 /** What the plot shows, in a sentence (the caption under the plots). */

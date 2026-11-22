@@ -337,7 +337,7 @@ export function ReadTrackActions(props: ReadTrackActionsProps) {
         clearSvSplit(stateKey);
         break;
       case 'footprint-size-enrichment': {
-        // This panel's view, Size enrichment (Clusters › Footprint sizes; all reads when not clustered).
+        // This panel's view, Size enrichment in Plots (by cluster when clustered, else by dataset from all reads).
         const panel = store.panels.find(p => p.contentType === 'dataset' && (p.stateKey ?? p.datasetId) === stateKey);
         openFootprintSizes({ view: 'enrichment', panelId: panel?.id ?? null });
         break;

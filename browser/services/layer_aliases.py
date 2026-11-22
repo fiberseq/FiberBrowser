@@ -127,4 +127,27 @@ def normalize_jupyter_settings(updates: dict[str, Any]) -> dict[str, Any]:
         normalized["footprint_groups"] = normalize_footprint_groups(normalized["footprint_groups"])
     if "coacc_settings" in normalized:
         normalized["coacc_settings"] = normalize_coacc_settings(normalized["coacc_settings"])
+    for key in ("layer_color_overrides", "user_layer_colors"):
+        if key in normalized:
+            normalized[key] = normalize_layer_color_patch(normalized[key])
     return normalized
+
+
+def normalize_layer_color_patch(colors: Any, max_keys: int = 200) -> Any:
+    """A notebook's layer-colour map: canonical layer keys (msp -> fire, mod -> m6a, footprint -> nuc), #rrggbb lower
+    case, null kept (it forgets that layer's colour); a value that is no colour is dropped."""
+    if not isinstance(colors, dict):
+        return colors
+    from services.figure.layer_colours import layer_key, normalize_hex
+    out: dict[str, Any] = {}
+    for key, value in list(colors.items())[:max_keys]:
+        if not isinstance(key, str) or not key.strip():
+            continue
+        k = layer_key(key.strip()[:80])
+        if value is None:
+            out[k] = None
+            continue
+        color = normalize_hex(value)
+        if color:
+            out[k] = color
+    return out

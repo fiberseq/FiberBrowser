@@ -15,6 +15,8 @@ PUBLIC_DENIED = {
     ("POST", "/api/meta_locus/pools/{pool_id}/reads"), ("GET", "/api/meta_locus/pools/{pool_id}/view"),
     ("POST", "/api/meta_locus/pools/{pool_id}/view"), ("POST", "/api/meta_locus/pools/{pool_id}/refill"),
     ("POST", "/api/meta_locus/pools/{pool_id}/find_more"),
+    # Headless numbers for a meta-locus or a session's view: they build pools from host BEDs as the routes above do.
+    ("POST", "/api/meta_locus/quantify"), ("POST", "/api/meta_locus/profile"),
     # fiberhmm-scan: opening scan directories and running live scans read the host's files and run compute.
     ("GET", "/api/scan/available"), ("POST", "/api/scan/open"), ("GET", "/api/scan/list"), ("DELETE", "/api/scan/{scan_id}"),
     ("GET", "/api/scan/{scan_id}/hits"), ("GET", "/api/scan/{scan_id}/units"), ("POST", "/api/scan/plan"),
@@ -126,7 +128,7 @@ PUBLIC_DENIED = {
     # host processes and shutdown
     ("POST", "/api/new-window"), ("GET", "/api/shutdown"), ("POST", "/api/shutdown"), ("POST", "/api/quit"),
     ("GET", "/api/cancel_shutdown"), ("POST", "/api/cancel_shutdown"), ("POST", "/api/tabs/heartbeat"),
-    ("POST", "/api/render/figure"), ("POST", "/api/render/live_state"),
+    ("POST", "/api/render/figure"), ("POST", "/api/render/live_state"), ("POST", "/api/render/cluster"),
     # primer design (BLAST on the host)
     ("POST", "/api/design_primers"), ("POST", "/api/design_dafc_primers"), ("POST", "/api/design_4c_primers"),
     ("POST", "/api/primer_abort"), ("POST", "/api/primer_blast_db/build"), ("GET", "/api/primer_config"),

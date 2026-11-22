@@ -19,9 +19,18 @@ import { effectiveSizeSettings, type PlotSpec } from './plotModel';
 /** Whether the plot draws comparisons, given how many groups it has. */
 export const isComparing = (plot: PlotSpec, nGroups: number): boolean => (plot.compare === 'log2ratio' || plot.compare === 'diff') && nGroups >= 2;
 
-/** The settings a plot requests: comparisons read counts (no log) so groups can be summed into "rest" and "all". */
+/** Compare on enrichment: A vs B on the server's normalised matrices (its Min footprints guard applied), as the retired
+ *  Clusters tab compared them; each vs rest / all sums counts, so they compare size shares. */
+export function comparesEnrichment(plot: PlotSpec, nGroups: number): boolean {
+  return plot.compare === 'log2ratio' && plot.sizeCompareOn === 'enrichment' && isEnrichment(effectiveSizeSettings(plot).normalization)
+    && nGroups >= 2 && resolveCompareMode(plot.compareMode, plot.groupBy, nGroups) === 'a-vs-b';
+}
+
+/** The settings a plot requests: comparisons read counts (no log) so groups can be summed into "rest" and "all";
+ *  an enrichment comparison reads the normalised matrices (no log). */
 export function requestSettings(plot: PlotSpec, nGroups: number): FootprintSizeSettings {
   const s = effectiveSizeSettings(plot);
+  if (comparesEnrichment(plot, nGroups)) return { ...s, log: false, ratio: null };
   return isComparing(plot, nGroups) ? { ...s, normalization: 'raw', log: false, ratio: null } : s;
 }
 
@@ -54,7 +63,14 @@ export function sizeFigure(o: SizeFigureOptions): SizeFigure {
     const mode = resolveCompareMode(plot.compareMode, plot.groupBy, plots.length);
     const groups = plots.map(p => ({ id: p.id, title: p.title, panelKey: p.id.slice(0, p.id.lastIndexOf('|')), matrix: p.data.matrix }));
     const diff = plot.compare === 'diff';
-    const comps = comparisons(groups, mode, plot.compareAB, diff ? 'diff' : 'log2ratio');
+    // Compare on enrichment (A vs B): the matrices are already normalised by the server; log2 of their ratio.
+    // Only when the matrices really are the normalised ones (never counts read as enrichment, or the reverse).
+    const fetchedNormalised = plots.every(p => !!p.data.normalization && p.data.normalization !== 'raw');
+    const onEnrichment = comparesEnrichment(plot, plots.length) && fetchedNormalised;
+    // Normalised matrices where counts are needed (a result finished for another comparison): nothing to draw yet.
+    const mismatch = fetchedNormalised && !onEnrichment;
+    const comps = comparisons(groups, mode, plot.compareAB, diff ? 'diff' : 'log2ratio', onEnrichment ? m => m : undefined)
+      .map(c => (mismatch ? { ...c, matrix: c.matrix.map(r => r.map(() => null)) } : c));
     const all: SizeMatrix = comps.flatMap(c => c.matrix);
     // The comparative colour slot (default RdBu_r centred on 0), one scale for every comparison.
     const scale = diff ? diffScale(all, plot.size) : ratioScale(all, plot.size);
@@ -64,13 +80,16 @@ export function sizeFigure(o: SizeFigureOptions): SizeFigure {
       charts: comps.map(c => ({
         key: c.id, kind: 'compare' as const, matrix: c.matrix, sizeMin: ref.size_min, sizeMax: ref.size_max, sizeBin: ref.size_bin, posBin: ref.pos_bin,
         scale, title: diff ? c.label.replace(' vs ', ' − ') : c.label,
-        subtitle: diff ? 'A − B of footprint size shares' : 'log2 ratio of footprint size distributions', filename: `footprint_${stamp}_${diff ? 'diff_' : ''}${c.label.replace(/[^\w.-]+/g, '_')}`,
-        valueLabel: diff ? 'A − B (share)' : 'log2 ratio', ...common,
+        subtitle: mismatch ? 'updating…' : diff ? 'A − B of footprint size shares' : onEnrichment ? 'log2 ratio of size enrichment' : 'log2 ratio of footprint size distributions', filename: `footprint_${stamp}_${diff ? 'diff_' : ''}${c.label.replace(/[^\w.-]+/g, '_')}`,
+        valueLabel: diff ? 'A − B (share)' : onEnrichment ? 'log2 ratio of enrichment' : 'log2 ratio', ...common,
       })),
     };
   }
   const settings = effectiveSizeSettings(plot);
-  const display = plots.map(p => displayMatrix(p.data.matrix, settings));
+  // A matrix finished another way than this plot draws (counts fetched for a comparison that lost a group to an error)
+  // is never drawn as this plot's values: blank until the right result arrives.
+  const fits = (p: FootprintSizePlot) => !p.data.normalization || p.data.normalization === settings.normalization;
+  const display = plots.map(p => (fits(p) ? displayMatrix(p.data.matrix, settings) : p.data.matrix.map(r => r.map(() => null))));
   const shared = colorScaleFor(display, settings);
   const enrichment = isEnrichment(settings.normalization);
   return {
@@ -79,7 +98,7 @@ export function sizeFigure(o: SizeFigureOptions): SizeFigure {
       key: p.id, kind: 'panel' as const, matrix: display[i], rawMatrix: p.data.matrix,
       sizeMin: p.data.size_min, sizeMax: p.data.size_max, sizeBin: p.data.size_bin, posBin: p.data.pos_bin,
       scale: settings.scale === 'shared' ? shared : colorScaleFor([display[i]], settings), title: p.title, accent: p.color,
-      subtitle: stale ? '— reads · — footprints' : `${p.data.n_reads.toLocaleString()} reads · ${p.data.n_footprints.toLocaleString()} footprints`,
+      subtitle: !fits(p) ? 'updating…' : stale ? '— reads · — footprints' : `${p.data.n_reads.toLocaleString()} reads · ${p.data.n_footprints.toLocaleString()} footprints`,
       filename: `footprint_${stamp}_${p.title.replace(/[^\w.-]+/g, '_')}`, valueLabel: enrichment ? 'enrichment' : 'footprints', ...common,
     })),
   };

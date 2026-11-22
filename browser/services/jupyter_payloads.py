@@ -48,6 +48,10 @@ def build_jupyter_poll_state(jupyter_state) -> dict:
     if jupyter_state.pending_settings_update:
         result["settings_update"] = jupyter_state.pending_settings_update
         jupyter_state.pending_settings_update = None
+    if getattr(jupyter_state, "pending_settings_updates", None):
+        # The same calls one by one, in order: the tab applies these when present (settings_update is their summary).
+        result["settings_updates"] = list(jupyter_state.pending_settings_updates)
+    jupyter_state.pending_settings_updates = []
 
     if getattr(jupyter_state, "pending_browser_actions", None):
         result["browser_actions"] = list(jupyter_state.pending_browser_actions)
@@ -115,7 +119,27 @@ def build_analysis_state(browser_settings: dict) -> dict:
             "show_coverage_histogram": settings.get("show_coverage_histogram"),
             "max_region_for_reads": settings.get("max_region_for_reads"),
             "show_genome_overview": settings.get("show_genome_overview"),
+            "metaprofile_follow_active_layers": settings.get("metaprofile_follow_active_layers"),
         },
+        # Read filters as the read track applies them (Min footprints -1: all reads, including uncalled).
+        "read_filters": {
+            "min_footprints": settings.get("min_footprints"),
+            "min_fp_quality": settings.get("min_fp_quality"),
+            "show_duplicate_reads": settings.get("show_duplicate_reads"),
+            "show_qc_fail_reads": settings.get("show_qc_fail_reads"),
+        },
+        "layer_colors": {
+            "session": settings.get("layer_color_overrides", {}),
+            "saved_defaults": settings.get("user_layer_colors", {}),
+        },
+        "window_quant": settings.get("window_quant", {}),
+        "plots": {
+            "workspace": settings.get("plots_workspace", {}),
+            "gallery": settings.get("plots_gallery", []),
+        },
+        "workspace": settings.get("workspace"),
+        "reversed": settings.get("reversed"),
+        "meta_locus": settings.get("meta_locus"),
         "coaccessibility": settings.get("coacc_settings", {}),
         "catalog": settings.get("catalog", []),
         "composite_tracks": settings.get("composite_tracks", []),

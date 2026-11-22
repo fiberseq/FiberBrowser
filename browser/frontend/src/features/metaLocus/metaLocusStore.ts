@@ -12,7 +12,7 @@ import {
   cancelMetaLocusPool, findMoreMetaLocus, metaLocusStatus, probeMetaLocusPool, refillMetaLocus, setMetaLocusView, startMetaLocusPool,
   type ClusterEstimate, type FindMoreResult, type MetaLocusSpec, type MetaLocusStatus, type MetaLocusView, type MetaLocusViewRequest,
 } from './api';
-import { isMetaChrom, metaLabel, metaReadLimit, setMetaContigWidth } from './metaChrom';
+import { isMetaChrom, metaLabel, metaReadLimit, renameMetaChroms, setMetaContigWidth } from './metaChrom';
 import { getBrowserPerformanceProfile } from '../../utils/performanceProfile';
 import { withMetaUrlParams, type MetaUrlState } from './metaUrl';
 
@@ -214,7 +214,13 @@ export async function openMetaLocus(spec: MetaLocusSpec, options: { count?: numb
     const go = () => {
       if (options.navigate === 'if-moved') {
         // A restored session already shows its meta contig (zoom and clusters kept): move only if the pool is another.
-        if (useBrowserStore.getState().chrom !== poolChrom(useMetaLocusStore.getState().status)) enterMetaLocus();
+        const here = useBrowserStore.getState().chrom;
+        if (here !== poolChrom(useMetaLocusStore.getState().status)) {
+          // The page was on another meta contig (its pool could not be named before the restore): moving clears the
+          // analysis made there, so say so instead of losing it silently.
+          if (isMetaChrom(here)) useMetaLocusStore.setState({ notice: 'The meta-locus reopened as a different pool, so the clusters and selections made on it could not be kept.' });
+          enterMetaLocus();
+        }
       } else if (options.navigate !== false) enterMetaLocus();
     };
     // On Open the view moves to the meta-locus at once: while the pool builds, the progress strip and the read
@@ -437,22 +443,47 @@ function sessionSpec(raw: Partial<MetaLocusSession> & { bed_path: string }): Met
 }
 
 /**
- * The meta contig a saved meta-locus will reopen as, asked before anything is restored (the probe builds nothing).
- * Its pool id follows the dataset ids, so datasets reopened under other ids give another contig: the saved view,
- * clusters and selections on the old contig are renamed to it instead of being cleared by the move. Null when the
- * server cannot say (no BED, an older server): nothing is renamed.
+ * The meta contig a saved meta-locus will reopen as, asked before anything is restored. Its pool id follows the
+ * dataset ids and the files' identity, so datasets reopened under other ids (or moved/touched BAMs) give another
+ * contig: the saved view, clusters and selections on the old contig are renamed to it instead of being cleared by the
+ * move. The probe builds nothing; when it cannot name the pool (a transient failure, an answer without a pool id, an
+ * older server), the pool the restore reopens anyway is started now (start returns the same pool when called again),
+ * so the contig is the one the reopen lands on. Null only when neither can say (no BED, the pool cannot open).
  */
 export async function savedMetaPoolChrom(saved: unknown): Promise<string | null> {
   if (!saved || typeof saved !== 'object') return null;
   const raw = saved as Partial<MetaLocusSession>;
   if (!raw.bed_path) return null;
+  const spec = sessionSpec(raw as Partial<MetaLocusSession> & { bed_path: string });
   try {
-    const { name: _name, ...spec } = sessionSpec(raw as Partial<MetaLocusSession> & { bed_path: string });
-    const probe = await probeMetaLocusPool(spec);
-    return probe?.pool_id ? `meta:${probe.pool_id}` : null;
+    const { name: _name, ...probeSpec } = spec;
+    const probe = await probeMetaLocusPool(probeSpec);
+    if (probe?.pool_id) return `meta:${probe.pool_id}`;
+  } catch { /* asked of the pool itself below */ }
+  try {
+    const status = await startMetaLocusPool(spec);
+    return status?.pool_id && status.status !== 'error' ? poolChrom(status) : null;
   } catch {
     return null;
   }
+}
+
+/**
+ * An imported session (or headless figure state) with its meta contig renamed to the one its pool reopens as, so
+ * the restore finds the view already there and keeps the session's clusters and selections (see savedMetaPoolChrom).
+ */
+export async function alignImportedMetaChrom(result: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const frontend = result.frontend && typeof result.frontend === 'object' ? result.frontend as Record<string, unknown> : null;
+  const meta = frontend?.metaLocus as Partial<MetaLocusSession> | undefined;
+  if (!meta?.bed_path) return result;
+  const viewport = result.viewport as { chrom?: unknown } | undefined;
+  const oldChroms = [meta.pool_id ? `meta:${meta.pool_id}` : null,
+    typeof viewport?.chrom === 'string' && isMetaChrom(viewport.chrom) ? viewport.chrom : null,
+    typeof frontend?.chrom === 'string' && isMetaChrom(frontend.chrom) ? frontend.chrom : null];
+  if (!oldChroms.some(Boolean)) return result;
+  const to = await savedMetaPoolChrom(meta);
+  if (!to) return result;
+  return { ...result, viewport: renameMetaChroms(result.viewport, to, oldChroms), frontend: renameMetaChroms(frontend, to, oldChroms) };
 }
 
 /**

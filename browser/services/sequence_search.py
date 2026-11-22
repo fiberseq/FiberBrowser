@@ -277,10 +277,23 @@ def _paired_fastas(state) -> list[str]:
     return paths
 
 
+def _sequence_reference_id(state) -> str:
+    """Identify's reference id without the annotation: hits depend on the sequence only, so reloading or editing
+    the genes of the same genome keeps them (Identify's results name genes and keep the annotation in theirs)."""
+    fasta = getattr(state, "fasta_path", None) or ""
+    try:
+        st = os.stat(fasta)
+        ref = f"{os.path.abspath(fasta)}:{st.st_size}:{st.st_mtime_ns}"
+    except OSError:
+        ref = fasta
+    text = f"{getattr(state, 'current_genome', None)}|{ii._identity(state)}|{ref}"
+    return hashlib.sha256(text.encode()).hexdigest()[:16]
+
+
 def search_reference_id(state, fastas: list[str]) -> str:
-    """Identify's reference id, extended with every FASTA of a paired-reference collection (Identify's id
+    """The sequence's reference id, extended with every FASTA of a paired-reference collection (``fasta_path``
     names only the first), so replacing a later FASTA marks old results stale and starts a new job."""
-    base = ii.reference_id(state)
+    base = _sequence_reference_id(state)
     if len(fastas) <= 1:
         return base
     parts = [base]

@@ -242,7 +242,7 @@ def test_helper_script_is_pure_stdlib_and_py36_clean():
     import ast
     from remote_fixtures import HELPER
     tree = ast.parse(HELPER.read_text())
-    allowed = {"hashlib", "hmac", "io", "json", "os", "re", "signal", "socket", "stat", "sys",
+    allowed = {"errno", "hashlib", "hmac", "io", "json", "os", "re", "signal", "socket", "stat", "sys",
                "tempfile", "threading", "time", "http.server", "socketserver", "urllib.parse"}
     ast.parse(HELPER.read_text(), feature_version=(3, 6))  # nothing newer than 3.6 syntax
     for node in ast.walk(tree):

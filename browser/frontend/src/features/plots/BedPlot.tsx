@@ -28,6 +28,9 @@ import { footprintSizeLayerLabel } from '../../utils/footprintSizeSettings';
 import { sampleCountsText } from './useProfileData';
 import type { RegionSet } from './bedRegions';
 import { MeasuresHeader, shortHeader } from './MeasuresHeader';
+import { baseGroupsOf } from './multiSource';
+import { plotSources, sourceLabel } from './plotModel';
+import { useLayerColorVersion } from '../layerColours/state';
 
 /** Regions done of the total and the time since the read began, with Cancel (the server stops when the request goes). */
 export function BedProgressLine({ progress, onCancel }: { progress: BedProgress; onCancel: () => void }) {
@@ -69,11 +72,13 @@ export function BedPlot({ plot, sets, target, width, sampleSeed, settingsKey, se
   const histogram = plot.type === 'size-histogram';
   const usedRegions = shown ? shown.counts.reduce((a, c) => a + c.regionsUsed, 0) : 0;
   const bedScope = `${usedRegions.toLocaleString('en-US')} regions${plot.bed.mode === 'scale' ? '' : ` (±${plot.bed.flankBp.toLocaleString('en-US')} bp around the ${plot.bed.anchor === 'centre' ? 'centre' : plot.bed.anchor})`}`;
-  const profile = useMemo(() => (shown && !heat ? (histogram ? histogramFigure(plot, shown.profile.groups) : profileFigure(plot, shown.profile.groups, axis.binBp)) : null), [shown, heat, histogram, plot, axis.binBp]);
+  // Source colours come from the layer colour resolver: redraw (lines and bars) when the user changes one.
+  const layerColorVersion = useLayerColorVersion();
+  const profile = useMemo(() => (shown && !heat ? (histogram ? histogramFigure(plot, shown.profile.groups) : profileFigure(plot, shown.profile.groups, axis.binBp)) : null), [shown, heat, histogram, plot, axis.binBp, layerColorVersion]);   // eslint-disable-line react-hooks/exhaustive-deps
   const pCharts = useMemo(() => (profile ? profileCharts(profile, {
     start: histogram ? plot.hist.sizeMin : axis.start, binBp: histogram ? plot.hist.binBp : axis.binBp, width: Math.max(320, width), height: profile.comparing ? 200 : 300, dark, filename: fname,
     subtitle: shown?.countsText, ...(histogram ? histogramAxis(plot.hist) : { xLabel: axis.label, ...(axis.ticks ? { xTicks: axis.ticks } : {}) }),
-  }) : []), [profile, axis, width, dark, fname, shown]);
+  }).map(c => (profile.facets && !profile.comparing && profile.facets.layout === 'panels' ? { ...c, subtitle: shown?.countsText } : c)) : []), [profile, axis, width, dark, fname, shown]);
   const hFig = useMemo(() => (shown && heat ? heatmapFigure(plot, shown.heatmap) : null), [shown, heat, plot]);
   const rows = hFig?.blocks.reduce((n, b) => n + b.rows.length, 0) ?? 0;
   const heatHeader = hFig && shown ? regionHeatmapHeader({ source: footprintSizeLayerLabel(plot.source), regions: usedRegions, what: 'BED regions',
@@ -106,15 +111,19 @@ export function BedPlot({ plot, sets, target, width, sampleSeed, settingsKey, se
   const groups = shown?.profile.groups ?? [];
   // The builder's Compare reads how many groups the plot drew (the profile's lines; a region heatmap's are its own).
   // A region heatmap compares its own groups (heatmapData: two or more), so it reports those.
-  const drawnGroups = fresh.state === 'current' && shown ? (heat ? (shown.heatmap?.groups?.length ?? 0) : groups.length) : null;
+  // Groups, not lines (several sources: one group drawn as three sources is still one).
+  const baseGroups = baseGroupsOf(groups);
+  const drawnGroups = fresh.state === 'current' && shown ? (heat ? (shown.heatmap?.groups?.length ?? 0) : baseGroups.length) : null;
   useEffect(() => { if (drawnGroups != null) reportGroupCount(plot, drawnGroups); }, [drawnGroups, plot]);
   const summary = useMemo(() => (profile && shown && !heat ? profileSummaryOf({ plot, figure: profile, groups: shown.profile.groups, histogram,
     start: histogram ? plot.hist.sizeMin : axis.start, binBp: histogram ? plot.hist.binBp : axis.binBp, anchored: true,
-    unitNoun: plot.summary.unit === 'reads' ? 'reads' : 'regions', marksPerBp: isMarkProfile(plot) }) : null), [profile, shown, heat, plot, histogram, axis]);
+    unitNoun: plot.summary.unit === 'reads' ? 'reads' : 'regions', marksPerBp: isMarkProfile(plot) }) : null), [profile, shown, heat, plot, histogram, axis, layerColorVersion]);   // eslint-disable-line react-hooks/exhaustive-deps
   const stateLine = profile && !fresh.stale ? profileStateLine(plot, profile, summary) : null;
   return (
     <div className="flex min-h-0 flex-col gap-2" data-testid="plots-bed-plot" data-state={fresh.state} data-sets={chosen.length}
-      data-groups={groups.length} data-rows={rows} data-seeded={entry?.seeded && fresh.state === 'current' ? 'true' : undefined}
+      data-groups={profile?.facets ? baseGroups.length : groups.length} data-rows={rows}
+      data-sources={JSON.stringify(plotSources(plot))} data-lines={profile?.series.length ?? 0} data-panels={pCharts.length}
+      data-series-per-panel={JSON.stringify(pCharts.map(c => c.series.length))} data-seeded={entry?.seeded && fresh.state === 'current' ? 'true' : undefined}
       data-dashes={groups.filter(g => g.dash && g.dash.length).length} data-comparing={profile?.comparing || hFig?.comparing ? 'yes' : ''}>
       {!chosen.length && <AnalysisStatus kind="empty" center>Add a BED file by path and tick it (More options › Where: BED region sets).</AnalysisStatus>}
       <div className="flex flex-wrap items-center gap-2 text-[11px]">
@@ -140,7 +149,7 @@ export function BedPlot({ plot, sets, target, width, sampleSeed, settingsKey, se
           </span>
         )}
       </div>
-      {plot.compare !== 'off' && groups.length >= 2 && (
+      {plot.compare !== 'off' && baseGroups.length >= 2 && (
         <div className="flex flex-wrap items-center gap-1.5 text-[11px]" data-testid="plots-compare-picker">
           <span className="font-medium">Compare</span>
           <select aria-label="Compare mode" value={plot.compareMode} data-testid="plots-compare-mode" onChange={e => onCompare?.({ compareMode: e.target.value as CompareMode })}
@@ -151,6 +160,11 @@ export function BedPlot({ plot, sets, target, width, sampleSeed, settingsKey, se
         </div>
       )}
       <CompareStateText text={stateLine} />
+      {fresh.state === 'current' && shown?.missingSources?.length ? (
+        <div className="text-[11px] text-amber-800 dark:text-amber-200" data-testid="plots-missing-sources" role="status">
+          Not drawn: {shown.missingSources.map(m => `${sourceLabel(m.source, plot.sourceLabels)} (${m.reason})`).join('; ')}.
+        </div>
+      ) : null}
       {heatHeader && <MeasuresHeader testId="plots-heatmap-measures" short={shortHeader(plot, `${usedRegions.toLocaleString('en-US')} BED regions`)} details={heatHeader} />}
       {heat && <RegionHeatmapActions figure={hFig} base={chosen.map(s => s.name).join('+') || title} />}
       <div className={fresh.stale ? 'pointer-events-none opacity-40 grayscale' : ''}>

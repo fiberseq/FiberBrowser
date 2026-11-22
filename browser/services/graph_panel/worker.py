@@ -281,6 +281,16 @@ class HelperWorker:
         except Exception:
             pass
 
+    def _close_read_pipes(self) -> None:
+        transport = getattr(self.proc, "_transport", None)
+        for fd in (1, 2):
+            try:
+                pipe = transport.get_pipe_transport(fd) if transport is not None else None
+                if pipe is not None and not pipe.is_closing():
+                    pipe.close()
+            except Exception:
+                pass
+
     async def kill(self, reason: str, detail: str = "") -> None:
         """Kill and reap the process; every waiting job fails with ``reason``. Idempotent.
 
@@ -302,6 +312,10 @@ class HelperWorker:
                     self.proc.kill()
                 except ProcessLookupError:
                     pass
+                # Python 3.11+ asyncio: Process.wait() also waits for the pipes to close. A killed helper can leave
+                # an unread reply in its stdout pipe (reading paused at the buffer limit), so close our read ends
+                # first, or the reap waits out REAP_TIMEOUT_S.
+                self._close_read_pipes()
                 await self._reap()
         finally:
             self._exited.set()

@@ -50,11 +50,18 @@ test('Metaprofile: lines per group, Compare explains one dataset, None pools, Ga
   await expect(ws.getByTestId('plots-profile-chart')).toHaveCount(1);
   await expect(ws.getByTestId('plots-title-text')).toHaveText('Metaprofile · All footprints · current view · by dataset');
 
-  // Source: Accessibility reads the msp layer.
-  const fire = page.waitForRequest(r => compactFor(r) && new URL(r.url()).searchParams.get('layer_names') === 'msp,fire', { timeout: 60_000 });
+  // Source: Accessibility reads the msp layer. Metaprofile chips add sources: with All footprints still on, one fetch
+  // reads the union of their layers; turning All footprints off leaves Accessibility alone.
+  const both = page.waitForRequest(r => compactFor(r) && new URL(r.url()).searchParams.get('layer_names') === 'nuc,tf,msp,fire', { timeout: 60_000 });
   await ws.getByTestId('plots-source-fire').click();
+  await both;
+  await expect(plot).toHaveAttribute('data-state', 'current', { timeout: 90_000 });
+  await expect(plot).toHaveAttribute('data-series-per-panel', '[2]');
+  const fire = page.waitForRequest(r => compactFor(r) && new URL(r.url()).searchParams.get('layer_names') === 'msp,fire', { timeout: 60_000 });
+  await ws.getByTestId('plots-source-all_footprints').click();
   await fire;
   await expect(plot).toHaveAttribute('data-state', 'current', { timeout: 90_000 });
+  await expect(plot).toHaveAttribute('data-series-per-panel', '[1]');
 
   // Compare sits next to Group by (not under More options); with one dataset its A − B / log2 are disabled and say why.
   await expect(ws.getByTestId('plots-more')).toHaveCount(0);

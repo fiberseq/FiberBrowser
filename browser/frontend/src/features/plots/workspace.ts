@@ -53,6 +53,8 @@ export function openPlots(plot?: Partial<PlotSpec>): boolean {
   if (plot) {
     const s = useBrowserStore.getState();
     s.setPlotsWorkspace(ws => ({ ...ws, current: newPlot(plot) }));
+    // A new plot is shown, never hidden behind the Gallery tab left open last time.
+    setPlotsTab('plot');
   }
   setWorkspace('plots');
   return true;

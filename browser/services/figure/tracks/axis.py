@@ -67,6 +67,11 @@ def draw(surface, ctx, track, height: float) -> None:
     fe = ctx.fe
     tss = fe.get("relativeTSS")
     relative = bool(fe.get("showRelativeCoords")) and tss is not None
+    # A meta-locus (AxisTrack metaZero): -flank..+flank around the sites' anchor, drawn like relative coordinates,
+    # the anchor's tick labelled with its word (TSS / centre / end); minus-strand sites are already flipped.
+    meta = fe.get("_metaLocus") if str(ctx.chrom).startswith("meta:") else None
+    if meta:
+        tss, relative = float(meta["zero"]), True
     step = _tick_step(size, width)
     if relative:
         nice = [25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 25000, 50000, 100000, 250000, 500000, 1000000]
@@ -77,17 +82,37 @@ def draw(surface, ctx, track, height: float) -> None:
     circular = _circular_size(ctx)
     normalize = (lambda p: ((p % circular) + circular) % circular) if circular else (lambda p: p)
     genes = fe.get("selectedGenes") or []
-    rel_gene = genes[0] if relative and genes and isinstance(genes[0], dict) else None
+    # AxisTrack: a meta-locus axis never takes a selected gene's strand (relReversed needs metaZero === null).
+    rel_gene = genes[0] if relative and not meta and genes and isinstance(genes[0], dict) else None
+    # A meta-locus axis leaves out tick labels that would touch the pool's label or the width label, as AxisTrack does
+    # (audit L1); ordinary axes keep their drawing unchanged.
+    skip_left = skip_right = None
+    if meta:
+        from services.figure.surface import measure_text
+        skip_left = 4 + measure_text(str(meta["label"]), 10, "bold") + 6
+        size_text = f"{size / 1000:.1f}kb" if size >= 1000 else f"{size}bp"
+        skip_right = width - 4 - measure_text(size_text, 9) - 6
     while pos < end:
         x = ctx.x_of(pos)
         if 30 <= x <= width - 30:
             surface.line(x, height - 6, x, height - 1, "#cccccc", 1)
             label = (_relative_label(pos, float(tss), (rel_gene or {}).get("strand") == "-") if relative
                      else _format_position(normalize(pos), size))
+            if meta and round(pos - float(tss)) == 0:
+                label = meta["anchor_word"]
+            if skip_left is not None:
+                from services.figure.surface import measure_text
+                half = measure_text(label, 9) / 2
+                if x - half < skip_left or x + half > skip_right:
+                    pos += step
+                    continue
             surface.text(x, height - 10, label, size=9, color="#666666", anchor="middle")
         pos += step
 
-    if relative and rel_gene:
+    if meta:
+        region = str(meta["label"])
+        _anchor_mark(surface, ctx, float(tss), height)
+    elif relative and rel_gene:
         region = f"{rel_gene.get('name', '')} TSS ±{round(size / 2000)}kb"
     elif width < 250:
         region = (_circular_region_label(ctx.chrom, start, end, circular, size, compact=True) if circular
@@ -98,6 +123,17 @@ def draw(surface, ctx, track, height: float) -> None:
     surface.text(4, 12, region, size=10, color="#333333", weight="bold")
     size_str = f"{size / 1000:.1f}kb" if size >= 1000 else f"{size}bp"
     surface.text(width - 4, 12, size_str, size=9, color="#666666", anchor="end")
+
+
+def _anchor_mark(surface, ctx, zero: float, height: float) -> None:
+    """The anchor on a meta-locus axis: a small downward triangle at x(anchor) on the axis line (headless figures mark
+    it so a printed panel shows where the sites sit; ``meta_locus.anchor_mark: false`` leaves it out)."""
+    if not (ctx.fe.get("_metaLocus") or {}).get("anchor_mark", True):
+        return
+    if not ctx.start <= zero <= ctx.end:
+        return
+    x = ctx.x_of(zero)
+    surface.polygon([(x - 4, height - 7), (x + 4, height - 7), (x, height - 1)], fill="#333333")
 
 
 register("axis", measure, draw)

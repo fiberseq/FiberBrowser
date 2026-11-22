@@ -222,3 +222,32 @@ async def meta_locus_find_more(pool_id: str, request: Request, body: dict = Body
     """Find more like the selected reads, with matches / read-site observations scanned (Wilson 95%)."""
     from services.meta_locus_refill import find_more
     return await _scan_route(request, find_more, _pool(pool_id), body)
+
+
+async def _numbers_route(fn, body, state):
+    from starlette.concurrency import run_in_threadpool
+    from fastapi.responses import JSONResponse
+    from services.meta_locus_numbers import NumbersError
+    try:
+        return await run_in_threadpool(fn, state, body or {})
+    except NumbersError as exc:
+        return JSONResponse(status_code=exc.status, content={"error": str(exc)})
+    except (ValueError, KeyError, TypeError) as exc:
+        return JSONResponse(status_code=400, content={"error": str(exc)})
+
+
+@router.post("/api/meta_locus/quantify")
+async def meta_locus_quantify(body: dict = Body(default={}), state=Depends(get_state)):
+    """Quantify a window headlessly (services/meta_locus_numbers.quantify): the browser's Quantify card table for a
+    meta-locus (meta_locus spec or pool id) or a session's view. Body: meta_locus | session, window ([from, to] bp from
+    the anchor) or window_genomic, spec (QuantSpec: measures, bounds, comparison, value, baseline, ...)."""
+    from services.meta_locus_numbers import quantify
+    return await _numbers_route(quantify, body, state)
+
+
+@router.post("/api/meta_locus/profile")
+async def meta_locus_profile(body: dict = Body(default={}), state=Depends(get_state)):
+    """The metaprofile per bin, channel and group (all, per dataset, per cluster) of a meta-locus or a session's view
+    (services/meta_locus_numbers.metaprofile). Body: meta_locus | session, channels, bins."""
+    from services.meta_locus_numbers import metaprofile
+    return await _numbers_route(metaprofile, body, state)

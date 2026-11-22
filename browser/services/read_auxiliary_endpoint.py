@@ -135,9 +135,10 @@ def set_legacy_layer_inference_payload(state, body: dict) -> dict:
         nuc_min_size = int(body.get("nuc_min_size", 90))
     except (TypeError, ValueError):
         nuc_min_size = 90
-    state.set_legacy_layer_inference(enabled, nuc_min_size)
+    changed = state.set_legacy_layer_inference(enabled, nuc_min_size)
     return {
         "success": True,
+        "changed": changed is not False,
         "enabled": state.infer_legacy_layers,
         "nuc_min_size": state.legacy_nuc_min_size,
     }

@@ -24,6 +24,7 @@ os.environ.setdefault('BLAST_USAGE_REPORT', 'false')
 
 from contextlib import asynccontextmanager
 from importlib.util import find_spec
+import asyncio
 from typing import Dict
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
@@ -286,6 +287,13 @@ async def lifespan(app: FastAPI):
         await shutdown_graph_helpers()
     except Exception as exc:
         print(f"  [graph] helper shutdown failed: {exc}")
+    # The meta-locus decode workers (services/meta_locus_decode.py): joined, so none outlives the app.
+    try:
+        from services.meta_locus_decode import shutdown_workers as shutdown_meta_locus_workers
+        # Bounded and off the event loop: a chunk stalled in I/O is terminated after 3 s rather than holding Quit.
+        await asyncio.to_thread(shutdown_meta_locus_workers, True, 3.0)
+    except Exception as exc:
+        print(f"  [meta-locus] worker shutdown failed: {exc}")
     from services.file_handles import handles
     handles.discard()
     # The nucleosome record-count helper process (services/nuc/record_count.py).

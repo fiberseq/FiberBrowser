@@ -27,7 +27,7 @@ export type ReadMenuAction =
   | 'zoom-out'
   | 'copy-view-locus'
   | 'copy-position'
-  // Footprint size plots of this panel's view (Clusters › Footprint sizes, Size enrichment; no clustering needed)
+  // Footprint size plots of this panel's view (Plots, Size enrichment; no clustering needed)
   | 'footprint-size-enrichment'
   // Structural variants (fb-n9-sv)
   | 'sv-split-this'
@@ -223,7 +223,7 @@ const splitPanelsTitle = (): string => [SPLIT_PANELS_BASE, ...shown().map(c => c
 export const item = (action: ReadMenuAction, label: string, icon: ReadMenuIcon, extra: Partial<ReadMenuItem> = {}): ReadMenuItem =>
   ({ kind: 'item', action, label, icon, ...extra });
 const SEP: ReadMenuSeparator = { kind: 'separator' };
-const FOOTPRINT_SIZES_ITEM_TITLE = 'Footprint size by position for this view, coloured by where each size is enriched (one plot per dataset; per cluster when clustered). Opens Clusters › Footprint sizes.';
+const FOOTPRINT_SIZES_ITEM_TITLE = 'Footprint size by position for this view, coloured by where each size is enriched (one plot per dataset; per cluster when clustered). Opens Plots.';
 
 export function buildReadMenu(ctx: ReadMenuContext): ReadMenuEntry[] {
   const mod = ctx.isMac ? '⌘' : 'Ctrl';

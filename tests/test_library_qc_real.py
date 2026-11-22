@@ -74,6 +74,12 @@ def test_run_qc_runs_the_real_fiberhmm_qc_and_the_library_shows_its_verdicts(cli
             assert verdicts[section] == real[section]["status"]
 
     # The plot route serves the PNG fiberhmm-qc drew, and nothing was written beside the BAM.
-    plot = client.get(body["plots"]["plot"])
-    assert plot.status_code == 200 and plot.content[:8] == b"\x89PNG\r\n\x1a\n"
+    # fiberhmm-qc draws its PNG only with matplotlib (an optional extra of both packages): without it the Library
+    # simply lists no plot.
+    import importlib.util
+    if importlib.util.find_spec("matplotlib") is None:
+        assert "plot" not in body["plots"]
+    else:
+        plot = client.get(body["plots"]["plot"])
+        assert plot.status_code == 200 and plot.content[:8] == b"\x89PNG\r\n\x1a\n"
     assert sorted(os.listdir(env / "d")) == ["small.bam", "small.bam.bai"]

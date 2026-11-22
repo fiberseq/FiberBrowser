@@ -1061,3 +1061,18 @@ def test_sequence_search_track_references_pass_the_scan_but_nothing_else_does(la
     with lab_request_context(object()):
         with pytest.raises(PathDenied):
             lab_paths.confine(ref)
+
+
+def test_a_headless_figure_bed_overlay_is_confined_to_the_read_roots(lab, monkeypatch):
+    """Release audit 3.1.1: a session's headless_figure.annotations.bed outside a member's data roots was read with a
+    plain open() (the request scan checks only the session file); it goes through the lab file gate now."""
+    from services.figure.annotations import read_bed
+    from services.lab import paths as lab_paths
+    from services.lab.paths import PathDenied
+    (lab.outside / "secret.bed").write_text("chrSecret\t1\t2\tsecret\n")
+    (lab.data / "inside.bed").write_text("chr1\t10\t20\tinside\n")
+    with monkeypatch.context() as patched:
+        patched.setattr(lab_paths, "enforcing", lambda: True)   # inside a member's request
+        with pytest.raises(PathDenied):
+            read_bed(str(lab.outside / "secret.bed"))
+        assert read_bed(str(lab.data / "inside.bed")) == [{"chrom": "chr1", "start": 10, "end": 20, "name": "inside"}]

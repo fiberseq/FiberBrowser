@@ -208,7 +208,7 @@ try {
     await page.getByTestId('plots-workspace').evaluate(el => { const s = el.querySelector('[data-testid="plots-card"]')?.closest('.overflow-auto, .overflow-y-auto'); if (s) s.scrollTop = 0; });
     await shoot(page, 'plots/compare-summary.png');
     await page.getByTestId('plots-summary-on').uncheck();
-    await page.getByTestId('plots-compare-mode').selectOption('rest').catch(() => {});
+    await page.getByTestId('plots-compare-mode').selectOption('auto');
     await page.getByTestId('plots-compare-off').click();
     await settle(page);
   });

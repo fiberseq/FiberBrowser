@@ -7,6 +7,7 @@ import { useBrowserStore } from '../../stores/browserStore';
 import { registerPlotsState } from './plotsState';
 import { setWorkspace, workspaceHeld, workspaceOpen } from './workspace';
 import { registerCoaccEntry } from './coaccEntry';
+import { registerWindowQuant } from '../windowQuant/register';
 
 let done = false;
 
@@ -21,6 +22,7 @@ export function registerPlots(): void {
   if (done) return;
   done = true;
   registerPlotsState();
+  registerWindowQuant();
   registerCoaccEntry();
   useBrowserStore.subscribe((s, prev) => {
     if (s.panels === prev.panels || !workspaceOpen() || workspaceHeld()) return;

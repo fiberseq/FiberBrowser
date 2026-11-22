@@ -3,6 +3,8 @@
 pytest>=7
 # FastAPI's TestClient
 httpx>=0.24
+# PDF checks of scripted figures (page size, embedded TrueType text)
+pypdf>=3.0
 # Primer tests (the Primer panel's optional packages)
 primer3-py>=2.0
 seqfold>=0.7

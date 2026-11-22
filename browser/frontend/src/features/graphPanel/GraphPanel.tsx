@@ -1,4 +1,5 @@
 import { useConfirmedQualityFilters } from '../../hooks/useQualityFilterSync';
+import { useConfirmedReadSettings } from '../../hooks/useReadSettingsSync';
 import { effectiveSignalFilters } from '../../utils/signalFilters';
 import { datasetHasFireScores } from '../../utils/layerColors';
 import { useNativeWheel } from '../../hooks/useNativeWheel';
@@ -386,11 +387,12 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   // The signal read filters the request carries (inert unless a loaded dataset has bg/me/db tags): another read set.
   const signalKey = useBrowserStore(s => JSON.stringify(effectiveSignalFilters(s)));
   // The workspace read settings the server composes graph rows with (legacy-layer inference, its nucleosome minimum,
-  // the read-end footprint cutoff) and the quality filters the server confirmed (useQualityFilterSync: a reload sent
-  // before the settings POST applied would get the old rows): another read set.
+  // the read-end footprint cutoff; useReadSettingsSync) and its quality filters (useQualityFilterSync), as the server
+  // confirmed them, not as edited locally: a reload sent before the settings POST applied would get the old rows and
+  // be kept as current. Another read set.
   const confirmedQuality = useConfirmedQualityFilters(s => s.revision);
-  const readSettingsKey = useBrowserStore(s => JSON.stringify([s.legacyLayerInference, s.legacyNucMinSize,
-    s.hideShortEndFootprints])) + `q${confirmedQuality}`;
+  const readSettingsKey = useConfirmedReadSettings(s => JSON.stringify([s.legacy, s.readEnd, s.revision]))
+    + `q${confirmedQuality}`;
   // The duplicate / QC-fail toggles (include_duplicates / include_qcfail on the request): another read set.
   const readPolicy = useBrowserStore(s => `${s.showDuplicateReads ? 1 : 0}${s.showQcFailReads ? 1 : 0}`);
   const readsKey = reg && response && readPaths.length

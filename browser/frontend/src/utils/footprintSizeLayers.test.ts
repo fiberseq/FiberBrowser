@@ -1,7 +1,7 @@
 /** Footprint size plots: the source choices are "All footprints" plus the Layers toolbar's interval layers. */
 import { describe, expect, it } from 'vitest';
 import {
-  ALL_FOOTPRINTS, DEFAULT_FOOTPRINT_SIZE_SETTINGS, footprintSizeLayerLabel, footprintSizeLayerOptions, footprintSizeSummary,
+  ALL_FOOTPRINTS, DEFAULT_FOOTPRINT_SIZE_SETTINGS, footprintSizeLayerLabel, footprintSizeLayerOptions,
 } from './footprintSizeSettings';
 import { sizeMatrixTsv } from './footprintSizeMatrix';
 import { getCanonicalLayerEntries, getLayerColor, getLayerLabel } from './layerColors';
@@ -34,10 +34,9 @@ describe('footprint size sources', () => {
     expect(opts.at(-1)).toMatchObject({ value: 'tf', label: getLayerLabel('tf') });
   });
 
-  it('names the source in the summary and the TSV header the way the toolbar does', () => {
+  it('names the source in the TSV header the way the toolbar does', () => {
     expect(footprintSizeLayerLabel(ALL_FOOTPRINTS)).toBe('All footprints');
     expect(footprintSizeLayerLabel('fire')).toBe(getLayerLabel('fire'));
-    expect(footprintSizeSummary({ ...DEFAULT_FOOTPRINT_SIZE_SETTINGS, layer: 'tf' })).toMatch(/^TF · /);
     const meta = { sizeMin: 10, sizeMax: 30, sizeBin: 10, posBin: 10, nReads: 1, nFootprints: 2 };
     const all = sizeMatrixTsv([[1]], meta, DEFAULT_FOOTPRINT_SIZE_SETTINGS, { title: 'A', chrom: 'chrT', start: 0 });
     expect(all).toMatch(/^# source: All footprints \(Nuc \+ TF layers, each footprint once\)$/m);

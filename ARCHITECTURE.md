@@ -31,6 +31,14 @@ packs), so it reaches the rest of core only through them. On the server, its rou
 (`routers/registry.py`) and its session hooks go through the pack API as a built-in (`plugins/builtin_features.py`,
 registered first by `load_packs`; never listed as a pack, so it sets no flavour and marks nothing in sessions).
 
+## Headless parity
+
+A feature's numbers and figures can be scripted without a browser tab. The browser and the server share one
+implementation for each: one server route the browser also uses, or a TypeScript engine with a Python twin pinned by a
+shared golden file (`services/profile_engine.py` for profileEngine.ts, `services/window_quant.py` for the Quantify
+engine). The rule and its drift tests are listed in [CONTRIBUTING.md](CONTRIBUTING.md), "Python client and headless
+support for every feature".
+
 ## Preview features
 
 A feature can be released as a **Preview**: present in every build, controlled by *Settings → Show

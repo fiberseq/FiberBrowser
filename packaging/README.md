@@ -17,9 +17,13 @@ How FiberBrowser is distributed; users start at [docs/install.md](../docs/instal
 
 **The tracked frontend build.** Every release artifact (the wheel, the Mac app, the WSL distribution) ships the
 committed `browser/frontend/dist`; nothing rebuilds it. Before tagging a release, rebuild it
-(`cd browser/frontend && npm ci && npm run build`) and commit it. `packaging/check_frontend_dist.py` fails when
-the dist is older than the frontend source (git history: a later commit to `src/`, `public/`, `index.html`, the
-package files or the build configs, or uncommitted source changes). The release workflows run it on `v*` tags,
+(`cd browser/frontend && npm ci && npm run build`) and commit it. Every build writes `build-inputs.json` into its
+folder (`scripts/build-inputs.mjs`, called from `vite.config.ts`): a sha256 over the build inputs (`src/`, `public/`,
+`index.html`, the package files and the build configs, without tests and fixtures) and one over the built files.
+`packaging/check_frontend_dist.py` recomputes both in Python and fails when the dist was not built from the source
+as it is now, or its files changed after the build. Bytes are hashed as read: a checkout that converts line endings
+(CRLF) needs its own build. A dist without the manifest (built before 3.1.1) falls back to git history (a later
+commit to those paths, or uncommitted source changes). The release workflows run it on `v*` tags,
 and `macos/build_app.sh` and `windows/build_wsl_distro.sh` run it before building this checkout
 (`FB_ALLOW_STALE_DIST=1` skips it, for a test build only). `FIBERBROWSER_RELEASE_CHECK=1 pytest
 tests/test_check_frontend_dist.py` runs the same check on this tree.
@@ -88,10 +92,38 @@ create` fails to resolve the requirements; PyInstaller bundles what the build
 venv has (pyBigWig built from source against the system libcurl), and its
 hooks cover numba, llvmlite, scikit-learn, uvicorn and pywebview.
 
+**The Python runtime** (`FB_PYTHON_RUNTIME`, from 3.1.1): by default the build venv is made from
+python-build-standalone's CPython (astral-sh/python-build-standalone, `install_only`, macOS arm64,
+targets macOS 11), pinned with its sha256 in `third_party.sh` and downloaded once into the build folder
+(`FB_PYTHON_STANDALONE_TARBALL`: a local copy). It was built under the generic prefix `/install` and links
+only macOS's libraries (OpenSSL, sqlite, libffi, bz2, lzma are static; ncurses and libedit are macOS's), so
+the app's `libpython3.12.dylib` names no builder's folder, and Python's default CA file is macOS's
+`/etc/ssl/cert.pem` (a conda Python's points into its prefix, missing on users' Macs). A conda, Homebrew or setup-python Python's libraries carry its install prefix (3.1.0
+shipped six conda libraries carrying the build env's path); `FB_PYTHON_RUNTIME=path` (or `FB_PYTHON`
+alone) still builds from one, but a conda Python then fails the gates below (its pyBigWig links the env's
+libcurl through a run path) unless `FB_ALLOW_PRIVATE_PATHS=1` (development builds). Two build gates keep it that way: before PyInstaller,
+every library in the venv must load only macOS's libraries or the bundle's own (`@rpath`/`@loader_path`,
+never through a run path that exists on the build Mac, as a conda-built pyBigWig's does); after
+PyInstaller, `check_private_paths.py` searches every bundled binary for the builder's home. Release builds
+set no exceptions (`FB_PRIVATE_PATHS_ALLOW` still exists for an explicit, logged release decision). The scan looks
+for the builder's own home and user name. On GitHub Actions it is skipped: the runner's home folder is
+the path upstream wheels were built under, so it would refuse every CI build for strings that are not
+FiberBrowser's. Releases are built locally, where it runs (`FB_PRIVATE_PATHS_ON_CI=1` runs it on CI too). The
+linked-library gate runs everywhere. The app's HTTPS trusts the bundled certifi CA file
+(`fiberbrowser/frozen_entry.py`), never the bundled OpenSSL's compiled-in default; `tests/app_smoke` checks it. pyBigWig is always built from source against the system libcurl, without pip's wheel cache.
+The scan also reads numba's cache files (`.nbi`/`.nbc` record their source path); build_app.sh deletes the ones the
+build venv made before it runs. Before a release, run `tests/app_smoke` in clean-machine mode on a copy of the app outside
+your home folder (`FIBERBROWSER_APP_SMOKE_CLEAN_MACHINE=1 FIBERBROWSER_APP_SMOKE_NETWORK=1`, see
+`tests/app_smoke/conftest.py`): the app's server runs under `sandbox-exec` with your home folder, Homebrew, `/usr/local`,
+the developer tools and `/Applications` hidden, so a feature that only works because the build Mac has something
+(3.0.0-3.1.0's CA file in a conda env) fails there.
+To move to a newer CPython, change `PYTHON_STANDALONE_*` in `third_party.sh` (tag, version, and the
+asset's sha256 from the GitHub release).
+
 Size (3.0.0, arm64): the app is about 480 MB (llvmlite ~120 MB, BLAST+ ~47 MB, SciPy,
 pandas, scikit-learn, botocore, JASPAR 2024 + 2026 databases, the frontend and
-demo), the DMG about 190 MB. A python.org / setup-python build Python is
-smaller than a conda one (conda's sqlite pulls in ICU, ~38 MB).
+demo), the DMG about 190 MB. A python.org / setup-python / python-build-standalone
+build Python is smaller than a conda one (conda's sqlite pulls in ICU, ~38 MB).
 
 Future FiberHMM runner app in the same DMG, sharing this runtime: see the end
 of [macos/SIGNING.md](macos/SIGNING.md).

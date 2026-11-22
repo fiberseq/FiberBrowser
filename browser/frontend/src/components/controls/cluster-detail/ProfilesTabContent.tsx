@@ -5,6 +5,10 @@ import { getClusterLabel } from '../../tracks/ReadTrack';
 import { pickedClusterData, useClusterPicks } from './clusterPicks';
 import { ClusterPickChips } from './ClusterPickChips';
 import { useMemo } from 'react';
+import { useBrowserStore } from '../../../stores/browserStore';
+import { WindowBand } from '../../../features/windowQuant/WindowBand';
+import { AXIS_STRIP_EXPORT_H, AxisStrip, drawAxisStrip, useAxisAnchor } from '../../../features/windowQuant/AxisControls';
+import { QuantifyCard, QuantWindowBar } from '../../../features/windowQuant/QuantifyCard';
 import { PlotSetYScaleControl, usePlotSetYScale } from '../../charts/PlotSetYScaleControl';
 import type { PlotSetMember } from '../../../utils/plotSetYScale';
 import { fullSetLegend } from '../../../utils/plotSetLegend';
@@ -27,6 +31,10 @@ interface ProfilesTabContentProps {
   getDatasetColor: (datasetId: string) => string | undefined;
   /** A layer's name in one dataset view (the accessibility layer reads "FIRE" for a FIRE file). */
   getLayerLabelFor?: (datasetId: string, layerKey: string) => string;
+  /** The view the profiles span (the quantification window is drawn and dragged in it). */
+  view?: { chrom: string; start: number; end: number };
+  /** Data Quantify window's sources read from the panel's hooks (regularity per molecule). */
+  quantExtras?: Record<string, unknown>;
 }
 
 export function ProfilesTabContent({
@@ -41,9 +49,13 @@ export function ProfilesTabContent({
   getDatasetLabel,
   getLayerLabelFor,
   getDatasetColor,
+  view,
+  quantExtras,
 }: ProfilesTabContentProps) {
   // Re-render when the user's layer colours change (Labels → Layer colours).
   useLayerColorVersion();
+  const quantOpen = useBrowserStore(s => s.windowQuant?.openIn === 'cluster');
+  const { frame: axisFrame, anchor: axisAnchor } = useAxisAnchor(view ?? null);
   // Only the picked clusters (picked here, in the read panel or on the map); all when none is.
   const picks = useClusterPicks(datasetIds);
   const shownClusterData = pickedClusterData(visibleClusterData, picks.picked);
@@ -111,6 +123,8 @@ export function ProfilesTabContent({
         sharedHint="The clusters in one chart already share its axis; Shared y lines up the charts of a channel across datasets (across all datasets) or across channels"
         note={note}
       />
+      {view && <QuantWindowBar view={view} origin="cluster" />}
+      {view && quantOpen && <QuantifyCard origin="cluster" width={Math.max(320, chartWidth)} extras={quantExtras} activeLayers={activeLayers} />}
       {datasetIds.map(sk => (
         <div key={sk} className="space-y-2">
           {multiDs && (
@@ -145,6 +159,9 @@ export function ProfilesTabContent({
                   refLine={clusterRefLine(layerKey, yScale)}
                   valueLabel={axisLabel}
                   filename={`cluster_profile_${sk}_${layerKey}`}
+                  overlay={view ? geom => <WindowBand geom={geom} view={view} reversed={isReversed} armed testId="quant-window-band" /> : undefined}
+                  footer={view ? geom => <AxisStrip left={geom.left} width={geom.width} view={view} reversed={isReversed} anchor={axisFrame.mode === 'relative' ? axisAnchor : null} /> : undefined}
+                  exportFooter={view ? { height: AXIS_STRIP_EXPORT_H, draw: (ctx, geom, top) => drawAxisStrip(ctx, geom, top, view, isReversed, axisFrame.mode === 'relative' ? axisAnchor : null) } : undefined}
                 />
               </div>
             );

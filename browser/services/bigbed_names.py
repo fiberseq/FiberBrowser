@@ -28,45 +28,49 @@ JASPAR_API_BASE = "https://jaspar.elixir.no/api/v1"
 _bigbed_names_cache: dict[str, dict] = {}
 
 
-async def fetch_jaspar_api_names(tax_group: str) -> dict | None:
-    """Query JASPAR REST API for all CORE TF names in a taxonomic group."""
-    import httpx
+def _jaspar_get_json(url: str, timeout: float = 15) -> dict:
+    """One JASPAR REST page, with the standard library (the Mac app bundles no httpx; urllib uses the app's CA file)."""
+    import json
+    import urllib.request
+    request = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": "FiberBrowser"})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8"))
 
+
+def _fetch_jaspar_api_names_sync(tax_group: str, get_json=None) -> dict | None:
+    import urllib.parse
+    get_json = get_json or _jaspar_get_json
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            all_results = []
-            page = 1
-            while True:
-                resp = await client.get(
-                    f"{JASPAR_API_BASE}/matrix/",
-                    params={
-                        "format": "json",
-                        "collection": "CORE",
-                        "tax_group": tax_group,
-                        "page_size": 1000,
-                        "page": page,
-                    },
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                all_results.extend(data.get("results", []))
-                if not data.get("next"):
-                    break
-                page += 1
+        all_results = []
+        page = 1
+        while True:
+            query = urllib.parse.urlencode({"format": "json", "collection": "CORE", "tax_group": tax_group,
+                                            "page_size": 1000, "page": page})
+            data = get_json(f"{JASPAR_API_BASE}/matrix/?{query}")
+            all_results.extend(data.get("results", []))
+            if not data.get("next") or page >= 50:
+                break
+            page += 1
 
-            name_to_ma: dict[str, set[str]] = {}
-            for entry in all_results:
-                tf_name = entry.get("name", "")
-                matrix_id = entry.get("matrix_id", "")
-                if tf_name:
-                    name_to_ma.setdefault(tf_name, set())
-                    if matrix_id:
-                        name_to_ma[tf_name].add(matrix_id)
-            names_list = sorted(name_to_ma.keys())
-            ma_map = {tf_name: sorted(mas) for tf_name, mas in name_to_ma.items()}
-            return {"success": True, "names": names_list, "name_to_ma": ma_map}
+        name_to_ma: dict[str, set[str]] = {}
+        for entry in all_results:
+            tf_name = entry.get("name", "")
+            matrix_id = entry.get("matrix_id", "")
+            if tf_name:
+                name_to_ma.setdefault(tf_name, set())
+                if matrix_id:
+                    name_to_ma[tf_name].add(matrix_id)
+        names_list = sorted(name_to_ma.keys())
+        ma_map = {tf_name: sorted(mas) for tf_name, mas in name_to_ma.items()}
+        return {"success": True, "names": names_list, "name_to_ma": ma_map}
     except Exception:
+        # Any failure (offline, an HTTP error, bad JSON) leaves the BigBed sampling fallback to answer.
         return None
+
+
+async def fetch_jaspar_api_names(tax_group: str) -> dict | None:
+    """Query JASPAR REST API for all CORE TF names in a taxonomic group (None when it can't answer)."""
+    return await asyncio.to_thread(_fetch_jaspar_api_names_sync, tax_group)
 
 
 def fetch_bigbed_names_sync(url: str, sample_size: int) -> dict:

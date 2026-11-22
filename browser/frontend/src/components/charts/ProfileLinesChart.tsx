@@ -31,6 +31,9 @@ export interface ProfileLinesChartProps {
   yLabel: string;
   /** Comparison: signed values around 0, filled red above and blue below. */
   signed?: boolean;
+  /** Signed, several series (one per source): each line in its own colour and no red / blue fill (fills of several
+   *  lines would cover each other). */
+  signedLines?: boolean;
   /** y range; null: from the data (signed: symmetric). */
   yRange?: [number, number] | null;
   filename: string;
@@ -139,7 +142,7 @@ export function drawProfileLines(ctx: CanvasRenderingContext2D, w: number, h: nu
     const y0 = yOf(0);
     ctx.strokeStyle = dark ? 'rgba(240,239,236,0.55)' : 'rgba(31,31,30,0.5)';
     ctx.beginPath(); ctx.moveTo(LEFT, y0); ctx.lineTo(LEFT + plotW, y0); ctx.stroke();
-    for (const s of series) {
+    for (const s of p.signedLines ? [] : series) {
       for (let i = 0; i < n; i++) {
         const v = s.values[i];
         if (v == null || !Number.isFinite(v)) continue;
@@ -164,7 +167,7 @@ export function drawProfileLines(ctx: CanvasRenderingContext2D, w: number, h: nu
     ctx.restore();
   }
   for (const s of series) {
-    ctx.strokeStyle = signed ? (dark ? '#f0efec' : '#1f1f1e') : s.color;
+    ctx.strokeStyle = signed && !p.signedLines ? (dark ? '#f0efec' : '#1f1f1e') : s.color;
     ctx.lineWidth = 1.5;
     ctx.setLineDash(s.dash ?? []);
     ctx.beginPath();
@@ -185,7 +188,7 @@ export function ProfileLinesChart(props: ProfileLinesChartProps) {
   const [hover, setHover] = useState<{ x: number; y: number; text: string } | null>(null);
   const drawFn = useCallback((ctx: CanvasRenderingContext2D, w: number, h: number) => drawProfileLines(ctx, w, h, props),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [props.series, props.start, props.binBp, props.title, props.subtitle, props.yLabel, props.signed, props.yRange, props.dark, props.xLabel, props.xTicks, props.xs, props.guides]);
+    [props.series, props.start, props.binBp, props.title, props.subtitle, props.yLabel, props.signed, props.signedLines, props.yRange, props.dark, props.xLabel, props.xTicks, props.xs, props.guides]);
   useEffect(() => {
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext('2d');
@@ -211,7 +214,7 @@ export function ProfileLinesChart(props: ProfileLinesChartProps) {
     return Math.min(n - 1, Math.floor(((x - LEFT) / plotW) * n));
   };
   return (
-    <div className="group relative" data-testid={testId ?? 'profile-lines-chart'}>
+    <div className="group relative" data-testid={testId ?? 'profile-lines-chart'} data-x-label={props.xLabel ?? ''}>
       <canvas ref={canvasRef} style={{ width, height, cursor: props.onPositionClick ? 'pointer' : undefined }}
         onMouseMove={e => {
           const rect = e.currentTarget.getBoundingClientRect();

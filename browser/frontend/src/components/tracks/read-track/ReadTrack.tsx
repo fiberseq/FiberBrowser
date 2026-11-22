@@ -2,6 +2,8 @@ import { effectiveReadLimit, useMetaLocusStore } from '../../../features/metaLoc
 import { MetaReadsPending } from '../../../features/metaLocus/MetaLocusBar';
 import { isMetaChrom } from '../../../features/metaLocus/metaChrom';
 import { accumulateChannels, finishChannels, type ChannelRead } from '../../../features/plots/profileEngine';
+import { layerChannelRead } from '../../../utils/metaprofileReads';
+import { clearProfileReadPool, setProfileReadPool } from '../../../utils/profileReadPool';
 import { useNucPatchLabels } from '../../../utils/nucPatchLabels';
 import { defaultMetaprofileTogglesKey, togglesFromKey } from '../../../utils/defaultMetaprofile';
 import { useNucGeoFocusStore } from '../../../stores/nucGeoFocusStore';
@@ -79,6 +81,9 @@ import { revealSetting } from '../../../utils/revealSetting';
 import { READ_LIMIT_SETTINGS } from '../../controls/sidebar/view/ReadDisplayLimits';
 import { splitReadFilter, useSplitPanelStore } from '../../../stores/splitPanelStore';
 import { clusterViewPayloadLayers } from '../../../utils/clusterViewChannels';
+
+/** The pool of a panel whose view has no profile reads (Quantify a window then reads no value there). */
+const EMPTY_POOL: CompactRead[] = [];
 
 const EMPTY_ANNOTATIONS: Record<string, ReadAnnotation[]> = {};
 const EMPTY_PEAKS: FirePeak[] = [];
@@ -899,36 +904,18 @@ export function ReadTrack({
     const metaprofileNucRules = !!enabledModTypes.nucsz && metaprofileRules.some(ruleHasNucConditions);
     const channelReads: ChannelRead[] = [];
     for (const read of readsForProfile) {
-      const spans: Record<string, Array<[number, number]>> = {};
-      const points: Record<string, number[]> = {};
-      const push = (name: string, a: number, b: number) => { (spans[name] ??= []).push([a, b]); };
-      if (read.methyl?.length) points.mod = read.methyl;
-      if (read.methyl_m6a?.length) points['layer:m6a'] = read.methyl_m6a;
-      if (read.methyl_m5c?.length) points['layer:m5c'] = read.methyl_m5c;
-      if (read.deam?.length) points['layer:deam'] = read.deam.map(([pos]) => pos);
-      let readStart = Infinity, readEnd = -Infinity;
+      // The layers, marks and span (utils/metaprofileReads: shared with Quantify a window), then the rule spans.
+      const cr = layerChannelRead(read);
       const nucIndex = metaprofileNucRules ? nucSizeIndex(read.layers?.nucsz) : null;
       for (const [intervalStart, intervalEnd, size] of read.intervals) {
-        if (intervalStart < readStart) readStart = intervalStart;
-        if (intervalEnd > readEnd) readEnd = intervalEnd;
         if (metaprofileRules.length === 0 || size <= 0 || size < 10) continue;
         const ruleId = getMatchingRuleId(
           intervalStart, intervalEnd, size, metaprofileRules, ruleCtx,
           nucIndex ? nucSizeMarkFor(nucIndex, intervalStart, intervalEnd, size) : null,
         );
-        if (ruleId) push(`rule:${ruleId}`, intervalStart, intervalEnd);
+        if (ruleId) (cr.spans[`rule:${ruleId}`] ??= []).push([intervalStart, intervalEnd]);
       }
-      // Per-layer presence (quality filters were applied when the working set was built).
-      if (read.layers) {
-        for (const [layerName, layer] of Object.entries(read.layers)) {
-          const ivs = layer?.intervals;
-          if (!ivs || ivs.length === 0) continue;
-          const name = `layer:${layerName === 'msp' ? 'fire' : layerName}`;
-          for (const [intStart, intEnd, size] of ivs) if (size > 0) push(name, intStart, intEnd);
-        }
-      }
-      if (read.fire) for (const [fStart, fEnd] of read.fire) push('fire', fStart, fEnd);
-      channelReads.push({ start: readStart < readEnd ? readStart : 0, end: readStart < readEnd ? readEnd : 0, spans, points });
+      channelReads.push(cr);
     }
     const profiles = finishChannels(accumulateChannels(channelReads, resolution, viewWidth, 'touch'));
     const zeros = () => new Array(resolution).fill(0);
@@ -981,6 +968,7 @@ export function ReadTrack({
       // none computed): an empty profile, not the previous view's curve.
       const profile = datasetProfileFromServerMetaprofile(serverMetaprofile)
         ?? { mod: [], fire: [], rules: {}, layers: {} };
+      clearProfileReadPool(stateKey);
       useBrowserStore.getState().setDatasetProfiles((prev) => ({
         ...prev,
         [stateKey]: profile,
@@ -991,6 +979,10 @@ export function ReadTrack({
     if (!profileReads || profileReads.length === 0 || end <= start) {
       cancelScheduledMetaprofile();
       if (DEBUG) console.log(`[META ${datasetId}] SKIP: no reads or invalid viewport`);
+      // Quantify a window reads the curve's pool: an empty view has an empty pool (no value), never the last reads.
+      if (useBrowserStore.getState().readFilterSources?.[stateKey]?.target === 'window-quant') { /* Quantify's own filter: keep its pool */ }
+      else if (end > start) setProfileReadPool(stateKey, { reads: EMPTY_POOL, chrom, start, end, resolution: 500, layers: requestedLayers, marks: needsMethylation });
+      else clearProfileReadPool(stateKey);
       // Replace the previous view's curve with an empty (computed) profile so
       // the track reads "No data" instead of a stale curve or "computing…".
       useBrowserStore.getState().setDatasetProfiles((prev) => ({
@@ -1011,6 +1003,10 @@ export function ReadTrack({
       const ruleCtx = buildRuleMatchContext(genes, peaksForPanelChrom(getAllPeaks(), chrom, useBrowserStore.getState().chrom), orthogonalTracksForRules, start, end, activeColormap.rules, chrom);
 
       const profile = computeMetaprofileFromReads(profileReads, viewWidth, ruleCtx);
+      // A link-back filter from Quantify (window-quant) narrows the curves to some reads; the card keeps its own pool.
+      if (useBrowserStore.getState().readFilterSources?.[stateKey]?.target !== 'window-quant') {
+        setProfileReadPool(stateKey, { reads: profileReads, chrom, start, end, resolution: 500, layers: requestedLayers, marks: needsMethylation });
+      }
 
       useBrowserStore.getState().setDatasetProfiles((prev) => ({
         ...prev,

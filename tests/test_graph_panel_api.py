@@ -284,7 +284,11 @@ def test_lifespan_shutdown_reaps_a_busy_helper(standalone_app, graph_env, packag
         workers = client.get("/api/graph/status").json()["pool"]["workers"]
         pids |= {w["pid"] for w in workers}
         assert "busy" in {w["state"] for w in workers}
-    thread.join(5)
+        # The lifespan's own shutdown step, run on the app's loop while the client is still open, so the waiting
+        # request's answer is delivered (leaving the context first raced the portal's close on Python 3.13).
+        from services.graph_panel.service import shutdown as shutdown_graph_helpers
+        client.portal.call(shutdown_graph_helpers)
+        thread.join(5)
     assert answers == [(503, "shutdown")]
     assert pids and not _started_since(before) and not (pids & set(LIVE_PIDS))
     for pid in pids:

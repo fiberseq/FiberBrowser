@@ -16,9 +16,10 @@ describes the reads you are looking at.
   edge. **P**, **Esc** or **Back to browser** returns to the reads.
 - ⌘K → **Open Plots** or **New plot from current view**.
 - **Open in Plots** in a panel opens the matching plot: the cluster profiles
-  and **Plot these clusters** (Clusters), **Footprint sizes**, a peak rule's
-  card, Read Stats distributions, a saved class's V-plot and the Footprints
-  **Sizes** tab.
+  and **Footprint sizes → Plots** (Clusters), a peak rule's card, Read Stats
+  distributions, a saved class's V-plot and the Footprints **Sizes** tab. The
+  read menu's **Footprint size enrichment here** and ⌘K (*size enrichment*,
+  *V-plot*) open the size plots too.
 
 The reads stay loaded underneath. The band at the top of Plots has the locus
 with Back, Forward, pan and zoom, and a strip of reads: drag the reads to pan,
@@ -73,13 +74,30 @@ centre: covered by a nucleosome-sized footprint, by a TF-sized one, or open.
 
 ![A metaprofile with one line per footprint size band](../images/plots/metaprofile-bands.png)
 
+**Several sources.** A metaprofile can show up to eight sources at once:
+click more **Source** chips. Besides the layers and MA-tag groups, the chips
+list each footprint class from **Find classes** and each NFR family from an
+Accessibility run in view. When there are none, the group is greyed out and
+has a button for the step that makes them. A family's line is the share of
+the reads scored on it that are members, drawn over the family's span. Each
+line takes its source's layer colour. By default each group gets its own
+panel with every source overlaid on a shared y range; **Sources as** and
+**Panel y** change that. m6A is marks per bp, so it is never mixed with the
+other sources.
+
+![A metaprofile of Nuc, TF and a footprint class: one panel per group](../images/plots/multi-source.png)
+
+**x-axis** labels a view metaprofile by distance from an anchor instead of by
+genome position: a gene's start or end, the view centre or a typed position.
+Upstream is negative on either strand. It works with one source or several.
+
 ### Size enrichment and V-plot
 
 Footprint size by position. **Size enrichment** fills every position a
 footprint covers and divides each size row by its mean across the window, so
 colour shows where each size is enriched. **V-plot** counts each footprint once
-at its midpoint. These are the same plots as **Footprint sizes** in the
-Clusters panel ([guide](../guide.md#footprint-size-enrichment-plots)).
+at its midpoint. The Clusters panel's **Footprint sizes → Plots** opens them
+one per cluster ([guide](../guide.md#footprint-size-enrichment-plots)).
 
 ![A V-plot of the NAPA demo](../images/plots/vplot.png)
 
@@ -139,6 +157,10 @@ To browse the reads of many sites together, open the BED as a
 
 Tick **Summary across groups** to reduce each group to one number, drawn as
 bars or a line in panel order (datasets as ordered conditions, or clusters).
+For a metaprofile, **Value** is the mean of the drawn curve over the window
+by default, so each bar equals the curve beside it, smoothing and blank bins
+included. **Pooled** instead divides the window's summed signal by its summed
+coverage, as 3.1.0 did.
 **Window** limits the positions it averages. **Interval**: **Auto** uses a
 seeded bootstrap for means and the exact Wilson interval for a band share;
 **Bootstrap 95%**, **Wilson 95%** or none. Set the number of **Resamples** and
@@ -146,13 +168,27 @@ the **Boot seed**. For BED region sets the bootstrap resamples regions.
 
 ![A metaprofile by cluster with its summary bars and bootstrap intervals](../images/plots/summary-clusters.png)
 
+With several sources, the summary draws grouped bars: one cluster of bars
+per group, one bar per source in its colour, each with its own interval. The
+table and TSV have one block of rows per source.
+
+![Grouped summary bars: one bar per source for each group](../images/plots/summary-bars.png)
+
 With **Compare** on, the box reads **Summary of the comparison**. For
 metaprofiles and size histograms it gives one value per comparison: A − B, or
 log2(A / B), of the two sides' summaries, with a bootstrap interval that
 resamples both sides together. Wilson gives no interval for a difference. For
 size enrichment and V-plots, Summary is off while comparing; turn Compare off
 to summarise each group. A line under the compare picker says what is
-compared and summarised.
+compared and summarised. With several sources, each comparison has one line
+and one summary bar per source.
+
+For size enrichment, **Ratio of** chooses what the log2 ratio compares: the
+two sides' **size shares** (the default) or, for A vs B, their
+**enrichment** as the two plots show it (per size row, per position or
+observed / expected, with Min footprints). Each vs rest and each vs all
+always compare size shares.
+**Size range** sets any range of sizes beside the presets.
 
 ![Compare C0 vs C1 (A − B) with the summary of the comparison](../images/plots/compare-summary.png)
 

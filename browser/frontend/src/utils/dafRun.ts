@@ -79,8 +79,18 @@ export const DEFAULT_OPTIONS: PipelineOptions = {
   prob_threshold: null,
   use_m5c: 'auto',
   cpg_mask_policy: 'unmethylated-only',
+  nuc_recall_policy: 'conservative',
   min_mapq: 0,
 };
+
+/** Chemistries whose nucleosome recall takes a policy (DddA's ignores it, and FiberHMM 3.3 refuses it there). */
+export const NUC_RECALL_ENZYMES: Enzyme[] = ['hia5', 'dddb'];
+export const TOPOLOGY_HELP = 'Topology keeps fragment structure in nucleosome recall; works well on some ONT Hia5 datasets.';
+
+/** The nucleosome recall a run uses: topology only when chosen and the chemistry takes it. */
+export function nucRecallFor(options: Partial<PipelineOptions>, enzyme: Enzyme | ''): 'conservative' | 'topology' {
+  return options.nuc_recall_policy === 'topology' && !!enzyme && NUC_RECALL_ENZYMES.includes(enzyme) ? 'topology' : 'conservative';
+}
 
 /** The MAPQ a new run passes (a draft from before the setting existed: 0). */
 export function runMinMapq(options: Partial<PipelineOptions>): number {
@@ -302,6 +312,7 @@ export function buildRunRequest(state: WizardState): RunRequest {
         : state.options),
       // Always sent, as shown: FiberHMM's own default never decides a new run's MAPQ.
       min_mapq: runMinMapq(state.options),
+      nuc_recall_policy: nucRecallFor(state.options, state.enzyme),
     },
     auto_open: state.autoOpen,
     // The page that starts the run: only it opens the result by itself when the run finishes.
@@ -318,6 +329,7 @@ export function changedOptionLabels(options: PipelineOptions, enzyme: Enzyme | '
     if (options.alignments === 'primary') labels.push('primary alignments only');
     else if (options.alignments === 'all') labels.push('all alignments');
     if (options.prob_threshold !== null) labels.push(`ML threshold ${options.prob_threshold}`);
+    if (nucRecallFor(options, enzyme) === 'topology') labels.push('topology nucleosome recall');
     return labels;
   }
   if (options.dedup !== 'auto') labels.push(`duplicates ${options.dedup}`);
@@ -330,6 +342,7 @@ export function changedOptionLabels(options: PipelineOptions, enzyme: Enzyme | '
   if (options.prob_threshold !== null) labels.push(`ML threshold ${options.prob_threshold}`);
   if (enzyme === 'ddda' && options.use_m5c !== 'auto') labels.push(`CpG-aware recall ${options.use_m5c}`);
   if (enzyme === 'ddda' && options.cpg_mask_policy !== 'unmethylated-only') labels.push(`CpG mask ${options.cpg_mask_policy}`);
+  if (nucRecallFor(options, enzyme) === 'topology') labels.push('topology nucleosome recall');
   return labels;
 }
 

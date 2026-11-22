@@ -319,6 +319,7 @@ import threading
 
 _pool = None
 _pool_size = 0
+_retired: list = []   # pools replaced by a resize (with their internals), still finishing; shut down at the end
 _pool_lock = threading.Lock()
 
 
@@ -344,17 +345,37 @@ def _noop() -> int:
 
 def worker_pool(workers: int):
     """The shared decode pool with ``workers`` processes (created, or recreated at another size, on demand)."""
+    with _pool_lock:
+        return _worker_pool_locked(workers)
+
+
+def _worker_pool_locked(workers: int):
+    """``worker_pool`` with ``_pool_lock`` held by the caller."""
     global _pool, _pool_size
     import multiprocessing
     from concurrent.futures import ProcessPoolExecutor
+    if _pool is None or _pool_size != workers:
+        if _pool is not None:
+            # A resized-away pool may still be finishing chunks: kept (with its processes and queues, which its
+            # own shutdown forgets), so the final shutdown bounds it too. Every submission holds the pool lock
+            # (submit_decode), so no worker is starting while this snapshot is taken.
+            _retired.append(_internals(_pool))
+            _pool.shutdown(wait=False, cancel_futures=True)
+        # Retired pools whose workers and manager have stopped hold nothing worth keeping: let them go.
+        _retired[:] = [e for e in _retired if _still_running(e)]
+        _pool = ProcessPoolExecutor(max_workers=workers, mp_context=multiprocessing.get_context("spawn"),
+                                    initializer=_init_worker)
+        _pool_size = workers
+    return _pool
+
+
+def submit_decode(workers: int, fn, *args):
+    """Submit ``fn(*args)`` to the shared pool of ``workers`` processes. The pool lookup and the submission hold the
+    pool lock together, so a resize or the final shutdown never snapshots a pool while a submission is starting its
+    workers (a snapshot without them would let a stalled worker escape the bounded shutdown), and never hands out a
+    pool that a concurrent resize has already shut down."""
     with _pool_lock:
-        if _pool is None or _pool_size != workers:
-            if _pool is not None:
-                _pool.shutdown(wait=False, cancel_futures=True)
-            _pool = ProcessPoolExecutor(max_workers=workers, mp_context=multiprocessing.get_context("spawn"),
-                                        initializer=_init_worker)
-            _pool_size = workers
-        return _pool
+        return _worker_pool_locked(workers).submit(fn, *args)
 
 
 def warm_workers(workers: Optional[int] = None) -> None:
@@ -362,20 +383,69 @@ def warm_workers(workers: Optional[int] = None) -> None:
     n = workers or default_workers()
     if n <= 1:
         return
-    pool = worker_pool(n)
     for _ in range(n):
-        pool.submit(_noop)
+        submit_decode(n, _noop)
 
 
-def shutdown_workers(wait: bool = False) -> None:
+def _internals(pool) -> dict:
+    """A ProcessPoolExecutor's processes, queues and manager thread, taken before its shutdown() drops them."""
+    return {"pool": pool, "procs": list((getattr(pool, "_processes", None) or {}).values()),
+            "queues": [q for q in (getattr(pool, "_call_queue", None), getattr(pool, "_result_queue", None)) if q is not None],
+            "thread": getattr(pool, "_executor_manager_thread", None) or getattr(pool, "_queue_management_thread", None)}
+
+
+def _still_running(entry: dict) -> bool:
+    thread = entry.get("thread")
+    return any(proc.is_alive() for proc in entry["procs"]) or bool(thread is not None and thread.is_alive())
+
+
+def shutdown_workers(wait: bool = False, timeout: Optional[float] = None) -> None:
     """Close the decode pool; ``wait`` joins its worker processes before returning (tests that check for
-    leftover children rely on this)."""
+    leftover children rely on this). With ``timeout`` the join is bounded: a worker still busy after it (a chunk
+    stalled in BAM I/O at Quit) is terminated, then killed, and reaped, and each pool's queues and manager thread are
+    released, so neither the server's shutdown nor the interpreter's exit hangs. Pools retired by a resize are
+    included."""
     global _pool, _pool_size
     with _pool_lock:
-        pool = _pool
+        current = _internals(_pool) if _pool is not None else None
+        pools = ([current] if current else []) + list(_retired)
         _pool, _pool_size = None, 0
-    if pool is not None:
-        pool.shutdown(wait=wait, cancel_futures=True)
+        _retired.clear()
+    if not pools:
+        return
+    if not wait or timeout is None:
+        for entry in pools:
+            entry["pool"].shutdown(wait=wait, cancel_futures=True)
+        return
+    import time as _time
+    procs = [proc for entry in pools for proc in entry["procs"]]
+    for entry in pools:
+        entry["pool"].shutdown(wait=False, cancel_futures=True)
+    deadline = _time.monotonic() + max(0.0, timeout)
+    for proc in procs:
+        proc.join(max(0.0, deadline - _time.monotonic()))
+    forced = [proc for proc in procs if proc.is_alive()]
+    for proc in forced:
+        proc.terminate()
+    for proc in forced:
+        proc.join(1.0)
+        if proc.is_alive():
+            proc.kill()
+            proc.join(1.0)
+    if forced:
+        for entry in pools:
+            # Payloads still queued for a worker that is gone: close our read ends so a feeder blocked writing gets
+            # a broken pipe, and never wait for the feeders at exit.
+            for q in entry["queues"]:
+                for step in (getattr(q, "cancel_join_thread", None), getattr(getattr(q, "_reader", None), "close", None)):
+                    try:
+                        if step is not None:
+                            step()
+                    except Exception:
+                        pass
+        for entry in pools:
+            if entry["thread"] is not None:
+                entry["thread"].join(2.0)
 
 
 def _decode_chunk(paths, dataset_id, names, site, start, file, voff, sites_payload, loader_options, chrom_map, options,
@@ -417,7 +487,6 @@ def decode_entries_parallel(paths: list, index: DatasetIndex, sites: Sites, entr
     ordered = sorted(entries, key=lambda e: (sites.chrom[int(index.site[e])], int(sites.win_start[int(index.site[e])]), e))
     n_chunks = min(len(ordered), workers * max(1, int(opts["chunks_per_worker"])))
     size = -(-len(ordered) // n_chunks)
-    pool = worker_pool(workers)
     futures = []
     for c in range(0, len(ordered), size):
         chunk = ordered[c:c + size]
@@ -427,8 +496,8 @@ def decode_entries_parallel(paths: list, index: DatasetIndex, sites: Sites, entr
                    "win_end": sites.win_end[local_sites], "anchor": sites.anchor[local_sites],
                    "minus": sites.minus[local_sites], "name": [sites.name[s] for s in local_sites], "flank": sites.flank,
                    "origin": sites.origin[local_sites]}
-        futures.append((chunk, pool.submit(
-            _decode_chunk, list(paths), index.dataset_id, [index.names[index.mol[e]] for e in chunk],
+        futures.append((chunk, submit_decode(
+            workers, _decode_chunk, list(paths), index.dataset_id, [index.names[index.mol[e]] for e in chunk],
             [local[int(index.site[e])] for e in chunk], [int(index.start[index.mol[e]]) for e in chunk],
             [int(index.file[index.mol[e]]) for e in chunk], [int(index.voff[index.mol[e]]) for e in chunk], payload, loader_options,
             chrom_map, {k: v for k, v in opts.items() if k in ("batch_span_bp", "batch_reads", "max_forward")}, signal_filters)))

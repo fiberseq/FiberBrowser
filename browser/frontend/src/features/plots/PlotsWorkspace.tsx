@@ -22,9 +22,7 @@ import {
   type FootprintSizeNormalization, type FootprintSizeSettings,
 } from '../../utils/footprintSizeSettings';
 import { FOOTPRINT_SIZE_COLORMAP_LABELS, FOOTPRINT_SIZE_COLORMAPS, type FootprintSizeColormap } from '../../utils/footprintSizeColormaps';
-import {
-  COLOR_MAX_ENRICH, CommitNumber, POS_BINS, SigmaInput, SIZE_BINS, SIZE_PRESETS,
-} from '../../components/controls/cluster-detail/FootprintSizesView';
+import { COLOR_MAX_ENRICH, CommitNumber, POS_BINS, SIZE_BINS, SIZE_PRESETS } from './sizeControls';
 import { AnalysisSelect } from '../../components/controls/shared';
 import { getCanonicalLayerEntries } from '../../utils/layerColors';
 import { useFollowedTarget } from './follow';
@@ -35,6 +33,7 @@ import { isReadGroupBy, useReadGroups } from './readGroups';
 import { BedPlot, type BedResult } from './BedPlot';
 import { DifferentialPlot, type DifferentialResult } from './DifferentialPlot';
 import { SuppliedPlot } from './SuppliedPlot';
+import { QuantPlot } from '../windowQuant/QuantPlot';
 import { PANEL_PLOTS, latestSuppliedCard, openPanelPlot, openPanelPlotCard } from './panelPlots';
 import { normalizeSummary } from './summary';
 import { compareGroupBlocker, knownGroupCount, summaryBlocker, typeHasCompare, typeHasSummary, useGroupCount } from './compareState';
@@ -45,11 +44,15 @@ import { normalizeBedSettings, type BedSettings, type RegionSet } from './bedReg
 import { fetchJson } from '../../api/sharedFetch';
 import { getClusterColor } from '../../components/tracks/read-track/constants';
 import { MAX_STORED_DIFF_ROWS, packProfile } from './gallery';
-import { atLocus, locusOf, targetKey, usePlotTargets } from './usePlotTargets';
+import { atLocus, liftedLeftOutNotice, locusOf, targetKey, usePlotTargets } from './usePlotTargets';
 import {
   compareAvailable, groupAvailable, whereAvailable, whereBlockedReason, normalizeSampling, bandLabel, COACC_NORMALIZATIONS, normalizeCoaccSettings, type CoaccSettings, DIFF_FEATURES, normalizeDiffSettings, type DiffSettings, isLineType, normalizeHistogramSettings, HISTOGRAM_NORMALIZATIONS, HISTOGRAM_WEIGHTINGS, HISTOGRAM_INCLUSIONS, type HistogramSettings, normalizeHeatmapSettings, type HeatmapSettings, describePlot, followsView, formatLocus, isProfileType, isSizeType, normalizeProfileSettings, PROFILE_NORMALIZATIONS, type ProfileSettings, MARK_SOURCES, MAX_FOLLOW_DELAY_MS, PLOT_COMPARE, PLOT_GROUP_BY, PLOT_TYPES,
   PLOT_WHERE, newPlot, plotDisplayName, plotTypeInfo, withType, type PlotLocus, type PlotSpec, COACC_SIGNAL_LABELS, HEATMAP_SORTS } from './plotModel';
 import { normalizeFollowDelay } from './plotsState';
+import { isMultiSourceType, plotSources, sourceLabel, sourceMixBlocker, toggleSource, withSources } from './plotModel';
+import { useFamilyOptions, type FamilyOption } from './useFamilySources';
+import type { FamilyKind } from '../hub/familySources';
+import { sourceColor } from './multiSource';
 import { keptEntries, replaceEntry, updateEntry, useGalleryStore, workingEntries, workingFor, workingIsKept } from './gallery';
 import { closePlotCard, keepPlotEntry, openEntry, recordResult, undoClosePlot, useGallerySeed } from './galleryActions';
 import { GalleryCard, GalleryView } from './GalleryView';
@@ -131,6 +134,15 @@ function SizeDisplay({ settings, onChange, comparing }: { settings: FootprintSiz
           {presets.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
         </select>
       </Field>
+      <Field label="Size range, bp" title="Any range of footprint sizes in bp, smallest to largest (the presets above set both).">
+        <span className="flex min-w-0 items-center gap-0.5">
+          <CommitNumber value={settings.sizeMin} min={0} ariaLabel="Smallest footprint size, bp" testId="plots-size-min"
+            onCommit={v => onChange({ sizeMin: Math.min(v, Math.max(0, settings.sizeMax - settings.sizeBin)) })} className={FIELD_NUMBER_NARROW} />
+          <span className="text-[11px] text-gray-500">–</span>
+          <CommitNumber value={settings.sizeMax} min={1} ariaLabel="Largest footprint size, bp" testId="plots-size-max"
+            onCommit={v => onChange({ sizeMax: Math.max(v, settings.sizeMin + settings.sizeBin) })} className={FIELD_NUMBER_NARROW} />
+        </span>
+      </Field>
       <Field label="Min footprints" title="Size rows (or positions) drawn from fewer footprints are left blank (hatched).">
         <CommitNumber value={settings.minFootprints} min={0} ariaLabel="Min footprints" testId="plots-min-footprints" onCommit={v => onChange({ minFootprints: v })} className={FIELD_NUMBER} />
       </Field>
@@ -176,11 +188,57 @@ export function Field({ label, title, unit, children, testId }: { label: string;
 }
 const FIELD_SELECT = 'input-tool min-h-0 w-full min-w-0 py-0.5 text-[11px]';
 const FIELD_NUMBER = 'input-tool w-[4.5rem] min-w-0 min-h-0 py-0.5 text-[11px]';
+/** Two numbers on one row (a range) in the builder's width. */
+const FIELD_NUMBER_NARROW = 'input-tool w-[3.75rem] shrink-0 min-h-0 py-0.5 text-[11px]';
+
+/** A view metaprofile's x-axis: genome coordinates, or the distance from an anchor (a gene's TSS or end, the view
+ *  centre, a position; a meta-locus: its site), as the browser's metaprofiles offer (windowQuant/axisFrame). */
+function PlotAxisControl({ plot, onChange }: { plot: PlotSpec; onChange: (axis: import('../windowQuant/axisFrame').AxisFrame | null) => void }) {
+  const genes = useBrowserStore(s => s.genes);
+  const chrom = plot.pinned?.chrom ?? useBrowserStore.getState().chrom;
+  const a = plot.axis;
+  const inView = genes.filter(g => g.chrom === chrom).slice(0, 200);
+  return (
+    <div className="flex flex-col gap-1.5" data-testid="plots-axis">
+      <Field label="x-axis" title="Genome coordinates, or the distance from an anchor (upstream negative on either strand)">
+        <select aria-label="x-axis" data-testid="plots-axis-mode" className={FIELD_SELECT} value={a?.mode === 'relative' ? a.anchor : 'genome'}
+          onChange={e => onChange(e.target.value === 'genome' ? null : { mode: 'relative', anchor: e.target.value as 'tss', gene: a?.gene ?? null, position: a?.position ?? null })}>
+          <option value="genome">genome coordinates</option><option value="tss">from gene start (TSS)</option><option value="gene-end">from gene end</option>
+          <option value="centre">from the view centre</option><option value="position">from a position</option>
+        </select>
+      </Field>
+      {a?.mode === 'relative' && (a.anchor === 'tss' || a.anchor === 'gene-end') && (
+        <Field label="Gene">
+          <select aria-label="Anchor gene" data-testid="plots-axis-gene" className={FIELD_SELECT} value={a.gene ?? ''} onChange={e => onChange({ ...a, gene: e.target.value || null })}>
+            <option value="">nearest in view</option>{inView.map(g => <option key={g.id} value={g.id}>{g.name || g.id} ({g.strand})</option>)}
+          </select>
+        </Field>
+      )}
+      {a?.mode === 'relative' && a.anchor === 'position' && (
+        <Field label="Position"><CommitNumber value={a.position ?? 0} min={0} ariaLabel="Anchor position" testId="plots-axis-position" onCommit={v => onChange({ ...a, position: v })} className={FIELD_NUMBER} /></Field>
+      )}
+    </div>
+  );
+}
 
 /** The metaprofile's settings (the builder's Display section). */
-function ProfileDisplay({ settings, onChange }: { settings: ProfileSettings; onChange: (patch: Partial<ProfileSettings>) => void }) {
+function ProfileDisplay({ settings, onChange, multiSource = false }: { settings: ProfileSettings; onChange: (patch: Partial<ProfileSettings>) => void; multiSource?: boolean }) {
   return (
     <div className="flex flex-col gap-1.5" data-testid="plots-profile-display">
+      {multiSource && (<>
+        <Field label="Sources as" testId="plots-profile-multi-layout" title="Several sources: one panel per group with every source overlaid (Auto, Panels), or one chart with every line (groups told apart by dash)">
+          <select aria-label="Sources as" className={FIELD_SELECT} value={settings.multiLayout} onChange={e => onChange({ multiLayout: e.target.value as ProfileSettings['multiLayout'] })}>
+            <option value="auto">Auto</option><option value="panels">Panel per group</option><option value="overlay">One chart</option>
+          </select>
+        </Field>
+        {settings.multiLayout !== 'overlay' && (
+          <Field label="Panel y" testId="plots-profile-multi-y" title="One y range across the panels (compare heights between groups), or each panel its own">
+            <select aria-label="Panel y" className={FIELD_SELECT} value={settings.multiYScale} onChange={e => onChange({ multiYScale: e.target.value as ProfileSettings['multiYScale'] })}>
+              <option value="shared">Shared</option><option value="own">Each its own</option>
+            </select>
+          </Field>
+        )}
+      </>)}
       <Field label="Signal" title={PROFILE_NORMALIZATIONS.map(n => `${n.label}: ${n.help}`).join('\n')}>
         <select aria-label="Signal" className={FIELD_SELECT} value={settings.normalization} onChange={e => onChange({ normalization: e.target.value as ProfileSettings['normalization'] })}>
           {PROFILE_NORMALIZATIONS.map(n => <option key={n.value} value={n.value}>{n.label}</option>)}
@@ -527,6 +585,76 @@ function DiffDisplay({ settings, onChange }: { settings: DiffSettings; onChange:
   );
 }
 
+/** One family kind's chips (several sources): the families in view, a step button when there are none, collapsed
+ *  past `collapseAt` (a parameter: Find classes can give dozens). */
+function FamilyChips({ plot, kind, options, selected, blocked, onToggle, collapseAt = 6 }: {
+  plot: PlotSpec; kind: FamilyKind; options: FamilyOption[]; selected: string[]; blocked: string | null; onToggle: (id: string, label: string) => void; collapseAt?: number;
+}) {
+  const [all, setAll] = useState(false);
+  const shown = all ? options : options.slice(0, collapseAt);
+  return (
+    <div className="flex flex-wrap items-center gap-1" data-testid={`plots-source-family-${kind.source}`} data-count={options.length}>
+      <span className="basis-full text-[10px] font-medium text-gray-500 dark:text-gray-400">{kind.label}</span>
+      {blocked ? (
+        <Pill value={kind.source} on={false} disabled testId={`plots-source-family-blocked-${kind.source}`} title={blocked} onClick={() => undefined}>{kind.label}</Pill>
+      ) : !options.length ? (<>
+        <Pill value={kind.source} on={false} disabled testId={`plots-source-family-empty-${kind.source}`} title={kind.empty.reason} onClick={() => undefined}>{kind.label}</Pill>
+        {kind.empty.prereq && <PrereqButton kind={kind.empty.prereq} done={options.length > 0} testId={`plots-source-family-step-${kind.source}`} />}
+      </>) : shown.map(o => (
+        <Pill key={o.id} value={o.id} on={selected.includes(o.id)} testId={`plots-source-family-chip`} title={`${kind.label}: ${o.label} (${o.hit.chrom}:${(o.hit.start + 1).toLocaleString('en-US')}–${o.hit.end.toLocaleString('en-US')}): the share of the reads scored on it that are members, over its span`}
+          onClick={() => onToggle(o.id, o.label)}>
+          <span aria-hidden="true" className="h-2 w-2 rounded-sm" style={{ backgroundColor: sourceColor(o.id) }} />{o.label}
+        </Pill>
+      ))}
+      {!blocked && options.length > collapseAt && (
+        <button type="button" className="text-[10px] text-amber-800 underline dark:text-amber-300" data-testid={`plots-source-family-more-${kind.source}`} onClick={() => setAll(a => !a)}>
+          {all ? 'fewer' : `+${options.length - collapseAt} more`}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** The Source chips: several for the multi-source types (one line per source per group), one otherwise. Layers (the
+ *  Layers toolbar's, custom MA-tag groups included), then the feature families in view (metaprofile, Current view). */
+function SourceSection({ plot, layerOptions }: { plot: PlotSpec; layerOptions: Array<{ value: string; label: string; title: string; color: string; disabled: boolean }> }) {
+  const update = useBrowserStore(s => s.updateCurrentPlot);
+  const vChrom = useBrowserStore(s => s.chrom), vStart = useBrowserStore(s => s.start), vEnd = useBrowserStore(s => s.end);
+  const multi = isMultiSourceType(plot.type);
+  const selected = plotSources(plot);
+  const view = plot.pinned ?? (vChrom ? { chrom: vChrom, start: vStart, end: vEnd } : null);
+  const families = useFamilyOptions(multi ? view : null);
+  const famBlocked = plot.where === 'bed' ? 'A family is one locus: BED region sets pool regions across the genome. Use Current view.'
+    : plot.where === 'features' ? 'A family is one locus: selected features pool windows across the genome. Use Current view.' : null;
+  const toggle = (id: string, label?: string) => update(p => withSources(p, toggleSource(p.type, plotSources(p), id), label ? { [id]: label } : {}));
+  return (
+    <Section title="Source" hint={multi ? `pick several · ${selected.length} selected` : 'as in the Layers toolbar'} testId="plots-source">
+      {layerOptions.map(o => {
+        const mix = multi ? sourceMixBlocker(selected, o.value) : null;
+        return (
+          <Pill key={o.value} value={o.value} on={selected.includes(o.value)} disabled={o.disabled} testId={`plots-source-${o.value}`}
+            title={mix ? `${o.title}\n${mix}` : multi ? `${o.title}\nClick to add or remove (one line per source per group).` : o.title}
+            onClick={() => toggle(o.value)}>
+            {o.value === ALL_FOOTPRINTS
+              ? <span aria-hidden="true" className="inline-flex"><span className="h-2 w-1 rounded-l-sm" style={{ backgroundColor: getLayerColor('nuc') }} /><span className="h-2 w-1 rounded-r-sm" style={{ backgroundColor: getLayerColor('tf') }} /></span>
+              : <span aria-hidden="true" className="h-2 w-2 rounded-sm" style={{ backgroundColor: o.color }} />}
+            {o.label}
+          </Pill>
+        );
+      })}
+      {multi && families.map(({ kind, options }) => (
+        <FamilyChips key={kind.source} plot={plot} kind={kind} options={options} selected={selected} blocked={famBlocked} onToggle={toggle} />
+      ))}
+      {/* Selected families not in this view stay listed (so they can be cleared), marked. */}
+      {multi && selected.filter(id => id.startsWith('fam:') && !families.some(f => f.options.some(o => o.id === id))).map(id => (
+        <Pill key={id} value={id} on testId="plots-source-family-gone" title="Not in this view: not drawn here. Click to remove it." onClick={() => toggle(id)}>
+          {sourceLabel(id, plot.sourceLabels)} <span className="text-[9px]">(not in view)</span>
+        </Pill>
+      ))}
+    </Section>
+  );
+}
+
 export function Builder({ plot, clustersLocus }: { plot: PlotSpec; clustersLocus: PlotLocus | null }) {
   const update = useBrowserStore(s => s.updateCurrentPlot);
   const datasets = useBrowserStore(s => s.datasets);
@@ -544,13 +672,24 @@ export function Builder({ plot, clustersLocus }: { plot: PlotSpec; clustersLocus
   useEffect(() => { if (changed) setMore(true); }, [changed]);
   const sources = useMemo(() => {
     const opts = footprintSizeLayerOptions(datasets, plot.source);
+    // Several sources: the selected ones stay listed even when no dataset has them.
+    for (const src of plotSources(plot)) if (!src.startsWith('fam:') && !opts.some(o => o.value === src) && !MARK_SOURCES.has(src)) opts.push(...footprintSizeLayerOptions(datasets, src).filter(o => o.value === src));
     // Mark layers (m6A): a profile of marks per read per bp; no footprint sizes for the size types.
     const profile = isProfileType(plot.type);
     const marks = getCanonicalLayerEntries(datasets).filter(e => MARK_SOURCES.has(e.key))
       .map(e => ({ value: profile ? 'm6a' : e.key, label: e.label, title: profile ? `${e.label}: marks per read per bp` : `${e.label}: single bases, no footprint sizes`, color: e.color ?? getLayerColor(e.key), disabled: !profile }));
     return [...opts.map(o => ({ ...o, disabled: false })), ...marks];
-  }, [datasets, plot.source, plot.type, layerColorVersion]);
+  }, [datasets, plot.source, plot.sources, plot.type, layerColorVersion]);
   const hidden = PLOT_WHERE.find(w => w.value === plot.where)?.label ?? '';
+  if (plot.supplied?.quant) {
+    const q = plot.supplied.quant;
+    return (
+      <div className="flex flex-col gap-2 text-[11px] text-gray-700 dark:text-gray-200" data-testid="plots-builder">
+        <p data-testid="plots-quant-builder"><b>Quantify window</b> from {plot.supplied.origin}: {q.bounds.chrom}:{q.bounds.from.toLocaleString('en-US')}–{q.bounds.to.toLocaleString('en-US')} ({q.bounds.kind}), across {q.spec.comparison}, {q.spec.value === 'enrichment' ? `enrichment (${q.spec.form}, baseline ${q.spec.baseline})` : 'raw values'}{q.spec.compare !== 'off' ? `, ${q.spec.compare} vs reference` : ''}; {q.spec.resamples.toLocaleString('en-US')} bootstrap resamples, seed {q.spec.bootSeed ?? q.spec.seed}.</p>
+        <p className="text-gray-500 dark:text-gray-400">The numbers are kept as computed; re-run Quantify in its panel to recompute.</p>
+      </div>
+    );
+  }
   if (plot.supplied) {
     const sup = plot.supplied;
     return (
@@ -607,17 +746,7 @@ export function Builder({ plot, clustersLocus }: { plot: PlotSpec; clustersLocus
           ))}
         </Section>
       ) : plot.type === 'co-accessibility' ? null : (
-      <Section title="Source" hint="as in the Layers toolbar" testId="plots-source">
-        {sources.map(o => (
-          <Pill key={o.value} value={o.value} on={plot.source === o.value} disabled={o.disabled} testId={`plots-source-${o.value}`} title={o.title}
-            onClick={() => update({ source: o.value })}>
-            {o.value === ALL_FOOTPRINTS
-              ? <span aria-hidden="true" className="inline-flex"><span className="h-2 w-1 rounded-l-sm" style={{ backgroundColor: getLayerColor('nuc') }} /><span className="h-2 w-1 rounded-r-sm" style={{ backgroundColor: getLayerColor('tf') }} /></span>
-              : <span aria-hidden="true" className="h-2 w-2 rounded-sm" style={{ backgroundColor: o.color }} />}
-            {o.label}
-          </Pill>
-        ))}
-      </Section>
+      <SourceSection plot={plot} layerOptions={sources} />
       )}
       <Section title="Group by" testId="plots-group">
         {PLOT_GROUP_BY.map(g => {
@@ -694,6 +823,14 @@ export function Builder({ plot, clustersLocus }: { plot: PlotSpec; clustersLocus
                     onBlur={e => update(p => ({ ...p, summary: normalizeSummary({ ...p.summary, to: e.target.value.trim() === '' ? null : Number(e.target.value.replace(/,/g, '')) }) }))} />
                 </Field>
               )}
+              {plot.type === 'metaprofile' && (
+                <Field label="Value" title="Curve: the mean of the drawn curve over the window (smoothing and blank bins as drawn), so each bar equals the curve beside it. Pooled: Σ signal / Σ coverage over the window, as 3.1.0 summarised.">
+                  <select aria-label="Summary value" data-testid="plots-summary-statistic" value={plot.summary.statistic} className={FIELD_SELECT}
+                    onChange={e => update(p => ({ ...p, summary: normalizeSummary({ ...p.summary, statistic: e.target.value }) }))}>
+                    <option value="curve">curve mean</option><option value="pooled">pooled (Σ signal / Σ coverage)</option>
+                  </select>
+                </Field>
+              )}
               {plot.type !== 'metaprofile' && (<>
                 <Field label="Band from" unit="bp" title="Size band (bp)">
                   <CommitNumber value={plot.summary.sizeFrom} min={0} ariaLabel="Summary sizes from" testId="plots-summary-size-from" onCommit={v => update(p => ({ ...p, summary: normalizeSummary({ ...p.summary, sizeFrom: v }) }))} className={FIELD_NUMBER} />
@@ -737,7 +874,7 @@ export function Builder({ plot, clustersLocus }: { plot: PlotSpec; clustersLocus
         <div className="-mt-1 flex flex-wrap items-center gap-1 text-[10px] text-gray-500">Cluster needs a clustering of these reads. <PrereqButton kind="cluster" /></div>
       )}
       <div className="border-t border-line/70 pt-2 dark:border-white/10">
-        <button type="button" aria-expanded={more} data-testid="plots-more-options" onClick={() => setMore(m => !m)}
+        <button type="button" aria-expanded={more} data-testid="plots-more-options" data-plot-type={plot.type} onClick={() => setMore(m => !m)}
           className="flex w-full items-center gap-1 text-left text-[11px] font-semibold uppercase tracking-wide text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-100">
           <span aria-hidden="true">{more ? '▾' : '▸'}</span> More options
           {!more && <span className="ml-1 truncate font-normal normal-case tracking-normal text-gray-400">{hidden}</span>}
@@ -799,13 +936,22 @@ export function Builder({ plot, clustersLocus }: { plot: PlotSpec; clustersLocus
           {isProfileType(plot.type) && (
             <section className="space-y-1">
               <h3 className="text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">Display</h3>
-              <ProfileDisplay settings={plot.profile} onChange={patch => update(p => ({ ...p, profile: normalizeProfileSettings({ ...p.profile, ...patch }) }))} />
+              <ProfileDisplay settings={plot.profile} multiSource={plotSources(plot).length > 1} onChange={patch => update(p => ({ ...p, profile: normalizeProfileSettings({ ...p.profile, ...patch }) }))} />
+              {plot.type === 'metaprofile' && plot.where === 'view' && <PlotAxisControl plot={plot} onChange={axis => update(p => { const { axis: _a, ...rest } = p; return axis ? { ...rest, axis } : rest; })} />}
             </section>
           )}
           {isSizeType(plot.type) && (
             <section className="space-y-1">
               <h3 className="text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">Display</h3>
               <SizeDisplay settings={plot.size} comparing={plot.compare === 'log2ratio' || plot.compare === 'diff'} onChange={patch => update(p => ({ ...p, size: normalizeFootprintSizeSettings({ ...p.size, ...patch }) }))} />
+              {plot.compare === 'log2ratio' && isEnrichment(plot.size.normalization) && (
+                <Field label="Ratio of" title="Size shares: each side's footprints as shares of its own total (the default). Enrichment (A vs B only): the two plots as normalised (per size row, per position or obs / expected, with Min footprints), then their ratio. Each vs rest and each vs all sum counts, so they compare size shares.">
+                  <select aria-label="Ratio of" data-testid="plots-size-compare-on" className={FIELD_SELECT} value={plot.sizeCompareOn ?? 'shares'}
+                    onChange={e => update(p => { const { sizeCompareOn: _drop, ...rest } = p; return e.target.value === 'enrichment' ? { ...rest, sizeCompareOn: 'enrichment' } : rest; })}>
+                    <option value="shares">size shares</option><option value="enrichment">enrichment (A vs B)</option>
+                  </select>
+                </Field>
+              )}
             </section>
           )}
         </div>
@@ -879,7 +1025,7 @@ export function PlotsWorkspace() {
   const sampleSeed = useBrowserStore(s => s.analysisSampleSeed);
   const datasets = useBrowserStore(s => s.datasets);
   const settingsKey = useAnalysisSettingsKey();
-  const targets = usePlotTargets();
+  const targets = usePlotTargets(plot.panel ?? null);
   const seed = useGallerySeed(s => s.seed);
   const tab = useWorkspaceStore(st => st.plotsTab);
   const setTab = setPlotsTab;
@@ -1093,8 +1239,15 @@ export function PlotsWorkspace() {
             <div className="mb-2 text-[11px] text-gray-500 dark:text-gray-400">
               {plotTypeInfo(plot.type).help} {following ? 'Follows the browser: recomputes ' + delayMs + ' ms after you stop moving.' : plot.where === 'features' ? 'Pinned to the selected features (moving the view leaves it).' : plot.where === 'bed' ? 'Pinned to its BED region sets (moving the view leaves it).' : `Pinned to ${formatLocus(plot.pinned)}.`}
             </div>
+            {!plot.supplied && (targets.liftedLeftOut?.length ?? 0) > 0 && (
+              <div className="mb-2 text-[11px] text-amber-700 dark:text-amber-300" role="status" data-testid="plots-lifted-left-out">
+                {liftedLeftOutNotice(targets.liftedLeftOut)}
+              </div>
+            )}
             {plot.where === 'random' && plot.type === 'size-histogram' && !plot.supplied ? (
               <RandomReadsPlot plot={plot} target={target} width={Math.max(320, width - 24)} settingsKey={settingsKey} seed={seeded ? profileSeed : null} onResult={onProfileResult} />
+            ) : plot.supplied?.quant ? (
+              <QuantPlot plot={plot} data={seeded ? suppliedSeed : null} width={Math.max(320, width - 24)} />
             ) : plot.supplied ? (
               <SuppliedPlot plot={plot} data={seeded ? suppliedSeed : null} width={Math.max(320, width - 24)} onCompare={patch => update(patch)} />
             ) : plot.where === 'bed' && isSizeType(plot.type) ? (

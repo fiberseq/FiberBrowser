@@ -3,7 +3,8 @@
 
     python packaging/check_private_paths.py [--forbid TEXT ...] PATH [PATH ...]
 
-Every native binary under each PATH (Mach-O, ELF or PE, found by magic bytes, also inside .whl/.zip archives) is
+Every native binary under each PATH (Mach-O, ELF or PE, found by magic bytes, also inside .whl/.zip archives), and
+every numba cache file (.nbi/.nbc, which record their source path), is
 searched for the builder's home: the current ``$HOME`` and ``/Users/<user>`` / ``/home/<user>`` of the current user,
 plus every ``--forbid`` string (``--any-home``: any ``/Users/<name>/`` or ``/home/<name>/``, which also flags the CI
 paths of upstream wheels). Compilers embed source paths (Rust panics carry ~/.cargo paths, for
@@ -34,8 +35,19 @@ HOME_PATTERNS = (
 )
 
 
+# Compiled caches that are not native binaries but record the absolute source path they were compiled from: numba's
+# on-disk cache index and objects (pickles). A build that imports a package with cache=True kernels (pynndescent,
+# under UMAP) writes them into the build venv, and PyInstaller then copied them into the app (3.0.x-3.1.0).
+CACHE_SUFFIXES = (".nbi", ".nbc")
+
+
 def is_binary(head: bytes) -> bool:
     return any(head.startswith(m) for m in MAGICS)
+
+
+def searched(name: str, head: bytes) -> bool:
+    """Native binaries (by magic bytes) and compiled caches (by suffix) are searched; text is not."""
+    return is_binary(head) or name.lower().endswith(CACHE_SUFFIXES)
 
 
 def patterns(forbid: list[str], any_home: bool = False) -> list[re.Pattern]:
@@ -68,7 +80,7 @@ def scan_archive(name: str, data: bytes, pats: list[re.Pattern]) -> list[tuple[s
             if info.is_dir():
                 continue
             member = zf.read(info)
-            if is_binary(member[:4]):
+            if searched(info.filename, member[:4]):
                 found = hits_in(member, pats)
                 if found:
                     out.append((f"{name}!{info.filename}", found))
@@ -90,7 +102,7 @@ def scan(paths: list[Path], pats: list[re.Pattern], allow: tuple[str, ...] = ())
                         fh.seek(0)
                         out += scan_archive(str(f), fh.read(), pats)
                         continue
-                    if not is_binary(head):
+                    if not searched(f.name, head):
                         continue
                     fh.seek(0)
                     found = hits_in(fh.read(), pats)

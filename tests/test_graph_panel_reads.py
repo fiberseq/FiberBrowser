@@ -1012,6 +1012,38 @@ def test_reads_follow_the_workspace_read_settings_and_quality_filters(env):
         {k: v for k, v in analysis._loader_options(st).items() if k not in ("min_footprints",) + policy}
 
 
+def test_reads_follow_the_legacy_nuc_size_and_the_read_end_cutoff(env):
+    """3.1.1: the graph reads honour the legacy nucleosome minimum and the read-end footprint cutoff, not only the
+    inference switch (the browser reloads graph rows once the server confirms either, useReadSettingsSync)."""
+    did = _add_lifted(env)
+    st = env.state
+    paths = [{"binding": "mat", "windows": [{"start": 0, "end": 4700}]}]
+    assert _by_q(_reads(env, [did], paths).json())["legacy"][0]["nuc"]["iv"] == [[1100, 1300, 200], [1800, 2000, 200]]
+    st.legacy_nuc_min_size = 250     # the legacy record's 200 bp footprints are no longer nucleosomes
+    try:
+        assert not (_by_q(_reads(env, [did], paths).json())["legacy"][0].get("nuc") or {}).get("iv")
+    finally:
+        st.legacy_nuc_min_size = 90
+    # A 40 bp footprint cut off at the read start: dropped while the cutoff is on, kept when it is off.
+    edge = write_bam(env.tmp / "edge.bam", lambda h: [
+        make_record(h, "edge", MAT, 1000, "1000M", tags=[("ns", _u32([0, 400])), ("nl", _u32([40, 200]))])])
+    eid = _add_lifted(env, paths=[edge], dataset_id="edge")
+    edge_paths = [{"binding": "mat", "windows": [{"start": 0, "end": 3000}]}]
+
+    def starts():
+        (rec,) = _by_q(_reads(env, [eid], edge_paths).json())["edge"]
+        return sorted(iv[0] for layer in ("nuc", "tf") for iv in (rec.get(layer) or {}).get("iv", []))
+
+    assert st.set_short_terminal_footprints(True) is False      # the default: on
+    on = starts()
+    st.set_short_terminal_footprints(False)
+    try:
+        off = starts()
+    finally:
+        st.set_short_terminal_footprints(True)
+    assert 1000 not in on and 1000 in off and set(on) < set(off)
+
+
 def test_duplicate_and_qcfail_records_follow_the_toggles(env):
     # 3.1.0 audit: graph reads dropped duplicate and QC-fail records whatever the read track's toggles said.
     # They follow the request's include_duplicates / include_qcfail (default hidden), each its own cache entry.

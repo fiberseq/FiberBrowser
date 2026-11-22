@@ -47,11 +47,8 @@ import { useReadActionsStore } from '../../stores/readActionsStore';
 import { currentMergeSettings, describeMergeSettings, type MergeStrategy } from '../../utils/mergeStrategies';
 import { clusteringBeforeMerge, recordAppliedMerge } from '../../utils/clusterMergeActions';
 import { SavedClustersTab } from './cluster-detail/SavedClustersTab';
-import { FootprintSizesView, type FootprintSizesTarget } from './cluster-detail/FootprintSizesView';
-import { useFootprintSizesInvokedFrom } from '../../utils/footprintSizeEntry';
-import { FOOTPRINT_SIZE_VIEW_HELP, withView } from '../../utils/footprintSizeSettings';
+import { openFootprintSizes } from '../../utils/footprintSizeEntry';
 import { openPlots } from '../../features/plots/workspace';
-import { viewLocusLabel } from '../../utils/panelScope';
 import { ClusterBranchMap, hasClusterBranches } from './cluster-detail/ClusterBranchMap';
 import { clusterOperationRounds } from './cluster-detail/clusterOperationRounds';
 import { chartRoundStillCurrent, clusterChartScope, clusterChartScopeNote, clusterMergeInputs, clusterMergePeaks, scopedClusters } from './cluster-detail/clusterChartScope';
@@ -94,9 +91,12 @@ import { useLayerColorVersion } from '../../features/layerColours/state';
 const CLUSTER_DETAIL_TAB_STORAGE_KEY = 'fiberbrowser_cluster_detail_tab';
 // 'projection' is not a tab of its own: the read map is part of Overview (fb-n5-projection);
 // asking for it (deep links, the tour, older remembered tabs) opens Overview with the map.
-const CLUSTER_DETAIL_TABS = ['overview', 'profiles', 'composition', 'vplot', 'enrichment', 'projection', 'saved'] as const;
+const CLUSTER_DETAIL_TABS = ['overview', 'profiles', 'composition', 'enrichment', 'projection', 'saved'] as const;
 /** The tabs shown as sub-tabs of Charts. */
-const CHART_TABS = new Set<string>(['profiles', 'composition', 'vplot', 'enrichment']);
+const CHART_TABS = new Set<string>(['profiles', 'composition', 'enrichment']);
+/** Retired tabs a request may still name: the Footprint sizes tab ('vplot', 3.1.1) moved to Plots, so it opens Overview
+ *  (where "Footprint sizes → Plots" sits). */
+const RETIRED_TAB_ALIASES: Readonly<Record<string, 'overview'>> = { vplot: 'overview' };
 const OVERVIEW_MODE_LABELS: Record<OverviewMode, string> = { profiles: 'Profiles', both: 'Profiles + map', map: 'Map' };
 const EMPTY_TRACK_DATA: Record<number, OrthogonalTrackViewportData> = {};
 type ClusterDetailTab = typeof CLUSTER_DETAIL_TABS[number];
@@ -105,16 +105,34 @@ function normalizeClusterDetailTab(
   tab: string | null | undefined,
   fallback: ClusterDetailTab = 'overview',
 ): ClusterDetailTab {
-  return normalizeRequestedTab(tab, CLUSTER_DETAIL_TABS, fallback);
+  return normalizeRequestedTab(tab, CLUSTER_DETAIL_TABS, fallback, RETIRED_TAB_ALIASES);
 }
 
 function consumeRequestedClusterDetailTab(): ClusterDetailTab {
-  return consumeRequestedTab(CLUSTER_DETAIL_TAB_STORAGE_KEY, CLUSTER_DETAIL_TABS, 'overview');
+  return consumeRequestedTab(CLUSTER_DETAIL_TAB_STORAGE_KEY, CLUSTER_DETAIL_TABS, 'overview', { aliases: RETIRED_TAB_ALIASES });
 }
 
 /** Dataset layers that aren't per-position calls (no layer share): modification marks, scalars, regularity tiles. */
 const MAP_NON_CALL_LAYERS: ReadonlySet<string> = new Set(['m6a', 'm5c', 'deam', 'deam_opportunity', 'mod', 'fire', 'nucsz',
   'nucseg', 'nucreg', 'nucpatch', 'nucmol', 'nfrmol']);
+
+/**
+ * Footprint sizes → Plots: the one way from the Clusters panel to the footprint size plots (the panel's own
+ * Footprint sizes tab and size buttons were retired in 3.1.1). Size enrichment, one plot per cluster when there are
+ * clusters (pinned to the clustered locus), else one per dataset from all reads in view.
+ */
+function SizesInPlotsButton({ clustered, clusterLocus }: { clustered: boolean; clusterLocus?: { chrom: string; start: number; end: number; genome: string | null } }) {
+  return (
+    <button type="button" data-testid="cluster-detail-sizes-in-plots"
+      className="inline-flex items-center gap-1 rounded border border-cyan-200 bg-white px-1.5 py-0.5 text-[11px] font-medium text-cyan-800 hover:bg-cyan-50 dark:border-cyan-900/60 dark:bg-transparent dark:text-cyan-200 dark:hover:bg-cyan-950/40"
+      title={clustered
+        ? 'Footprint sizes in Plots: Size enrichment (or V-plot) with one plot per cluster, pinned to this locus, on a shared scale.'
+        : 'Footprint sizes in Plots: Size enrichment (or V-plot) with one plot per dataset from every read in view. No clustering needed.'}
+      onClick={() => openFootprintSizes(clustered ? { view: 'enrichment', clusterLocus: clusterLocus ?? null } : { view: 'enrichment', byDataset: true })}>
+      Footprint sizes <span aria-hidden="true">→</span> Plots
+    </button>
+  );
+}
 
 export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
   // Re-render when the user's layer colours change (Labels → Layer colours).
@@ -903,29 +921,6 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
     () => scopedClusters(mapKeys, { clusterAssignments, clusterOrder, clusterFocus, selectedClusters }),
     [mapKeys, clusterAssignments, clusterOrder, clusterFocus, selectedClusters],
   );
-  const vplotScope = useMemo(
-    () => scopedClusters(analysisKeys, { clusterAssignments, clusterOrder, clusterFocus, selectedClusters }),
-    [analysisKeys, clusterAssignments, clusterOrder, clusterFocus, selectedClusters],
-  );
-  // Footprint sizes from all reads (no clustering needed): the panels in focus showing one view (the panel a
-  // read-menu "here" came from, else the active one); clusters, when there are, as the other grouping.
-  const footprintInvokedFrom = useFootprintSizesInvokedFrom(s => s.panelId);
-  const settingsGroupByClusters = useBrowserStore(s => s.footprintSizeSettings.groupBy === 'clusters');
-  const allReadsScope = useMemo(() => {
-    const sc = clusterChartScope(scopeState, targetStateKeys, footprintInvokedFrom);
-    return {
-      view: sc.view,
-      keys: sc.keys,
-      note: sc.leftOut > 0 ? `${sc.leftOut} panel${sc.leftOut === 1 ? '' : 's'} showing another locus or reference ${sc.leftOut === 1 ? 'is' : 'are'} left out (the plots show ${viewLocusLabel(sc.view)}).` : null,
-    };
-  }, [scopeState, targetStateKeys, footprintInvokedFrom]);
-  const footprintPanel = useCallback((key: string) => ({
-    key, datasetId: stateKeyToDs[key] || key, label: keyLabel(key) ?? key, datasetLabel: getDsForKey(key)?.label, color: keyColor(key),
-  }), [stateKeyToDs, keyLabel, keyColor, getDsForKey]);
-  const allReadsTarget: FootprintSizesTarget = useMemo(() => ({
-    chrom: allReadsScope.view.chrom, start: allReadsScope.view.start, end: allReadsScope.view.end,
-    genome: allReadsScope.view.genome ?? null, panels: allReadsScope.keys.map(footprintPanel),
-  }), [allReadsScope, footprintPanel]);
   const differencesScope = useMemo(
     () => scopedClusters(enrichmentCohorts.keys, { clusterAssignments, clusterOrder, clusterFocus, selectedClusters }),
     [enrichmentCohorts.keys, clusterAssignments, clusterOrder, clusterFocus, selectedClusters],
@@ -1045,8 +1040,11 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
     ? Object.fromEntries(shownProfileKeys.map(k => [k, true])) : defaultProfileToggles), [customChannels, shownProfileKeys, defaultProfileToggles]);
   const profilesOnShow = activeTab === 'profiles' || (activeTab === 'overview' && overviewShown !== 'map');
   const mapColorBy = clusterViewSettings.mapColorBy;
+  // Quantify window's "Compute regularity" step asks for it too (the same request, on demand).
+  const [quantWantsRegularity, setQuantWantsRegularity] = useState(false);
+  const quantPicksRegularity = useBrowserStore(s => (s.windowQuant?.spec.measures ?? []).includes('nuc:regularity') && s.windowQuant?.openIn === 'cluster');
   const wantsRegularity = (profilesOnShow && shownProfileKeys.some(isRegularityChannel))
-    || (mapVisible && isRegularityColor(mapColorBy));
+    || (mapVisible && isRegularityColor(mapColorBy)) || (activeTab === 'profiles' && (quantWantsRegularity || quantPicksRegularity));
   // Per molecule too (one request serves the profiles and the map's regularity colours).
   const regularity = useClusterRegularity(wantsRegularity, datasetIds, true);
   // Patches (share per cluster, geometry per molecule): the nucleosome panel's geometry endpoint, on demand.
@@ -1056,6 +1054,8 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
   const onDemandBusy = (x: { status: string }) => x.status === 'loading' || x.status === 'analysing' || x.status === 'error' || x.status === 'needs-analyse';
   // The picker's status line: whichever on-demand channel is working (or failed).
   const onDemandStatus = wantsGeometry && onDemandBusy(geometries) ? geometries : wantsRegularity ? regularity : null;
+  const quantExtras = useMemo(() => ({ nuc: { molecules: regularity.molecules, status: regularity.status, message: regularity.message,
+    request: () => setQuantWantsRegularity(true) } }), [regularity.molecules, regularity.status, regularity.message]);
   const profilesWithChannels = useMemo(() => {
     const extras = [regularity.profiles, geometries.profiles].filter(e => Object.keys(e).length);
     if (!extras.length) return clusterProfiles;
@@ -1247,27 +1247,22 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
     hasClusterAssignments,
   ]);
 
-  if (!hasClusterAssignments && savedClusters.length === 0 && activeTab !== 'vplot') {
+  if (!hasClusterAssignments && savedClusters.length === 0) {
     // Inside the measured container: the panel's width is tracked from its first render (a later chart is sized right).
     return (
       <div ref={containerRef} className="h-full">
         <AnalysisStatus kind="empty" center className="flex h-full flex-col items-center justify-center p-4" icon={<ReadClusters size={20} />}>
           <div className="flex flex-col items-center gap-2">
             <span>No clusters computed. Select peaks and click Cluster.</span>
-            <span className="text-[11px]">Or, with no clustering, plot footprint sizes from every read in view:</span>
-            <AnalysisButton theme="cyan" variant="soft" size="sm" data-testid="cluster-detail-open-footprint-sizes"
-              title={FOOTPRINT_SIZE_VIEW_HELP.enrichment}
-              onClick={() => { useBrowserStore.getState().setFootprintSizeSettings(withView(useBrowserStore.getState().footprintSizeSettings, 'enrichment')); setActiveTab('vplot'); }}>
-              Footprint size enrichment
-            </AnalysisButton>
+            <SizesInPlotsButton clustered={false} />
           </div>
         </AnalysisStatus>
       </div>
     );
   }
 
-  // If no active clusters but have saved ones, force saved tab (the footprint size plots need no clusters)
-  if (!hasClusterAssignments && savedClusters.length > 0 && activeTab !== 'saved' && activeTab !== 'vplot') {
+  // If no active clusters but have saved ones, force saved tab
+  if (!hasClusterAssignments && savedClusters.length > 0 && activeTab !== 'saved') {
     // Use setTimeout to avoid setState during render
     setTimeout(() => setActiveTab('saved'), 0);
   }
@@ -1281,7 +1276,6 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
   const chartTabs: Array<{ key: ClusterDetailTab; label: string }> = hasClusterAssignments ? [
     { key: 'profiles', label: 'Profiles' },
     { key: 'composition', label: 'Composition' },
-    { key: 'vplot', label: 'Footprint sizes' },
     ...(hasRules ? [{ key: 'enrichment' as const, label: 'Differences' }] : []),
   ] : [];
   const isChartTab = chartTabs.some(tab => tab.key === activeTab);
@@ -1290,10 +1284,7 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
     ...(hasClusterAssignments ? [
       { key: 'overview' as const, label: 'Overview' },
       { key: 'charts' as const, label: 'Charts' },
-    ] : [
-      // No clusters: the footprint size plots, from all reads, stay one click away.
-      { key: 'vplot' as const, label: 'Footprint sizes' },
-    ]),
+    ] : []),
     { key: 'saved' as const, label: savedClusters.length > 0 ? `Saved (${savedClusters.length})` : 'Saved' },
   ];
   const topTab: ClusterDetailTab | 'charts' = isChartTab ? 'charts' : activeTab;
@@ -1304,11 +1295,10 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
   };
   const clusterHeaderTitle = hasClusterAssignments
     ? `${clusterData.length} clusters`
-    : activeTab === 'vplot' ? 'Footprint sizes' : 'Saved clusters';
+    : 'Saved clusters';
   const clusterHeaderDetail = hasClusterAssignments
     ? `${clusteredReadTotal.toLocaleString()} assigned reads${multiDs ? ` · ${datasetIds.length} dataset views` : ''}`
-    : activeTab === 'vplot' ? 'All reads in view, one plot per dataset (no clustering needed)'
-      : `${savedClusters.length} saved snapshot${savedClusters.length !== 1 ? 's' : ''}`;
+    : `${savedClusters.length} saved snapshot${savedClusters.length !== 1 ? 's' : ''}`;
 
   return (
     <div ref={containerRef}>
@@ -1364,7 +1354,7 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
                   {saveFeedback ? <span className="inline-flex items-center gap-1"><Check size={11} strokeWidth={2.5} aria-hidden="true" />Snapshotted</span> : 'Snapshot'}
                 </AnalysisButton>
               </>
-            ) : undefined}
+            ) : <SizesInPlotsButton clustered={false} />}
           />
         }
         summary={hasClusterAssignments ? (
@@ -1424,12 +1414,7 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
               label={visibleClusterIds ? `Showing ${visibleClusterIds.size}/${clusterData.length}` : undefined}
             />
             {!mapVisible && <MergeToggleChip />}
-            <button type="button" data-testid="cluster-detail-plot-clusters"
-              className="rounded border border-cyan-200 bg-white px-1.5 py-0.5 text-[11px] font-medium text-cyan-800 hover:bg-cyan-50 dark:border-cyan-900/60 dark:bg-transparent dark:text-cyan-200 dark:hover:bg-cyan-950/40"
-              title="Plot these clusters: open Plots with Group by = cluster, pinned to this locus (one size enrichment plot per cluster, on a shared scale)."
-              onClick={() => openPlots({ type: 'size-enrichment', where: 'view', groupBy: 'cluster', pinned: { chrom, start: Math.round(start), end: Math.round(end), genome: viewGenome ?? null } })}>
-              Plot these clusters
-            </button>
+            <SizesInPlotsButton clustered clusterLocus={{ chrom, start: Math.round(start), end: Math.round(end), genome: viewGenome ?? null }} />
           </div>
         ) : undefined}
       >
@@ -1634,6 +1619,8 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
           getDatasetLabel={sk => keyLabel(sk)}
           getDatasetColor={sk => keyColor(sk)}
           getLayerLabelFor={(sk, layerKey) => getDatasetLayerLabel(layerKey, getDsForKey(sk))}
+          view={{ chrom, start, end }}
+          quantExtras={quantExtras}
         />
       )}
 
@@ -1650,22 +1637,10 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
         />
       )}
 
-      {/* === Footprint sizes tab (size enrichment / V-plot) === */}
       {activeTab === 'enrichment' && offLocusNote && (
         <div className="px-2 py-1 text-[11px] text-amber-700 dark:text-amber-300" data-testid="cluster-detail-off-locus-note">
           {offLocusNote}
         </div>
-      )}
-      {activeTab === 'vplot' && (
-        <FootprintSizesView
-          allReads={allReadsTarget}
-          clusters={hasClusterAssignments ? { chrom, start, end, genome: viewGenome ?? null, panels: analysisKeys.map(footprintPanel), rounds: analysisRounds, visible: vplotScope.visible, assignmentSignature: clusterAssignmentSignature } : null}
-          chartWidth={chartWidth}
-          isFullView={isFullView}
-          sampleSeed={analysisSampleSeed}
-          settingsKey={settingsKey}
-          note={hasClusterAssignments && settingsGroupByClusters ? offLocusNote : allReadsScope.note}
-        />
       )}
 
       {/* === Enrichment tab === */}

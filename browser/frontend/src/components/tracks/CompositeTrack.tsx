@@ -10,6 +10,8 @@ import { reduceSignalValues, shouldDrawSteppedSignal, signalPointLimit } from '.
 import { logPerfTiming, nowMs } from '../../utils/perfDebug';
 import type { CompositeTrack as CompositeTrackT, TrackSource } from '../../types/dataset';
 import { drawTrackLabel } from '../../utils/trackLabels';
+import { armAfterMovement } from '../../utils/dragThreshold';
+import { TrackWindowOverlay } from '../../features/windowQuant/TrackWindowOverlay';
 import { HoverHint, HoverLabel, useTrackLabels } from './TrackLabels';
 
 interface Props {
@@ -338,8 +340,9 @@ function CompositeTrackInner({
     const rect = e.currentTarget.getBoundingClientRect();
     canvasRectRef.current = rect;
     const x = referenceCanvasX(canvasRef.current, logicalOffset(e.clientX - rect.left, e.currentTarget.clientWidth, rect.width));
-    setIsDragging(true); setDragStartX(x); setDragEndX(x);
     e.preventDefault();
+    // A click (no real movement) never starts a drag-to-zoom: it would repaint and reload for nothing.
+    armAfterMovement(e.clientX, e.clientY, () => { setIsDragging(true); setDragStartX(x); setDragEndX(x); });
   }, []);
 
   const hasVisibleData = resolvedSources.some(rs => rs.source.visible && rs.values.length > 0);
@@ -358,6 +361,9 @@ function CompositeTrackInner({
       />
       <HoverLabel>{composite.label}</HoverLabel>
       {emptyHint && <HoverHint>{emptyHint}</HoverHint>}
+      {composite.sources.some(src => src.ref.kind === 'metaprofile') && (
+        <TrackWindowOverlay width={width} height={height} sidebarWidth={sidebarWidth} view={{ chrom, start, end }} reversed={isReversed} />
+      )}
     </div>
   );
 }

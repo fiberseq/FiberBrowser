@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "inputs": {
+    "base": "browser/frontend",
+    "paths": [
+      "src",
+      "public",
+      "index.html",
+      "package.json",
+      "package-lock.json",
+      "vite.config.ts",
+      "tsconfig.json",
+      "tsconfig.node.json",
+      "tailwind.config.js",
+      "postcss.config.js"
+    ],
+    "files": 1221,
+    "sha256": "0daca5b6256b4356fbabdda6f51bb25d2024ac7e915617fc11a33fc8602f47c9"
+  },
+  "outputs": {
+    "files": 64,
+    "sha256": "93fda2b2153954cdd805eac4fb81e54c1b78a77e286ce3f5c76afbf6f3ef29e6"
+  }
+}

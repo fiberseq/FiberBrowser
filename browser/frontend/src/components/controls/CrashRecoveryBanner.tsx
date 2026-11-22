@@ -36,8 +36,9 @@ import { DEFAULT_MIN_FOOTPRINTS } from '../../stores/uiSlice';
 import { recoverExtensions } from '../../stores/storeExtensions';
 import { restoreGallery } from '../../features/plots/gallery';
 import { emptyPlotsWorkspace, normalizePlotsWorkspace, type PlotsWorkspaceState } from '../../features/plots/plotsState';
-import { isMetaChrom } from '../../features/metaLocus/metaChrom';
+import { isMetaChrom, renameMetaChroms } from '../../features/metaLocus/metaChrom';
 import { restoreMetaLocusSession, savedMetaPoolChrom, useMetaLocusStore, type MetaLocusSession } from '../../features/metaLocus/metaLocusStore';
+import { bumpDatasetGeneration } from '../../utils/startupDatasets';
 
 /** Normalize path for comparison (resolve trailing slashes, case on macOS). */
 function normPath(p: string): string {
@@ -249,6 +250,7 @@ export async function restoreSnapshot(saved: SerializedState) {
     const result = await reconcileDatasets(s.datasets);
     idMap = result.idMap;
     useBrowserStore.setState({ datasets: result.datasets } as any);
+    bumpDatasetGeneration();
   }
 
   const hasRemap = Object.keys(idMap).some(k => idMap[k] !== k);
@@ -584,23 +586,7 @@ function recoveredMetaPayload(saved: unknown, idMap: Record<string, string>): Pa
       ? [remapId(entry[0], idMap), ...entry.slice(1)] as typeof entry : entry)) } : {}) };
 }
 
-/** Every reference to an old meta contig (``from``: values and record keys alike) renamed to ``to``; the saved
- *  meta-locus keeps its own payload (its pool id is the server's to give). */
-export function renameMetaChroms<T>(value: T, to: string | null, from: Array<string | null | undefined>): T {
-  const old = new Set(from.filter((c): c is string => !!c && c !== to));
-  if (!to || old.size === 0) return value;
-  const walk = (v: unknown): unknown => {
-    if (typeof v === 'string') return old.has(v) ? to : v;
-    if (Array.isArray(v)) return v.map(walk);
-    if (!v || typeof v !== 'object') return v;
-    const proto = Object.getPrototypeOf(v);
-    if (proto !== Object.prototype && proto !== null) return v;  // (only plain records: a saved state is JSON)
-    return Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, x]) => [old.has(k) ? to : k, walk(x)]));
-  };
-  const out = walk(value) as T;
-  const meta = (value as { metaLocus?: unknown })?.metaLocus;
-  return meta !== undefined && out && typeof out === 'object' ? { ...out, metaLocus: meta } as T : out;
-}
+export { renameMetaChroms };
 
 /**
  * Reopen a recovered page's meta-locus pool (``saved``: the autosave's metaLocus payload). When the page was on the

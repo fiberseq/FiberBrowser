@@ -95,17 +95,20 @@ export function unpackByPanel(packed: PackedByPanel): Record<string, Record<stri
 /** A metaprofile's raw groups, packed (coverage and signal per bin; finished at draw time). */
 export interface PackedProfile {
   binBp: number;
-  groups: Array<{ id: string; title: string; color?: string; dash?: number[]; nReads: number; coverage: PackedMatrix; signal: PackedMatrix }>;
+  groups: Array<{ id: string; title: string; color?: string; dash?: number[]; source?: string; base?: string; baseTitle?: string; nReads: number; coverage: PackedMatrix; signal: PackedMatrix }>;
 }
 
-export function packProfile(binBp: number, groups: Array<{ id: string; title: string; color?: string; dash?: number[]; raw: { nReads: number; coverage: ArrayLike<number>; signal: ArrayLike<number> } }>): PackedProfile {
-  return { binBp, groups: groups.map(g => ({ id: g.id, title: g.title, color: g.color, ...(g.dash ? { dash: g.dash } : {}), nReads: g.raw.nReads,
+export function packProfile(binBp: number, groups: Array<{ id: string; title: string; color?: string; dash?: number[]; source?: string; base?: string; baseTitle?: string; raw: { nReads: number; coverage: ArrayLike<number>; signal: ArrayLike<number> } }>): PackedProfile {
+  return { binBp, groups: groups.map(g => ({ id: g.id, title: g.title, color: g.color, ...(g.dash ? { dash: g.dash } : {}), ...srcFields(g), nReads: g.raw.nReads,
     coverage: packMatrix([Array.from(g.raw.coverage)]), signal: packMatrix([Array.from(g.raw.signal)]) })) };
 }
 
-export function unpackProfile(p: PackedProfile): { binBp: number; groups: Array<{ id: string; title: string; color?: string; dash?: number[]; raw: { group: string; nReads: number; coverage: Float64Array; signal: Float64Array } }> } {
+/** Several sources (multiSource.ts): a line's source and group travel with it (a stored card draws its panels). */
+const srcFields = (g: { source?: string; base?: string; baseTitle?: string }) => (g.source ? { source: g.source, ...(g.base ? { base: g.base } : {}), ...(g.baseTitle ? { baseTitle: g.baseTitle } : {}) } : {});
+
+export function unpackProfile(p: PackedProfile): { binBp: number; groups: Array<{ id: string; title: string; color?: string; dash?: number[]; source?: string; base?: string; baseTitle?: string; raw: { group: string; nReads: number; coverage: Float64Array; signal: Float64Array } }> } {
   const row = (m: PackedMatrix) => Float64Array.from((unpackMatrix(m)[0] ?? []).map(v => v ?? 0));
-  return { binBp: p.binBp, groups: p.groups.map(g => ({ id: g.id, title: g.title, color: g.color, ...(g.dash ? { dash: g.dash } : {}), raw: { group: g.id, nReads: g.nReads, coverage: row(g.coverage), signal: row(g.signal) } })) };
+  return { binBp: p.binBp, groups: p.groups.map(g => ({ id: g.id, title: g.title, color: g.color, ...(g.dash ? { dash: g.dash } : {}), ...srcFields(g), raw: { group: g.id, nReads: g.nReads, coverage: row(g.coverage), signal: row(g.signal) } })) };
 }
 
 /** A heatmap's data, packed: reads (rows as one matrix, with their group, start and mean) or features (per feature and
@@ -230,6 +233,8 @@ export interface SuppliedData {
   /** Matrices (supplied V-plots and heatmaps), one block each, rows top to bottom. */
   matrices?: Array<{ id: string; title: string; color?: string; rows: Array<{ label: string; values: Array<number | null> }> }>;
   series: Array<{ id: string; title: string; color?: string; dash?: number[]; values: Array<number | null> }>;
+  /** Quantify a window's result (features/windowQuant/engine.QuantResult), as computed. */
+  quant?: import('../windowQuant/engine').QuantResult;
 }
 
 /** A differential result as kept: the rows (capped), the two sides and the test. */
@@ -241,6 +246,12 @@ export interface PackedDiff {
 }
 
 export const MAX_STORED_DIFF_ROWS = 2000;
+
+/** A stored quantification has its cells, groups and measures (anything else is dropped on load). */
+export function isQuantResult(v: unknown): v is import('../windowQuant/engine').QuantResult {
+  const q = v as { cells?: unknown; groups?: unknown; measures?: unknown } | null | undefined;
+  return !!q && typeof q === 'object' && Array.isArray(q.cells) && Array.isArray(q.groups) && Array.isArray(q.measures);
+}
 
 /** What makes two results the same plot: its settings without its id, name and pin (renaming or pinning a plot
  * changes the entry, it does not make a new one). */
@@ -401,7 +412,8 @@ function normalizeEntry(raw: unknown, states: Record<string, unknown>, version: 
     ...(r.supplied && typeof r.supplied === 'object' && Array.isArray((r.supplied as SuppliedData).series)
       ? { supplied: { ...(Array.isArray((r.supplied as SuppliedData).matrices) ? { matrices: (r.supplied as SuppliedData).matrices!.filter(m => m && typeof m.id === 'string' && Array.isArray(m.rows))
         .map(m => ({ ...m, rows: m.rows.map(row => ({ label: String(row.label ?? ''), values: (row.values ?? []).map(v => (typeof v === 'number' && Number.isFinite(v) ? v : null)) })) })) } : {}),
-        ...(Array.isArray((r.supplied as SuppliedData).xs) ? { xs: (r.supplied as SuppliedData).xs!.filter(v => typeof v === 'number') } : {}), series: (r.supplied as SuppliedData).series.filter(x => x && typeof x.id === 'string' && Array.isArray(x.values))
+        ...(Array.isArray((r.supplied as SuppliedData).xs) ? { xs: (r.supplied as SuppliedData).xs!.filter(v => typeof v === 'number') } : {}),
+        ...(isQuantResult((r.supplied as SuppliedData).quant) ? { quant: (r.supplied as SuppliedData).quant } : {}), series: (r.supplied as SuppliedData).series.filter(x => x && typeof x.id === 'string' && Array.isArray(x.values))
         .map(x => ({ ...x, values: x.values.map(v => (typeof v === 'number' && Number.isFinite(v) ? v : null)) })) } } : {}),
     items: Array.isArray(r.items) ? (r.items as unknown[]).filter((i): i is { id: string; title: string; color?: string } =>
       !!i && typeof i === 'object' && typeof (i as { id?: unknown }).id === 'string' && typeof (i as { title?: unknown }).title === 'string') : [],

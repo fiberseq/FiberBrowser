@@ -21,6 +21,7 @@ import { FireTrack } from '../../components/tracks/FireTrack';
 import { GRAPH_PEAK_ROW_HEIGHT } from './peakTrack';
 import { useGraphBindingsStore } from './bindingsStore';
 import { useConfirmedQualityFilters, useQualityFilterSync } from '../../hooks/useQualityFilterSync';
+import { useConfirmedReadSettings, useLegacyLayerInferenceSync, useReadEndFootprintsSync } from '../../hooks/useReadSettingsSync';
 import { useGraphStatusStore } from './statusStore';
 import { useBrowserStore } from '../../stores/browserStore';
 import { setupHighDpiCanvas } from '../../utils/canvasUtils';
@@ -113,6 +114,7 @@ beforeEach(() => {
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
   useGraphStatusStore.setState({ status: available, loading: false, error: null });
   useConfirmedQualityFilters.setState({ key: null });
+  useConfirmedReadSettings.setState({ legacy: null, readEnd: null, revision: 0 });
   useBrowserStore.setState({ chrom: 'chr3', start: 90_000, end: 100_000, panels: [], currentGenome: 'hg38' } as any);
   clearGraphTraces();
   host = document.createElement('div');
@@ -375,11 +377,14 @@ describe('GraphPanel', () => {
     await settle(160); await answerAll(); await settle(160);
     const requests = () => fetchMock.mock.calls.filter(c => String(c[0]).startsWith('/api/graph/reads')).length;
     expect(requests()).toBe(1);
+    // Read settings edited locally are not yet the server's: no request until the server confirms them (sync hooks).
     act(() => useBrowserStore.setState({ legacyLayerInference: false }));
+    await settle(160); expect(requests()).toBe(1);
+    act(() => useConfirmedReadSettings.setState({ legacy: '[false,90]', revision: 1 }));
     await settle(160); expect(requests()).toBe(2);
-    act(() => useBrowserStore.setState({ legacyNucMinSize: 120 }));
+    act(() => useConfirmedReadSettings.setState({ legacy: '[false,120]', revision: 2 }));
     await settle(160); expect(requests()).toBe(3);
-    act(() => useBrowserStore.setState({ hideShortEndFootprints: false }));
+    act(() => useConfirmedReadSettings.setState({ readEnd: false, revision: 3 }));
     await settle(160); expect(requests()).toBe(4);
     // A quality filter edited locally is not yet the server's: no request until the server confirms it (sync hook).
     act(() => useBrowserStore.setState({ activeColormap: { ...colormap, qualityFilters: [
@@ -436,6 +441,104 @@ describe('GraphPanel', () => {
     expect(seen.length).toBe(before + 1);
     expect(seen[seen.length - 1]).toBe(JSON.stringify([{ layer: 'nuc', quality_name: 'aq', min_value: 190 }]));
   });
+  it.each([
+    ['legacy-layer inference', '/api/legacy_layer_inference', { legacyNucMinSize: 120 }],
+    ['read-end footprint cutoff', '/api/read_end_footprints', { hideShortEndFootprints: false }],
+  ] as const)('reloads graph rows once the server confirms new %s settings, never before (delayed settings POST)', async (_name, route, edit) => {
+    // The server's settings; a POST for the edited route applies only when the test lets it.
+    let server = { enabled: true, nuc_min_size: 90, hide_short: true };
+    let applyPost: (() => void) | null = null;
+    const seen: string[] = [];
+    const fallback = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (String(url).startsWith('/api/graph/read_bindings')) return Promise.resolve(respond({ bindings: [
+        { dataset_id: 'synthetic', label: 'Synthetic', kind: 'native', revision: 'one', paths: { target: 'chr3' }, problems: [], libraries: 1 },
+      ] }));
+      for (const r of ['/api/legacy_layer_inference', '/api/read_end_footprints']) {
+        if (!String(url).startsWith(r)) continue;
+        const body = JSON.parse(String(init!.body));
+        const next = r === '/api/legacy_layer_inference'
+          ? { ...server, enabled: body.enabled, nuc_min_size: body.nuc_min_size } : { ...server, hide_short: body.hide_short };
+        const answer = () => {
+          const changed = JSON.stringify(next) !== JSON.stringify(server);
+          server = next;
+          return respond(r === '/api/legacy_layer_inference'
+            ? { success: true, changed, enabled: server.enabled, nuc_min_size: server.nuc_min_size }
+            : { success: true, changed, hide_short: server.hide_short, min_bp: 90 });
+        };
+        if (JSON.stringify(next) === JSON.stringify(server) || r !== route) return Promise.resolve(answer());
+        return new Promise<Response>(resolve => { applyPost = () => resolve(answer()); });
+      }
+      if (String(url).startsWith('/api/graph/reads')) {
+        // A completed answer, composed with the settings the server has when the request reaches it.
+        seen.push(JSON.stringify(server));
+        return Promise.resolve(respond({ reads: [], bindings: [], cached: false,
+          report: { molecules: 0, records: 0, marks: 0, sampling: { level: 0, fraction: 1, estimated: 0, molecules_capped: 0, max_molecules: 300 },
+            m6a_density_reads: 0, calls_omitted_reads: 0, truncated: false, omitted: {}, shared_qnames: 0 }, timings: { total_ms: 1 } }));
+      }
+      return fallback(url, init);
+    });
+    useHubData.setState({ scans: [] });
+    useConfirmedReadSettings.setState({ legacy: null, readEnd: null, revision: 0 });
+    const colormap = useBrowserStore.getState().activeColormap;
+    useBrowserStore.setState({ panels: [graphPanel('g1')], activeColormap: { ...colormap, qualityFilters: [] },
+      legacyLayerInference: true, legacyNucMinSize: 90, hideShortEndFootprints: true,
+      datasets: [{ id: 'synthetic', label: 'Synthetic', data_type: 'bam' } as never] });
+    function Sync() {
+      useLegacyLayerInferenceSync(useBrowserStore(s => s.legacyLayerInference), useBrowserStore(s => s.legacyNucMinSize), true);
+      useReadEndFootprintsSync(useBrowserStore(s => s.hideShortEndFootprints), true);
+      return null;
+    }
+    await act(async () => root.render(<><Sync /><GraphPanel panelId="g1" width={900} height={300} /></>));
+    await settle(160); await answerAll(); await settle(160);
+    const before = seen.length;
+    expect(before).toBeGreaterThan(0);
+    act(() => useBrowserStore.setState(edit as never));
+    await settle(400);
+    // The settings POST has not applied: no graph load went out with the old settings for the new view.
+    expect(applyPost).not.toBeNull();
+    expect(seen.length).toBe(before);
+    await act(async () => { applyPost!(); await vi.advanceTimersByTimeAsync(20); });
+    await settle(400);
+    expect(seen.length).toBe(before + 1);
+    const want = route === '/api/legacy_layer_inference' ? { nuc_min_size: 120 } : { hide_short: false };
+    expect(JSON.parse(seen[seen.length - 1])).toMatchObject(want);
+  });
+  it('reloads once when the server already had the edited read settings (set from Python: changed=false, new values)', async () => {
+    const fallback = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (String(url).startsWith('/api/graph/read_bindings')) return Promise.resolve(respond({ bindings: [
+        { dataset_id: 'synthetic', label: 'Synthetic', kind: 'native', revision: 'one', paths: { target: 'chr3' }, problems: [], libraries: 1 },
+      ] }));
+      if (String(url).startsWith('/api/legacy_layer_inference')) {
+        const body = JSON.parse(String(init!.body));
+        return Promise.resolve(respond({ success: true, changed: false, enabled: body.enabled, nuc_min_size: body.nuc_min_size }));
+      }
+      if (String(url).startsWith('/api/read_end_footprints')) return Promise.resolve(respond({ success: true, changed: false, hide_short: true }));
+      if (String(url).startsWith('/api/graph/reads')) return Promise.resolve(respond({ reads: [], bindings: [], cached: false,
+        report: { molecules: 0, records: 0, marks: 0, sampling: { level: 0, fraction: 1, estimated: 0, molecules_capped: 0, max_molecules: 300 },
+          m6a_density_reads: 0, calls_omitted_reads: 0, truncated: false, omitted: {}, shared_qnames: 0 }, timings: { total_ms: 1 } }));
+      return fallback(url, init);
+    });
+    useHubData.setState({ scans: [] });
+    const colormap = useBrowserStore.getState().activeColormap;
+    useBrowserStore.setState({ panels: [graphPanel('g1')], activeColormap: { ...colormap, qualityFilters: [] },
+      legacyLayerInference: true, legacyNucMinSize: 90, hideShortEndFootprints: true,
+      datasets: [{ id: 'synthetic', label: 'Synthetic', data_type: 'bam' } as never] });
+    function Sync() {
+      useLegacyLayerInferenceSync(useBrowserStore(s => s.legacyLayerInference), useBrowserStore(s => s.legacyNucMinSize), true);
+      useReadEndFootprintsSync(useBrowserStore(s => s.hideShortEndFootprints), true);
+      return null;
+    }
+    await act(async () => root.render(<><Sync /><GraphPanel panelId="g1" width={900} height={300} /></>));
+    await settle(160); await answerAll(); await settle(400);
+    const requests = () => fetchMock.mock.calls.filter(c => String(c[0]).startsWith('/api/graph/reads')).length;
+    const before = requests();
+    act(() => useBrowserStore.setState({ legacyNucMinSize: 120 }));
+    await settle(400); await settle(400);
+    expect(useConfirmedReadSettings.getState().legacy).toBe('[true,120]');
+    expect(requests()).toBe(before + 1);
+  });
   it('a quality edit undone before the server answered (A -> B -> A) still reloads once the server is back on A', async () => {
     let serverFilters = '[]';
     const posts: Array<() => void> = [];
@@ -480,7 +583,7 @@ describe('GraphPanel', () => {
     await settle(50);
     // The gate reaches the server (its answer is for a superseded edit), and a load goes out while it holds it.
     await act(async () => { posts.shift()!(); await vi.advanceTimersByTimeAsync(20); });
-    act(() => useBrowserStore.setState({ legacyNucMinSize: 120 }));
+    act(() => useConfirmedReadSettings.setState(s => ({ legacy: '[true,120]', revision: s.revision + 1 })));
     await settle(400);
     expect(seen[seen.length - 1]).not.toBe('[]');
     // Back to no gate on the server: the rows are asked for again.

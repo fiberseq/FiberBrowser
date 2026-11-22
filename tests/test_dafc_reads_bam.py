@@ -45,14 +45,19 @@ def test_dafc_reads_hide_unrepaired_lift_ex_supplementaries(tmp_path):
     assert sorted((r["name"], r["start"]) for r in rows) == [("m1", 1_000), ("m1", 16_000), ("m2", 2_000)]
 
 
-def test_dafc_ma_nucleosomes_project_through_aligned_bases(tmp_path):
-    # 100M200I100M: query [100, 300) is inserted. A nucleosome wholly inside the
-    # insertion has no reference block; one ending inside it stops at the last
-    # aligned base (no extra base), as the read track's MA parser projects them.
+def test_dafc_ma_nucleosomes_project_as_their_legacy_tags_do(tmp_path):
+    # 100M200I100M: query [100, 300) is inserted. MA nucleosomes are read first and placed as the same calls written
+    # as ns/nl are (the read row's footprints are placed that way too), so an MA-only file and one with both tags
+    # give the same DAF-C blocks.
     specs = [
         (("inside", 1_000, 400), {"cigar": "100M200I100M", "tags": [("MA", "400;nuc+Q:151-100", "Z")]}),
         (("ends_in", 1_000, 400), {"cigar": "100M200I100M", "tags": [("MA", "400;nuc+Q:51-100", "Z")]}),
+        (("inside_legacy", 1_000, 400), {"cigar": "100M200I100M",
+                                         "tags": [("ns", array("I", [150]), None), ("nl", array("I", [100]), None)]}),
+        (("ends_in_legacy", 1_000, 400), {"cigar": "100M200I100M",
+                                          "tags": [("ns", array("I", [50]), None), ("nl", array("I", [100]), None)]}),
     ]
     rows = _nuc_blocks(dafc_reads.query_bam_for_dafc(_write_bam(tmp_path / "ins.bam", [], specs), "chr1", 0, CHROM_LEN))
-    assert rows["inside"] == ("", "", True)
-    assert rows["ends_in"] == ("50", "50", True)
+    assert rows["inside"] == rows["inside_legacy"]
+    assert rows["ends_in"] == rows["ends_in_legacy"]
+    assert rows["ends_in"][2] is True

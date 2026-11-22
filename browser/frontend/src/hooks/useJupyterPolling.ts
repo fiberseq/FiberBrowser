@@ -10,6 +10,10 @@ import {
   applyJupyterStateToBrowser,
   buildJupyterBrowserSettingsPayload,
 } from './jupyterStateBridge';
+import { metaprofileFollowFlag, paritySnapshot } from './jupyterParityBridge';
+import { useWorkspaceStore } from '../features/plots/workspace';
+import { useGalleryStore } from '../features/plots/gallery';
+import { useMetaLocusStore } from '../features/metaLocus/metaLocusStore';
 
 const DEBUG = FRONTEND_DIAGNOSTICS;
 
@@ -74,7 +78,22 @@ export function useJupyterPolling() {
     accessibility_threshold: s.accessibilityThreshold,
     selected_peak_count: s.selectedPeaks.size,
     selected_read_ids: s.selectedReadIds,
+    // 3.1.1 parity settings (reported through paritySnapshot; listed here so a change re-syncs).
+    parity_min_footprints: s.minFootprints,
+    parity_min_fp_quality: s.minFpQuality,
+    parity_show_duplicate_reads: s.showDuplicateReads,
+    parity_show_qc_fail_reads: s.showQcFailReads,
+    parity_follow: metaprofileFollowFlag(s),
+    parity_layer_colors: s.layerColorOverrides,
+    parity_user_layer_colors: s.userLayerColors,
+    parity_window_quant: s.windowQuant,
+    parity_plots_workspace: s.plotsWorkspace,
+    parity_reversed: s.isReversed,
   })));
+  // Plots, the Gallery and the meta-locus keep their own stores.
+  const workspaceView = useWorkspaceStore(s => s.view);
+  const galleryEntries = useGalleryStore(s => (s as unknown as { entries?: unknown }).entries);
+  const metaLocusKey = useMetaLocusStore(s => `${s.spec?.bed_path ?? ''}|${s.status?.pool_id ?? ''}|${s.seed}|${s.count}|${s.view?.extra_entries?.length ?? 0}`);
   const coaccSettingsSnapshot = useCoaccStore(useShallow(s => ({
     coaccTrackMode: s.coaccTrackMode,
     coaccSignalType: s.coaccSignalType,
@@ -100,9 +119,15 @@ export function useJupyterPolling() {
     };
     const timeoutId = setTimeout(() => {
       const run = () => {
-        syncJupyterBrowserSettings(
-          buildJupyterBrowserSettingsPayload({ ...browserSettingsSnapshot, enabled_meta_profiles: togglesFromKey(browserSettingsSnapshot.enabled_meta_profiles) }, coaccSettingsSnapshot)
-        ).catch(() => {
+        const {
+          parity_min_footprints: _a, parity_min_fp_quality: _b, parity_show_duplicate_reads: _c, parity_show_qc_fail_reads: _d,
+          parity_follow: _e, parity_layer_colors: _f, parity_user_layer_colors: _g, parity_window_quant: _h, parity_plots_workspace: _i, parity_reversed: _j,
+          ...settings
+        } = browserSettingsSnapshot;
+        syncJupyterBrowserSettings({
+          ...buildJupyterBrowserSettingsPayload({ ...settings, enabled_meta_profiles: togglesFromKey(settings.enabled_meta_profiles) }, coaccSettingsSnapshot),
+          ...paritySnapshot(),
+        }).catch(() => {
           // Best-effort mirror for notebooks; polling still handles commands.
         });
       };
@@ -116,7 +141,7 @@ export function useJupyterPolling() {
       if (w.cancelIdleCallback) w.cancelIdleCallback(idleHandle);
       else clearTimeout(idleHandle);
     };
-  }, [browserSettingsSnapshot, coaccSettingsSnapshot, isRenderMode]);
+  }, [browserSettingsSnapshot, coaccSettingsSnapshot, isRenderMode, workspaceView, galleryEntries, metaLocusKey]);
 
   useEffect(() => {
     if (isRenderMode) return;

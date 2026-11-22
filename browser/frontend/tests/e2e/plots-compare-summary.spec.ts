@@ -123,7 +123,7 @@ for (const [w, h] of SIZES) {
     const [[lo, hi]] = JSON.parse((await summary.getAttribute('data-intervals')) || '[]') as Array<[number, number]>;
     expect(lo).toBeLessThanOrEqual(hi);
     expect(Number.isFinite(value)).toBe(true);
-    await expect(ws.getByTestId('plots-summary-measures')).toContainText('A − B of the mean');
+    await expect(ws.getByTestId('plots-summary-measures')).toContainText("A − B of the curve's mean");
     await expect(ws.getByTestId('plots-summary-measures')).toContainText('A and B resampled together');
     await expect(ws.getByTestId('plots-summary-chart')).toBeVisible();
     await expect(ws.getByTestId('plots-state-line')).toHaveText(/^Comparing .+ vs .+ · A − B · summary of the difference, .+/);
@@ -132,7 +132,7 @@ for (const [w, h] of SIZES) {
 
     // log2 ratio: the summary follows.
     await ws.getByTestId('plots-compare-log2ratio').click();
-    await expect(ws.getByTestId('plots-summary-measures')).toContainText('log2(A / B) of the mean', { timeout: 60_000 });
+    await expect(ws.getByTestId('plots-summary-measures')).toContainText("log2(A / B) of the curve's mean", { timeout: 60_000 });
     await expect(ws.getByTestId('plots-state-line')).toContainText('summary of the log2 ratio');
 
     // A size map with Compare on: its Summary is disabled, with the reason next to it; the state line says so.

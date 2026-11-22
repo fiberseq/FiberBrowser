@@ -14,6 +14,19 @@
                                        running FiberBrowser (or a new one), which asks you
                                        to confirm before opening anything
 
+a subcommand for scripted figures (docs/jupyter-api.md, "Scripted figures (headless)"):
+
+    fiberbrowser render SESSION.json --out panel.pdf [options]
+                                       draw a saved session with the headless engine
+                                       (no browser) and write a JSON receipt next to it;
+                                       fiberbrowser render --help lists the options;
+                                       pooled loci: fiberbrowser render --bed sites.bed
+                                       --anchor start --flank 2000 --bam data.bam --out m.pdf
+    fiberbrowser quantify [SESSION.json] --out q.tsv [options]
+                                       the Quantify card's table for a window of a
+                                       meta-locus (--bed/--anchor/--flank) or a session's
+                                       view, to TSV; --profile also writes the metaprofile
+
 and subcommands for servers (docs/deployment/):
 
     fiberbrowser serve --config fiberbrowser-server.toml [options]
@@ -210,6 +223,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         # `serve` is the server itself: `fiberbrowser serve --config x.toml` ==
         # `fiberbrowser --config x.toml`.
         args = args[1:]
+    elif args and args[0] == "render":
+        # Scripted figures: a saved session to PDF/SVG/PNG with the headless engine (fiberbrowser/scripted.py).
+        from .scripted import render_main
+        return render_main(args[1:])
+    elif args and args[0] == "quantify":
+        # Quantify a window (the browser's Quantify card) for a meta-locus or a session's view, to TSV.
+        from .scripted import quantify_main
+        return quantify_main(args[1:])
     elif args and args[0] in ("users", "audit", "check-config"):
         from . import admin
         handler = {"users": admin.users_main, "audit": admin.audit_main,

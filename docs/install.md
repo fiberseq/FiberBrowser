@@ -174,11 +174,11 @@ fiberbrowser -b sample.bam -g genes.gtf -f genome.fa
 fiberbrowser --help                       # every option (the same as python browser.py)
 ```
 
-This installs FiberHMM 3.2.0 or later (`fiberhmm[consensus]>=3.2.0,<4`) from PyPI with it.
+This installs FiberHMM 3.2.2 or later (`fiberhmm[consensus]>=3.2.2,<4`) from PyPI with it.
 FiberHMM runs footprint classes, chemistry detection, consensus BAM export,
 DAF-seq runs and re-run advisories; browsing works without it. At startup the
 server prints the FiberHMM version and location it uses and warns when it is
-older than 3.2.0.
+older than 3.2.2.
 
 Extras (`pip install "fiberbrowser[app,copilot]"`, or `[all]`):
 
@@ -308,7 +308,10 @@ npm --prefix browser/frontend run build          # the production bundle the ser
   the dependencies in step with `requirements.txt` and every backend folder in
   the wheel.
 - **Mac app**: `bash packaging/macos/build_app.sh`, then
-  `bash packaging/macos/check_app.sh`. Signing, notarization and the CI
+  `bash packaging/macos/check_app.sh`. The app's Python is the pinned
+  python-build-standalone CPython (downloaded by the build; a conda or Homebrew
+  Python would bundle its install path, which the build refuses); see
+  [packaging/README.md](../packaging/README.md#the-mac-app). Signing, notarization and the CI
   secrets: [packaging/macos/SIGNING.md](../packaging/macos/SIGNING.md).
 - **Windows app** (builds on macOS or Linux with Docker and NSIS):
   `bash packaging/windows/build_wsl_distro.sh` (the WSL root filesystem;
@@ -324,7 +327,7 @@ npm --prefix browser/frontend run build          # the production bundle the ser
 - **Icons**: edit the SVGs in `packaging/icons/`, then
   `python packaging/icons/build_icons.py`.
 - **Releasing** (tag `v<version>` = `browser/version.py`): the wheel, the image
-  and the app install FiberHMM 3.2.0 or later (`fiberhmm[consensus]>=3.2.0,<4`) from PyPI;
+  and the app install FiberHMM 3.2.2 or later (`fiberhmm[consensus]>=3.2.2,<4`) from PyPI;
   the repository variable `FIBERHMM_REQUIREMENT` overrides it for the Mac and
   Python workflows, e.g. a git URL to test an unreleased FiberHMM. Pushing the
   tag runs:

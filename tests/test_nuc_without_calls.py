@@ -203,7 +203,10 @@ def test_zero_count_nucleosome_filters_also_leave_without_calls_out(mixed):
     path, count = mixed
     req = AnalysisFilterRequest(dataset_ids=['ds0'], metric='count', operator='eq', threshold=0, layer='nucseg')
     result = filter_reads_by_analysis_rule_for_request(_state(path), req, chrom=CHROM, start=0, end=END)['results']['ds0']
-    assert result['total'] == count + 1
+    # The fixture's MA nuc groups are the rows' footprints (MA first), so the terminal-gap rule hides the two
+    # molecules (and the no-evidence copy of one) whose first or last call lies over 2 kb inside the read, exactly
+    # as it does when the same calls are written as ns/nl.
+    assert result['total'] == count - 2
     assert not any(name.startswith('no-calls') for name in result['read_ids'])
 
 

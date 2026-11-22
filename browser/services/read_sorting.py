@@ -52,13 +52,15 @@ def sort_reads_by_kmeans(
                 features[read_idx, b0:b1] = 1.0
 
     cluster_count = max(1, min(int(n_clusters), len(reads)))
+    from services.cluster_assignment import canonical_cluster_labels
     labels = MiniBatchKMeans(
         n_clusters=cluster_count,
         random_state=random_state,
         n_init=3,
     ).fit_predict(features)
-
-    return [reads[i] for i in np.argsort(labels)]
+    # Blocks in the canonical cluster order (largest first, ties by the smallest read id), reads in input order.
+    labels = canonical_cluster_labels(labels, [read.get("id", i) for i, read in enumerate(reads)])
+    return [reads[i] for i in np.argsort(labels, kind="stable")]
 
 
 def _qname(value: str) -> str:

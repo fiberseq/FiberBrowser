@@ -837,7 +837,7 @@ def pipeline_command() -> dict:
         from services.fiberhmm_runtime import fiberhmm_install_help
         hint = fiberhmm_install_help()
     except Exception:
-        hint = "Install FiberHMM 3 (pip install 'fiberhmm[consensus]>=3.2.0,<4') in FiberBrowser's Python."
+        hint = "Install FiberHMM 3 (pip install 'fiberhmm[consensus]>=3.2.2,<4') in FiberBrowser's Python."
     return {"argv": None, "source": None, "env": {},
             "hint": "fiberhmm-pipeline (FiberHMM 3.0 or newer) is not installed. " + hint}
 
@@ -1113,11 +1113,19 @@ DEFAULT_OPTIONS = {
     "prob_threshold": None,     # ML threshold override (0-255)
     "use_m5c": "auto",          # DddA CpG-aware recall: auto | on | off
     "cpg_mask_policy": "unmethylated-only",
+    # Nucleosome recall (Hia5 PacBio/ONT and DddB): conservative (FiberHMM's default) | topology. DddA's recall
+    # ignores it (and FiberHMM 3.3 refuses it there), so it is never passed for DddA.
+    "nuc_recall_policy": "conservative",
     # Minimum MAPQ, always passed to a new run (owner, 20 Nov 2026): the value the wizard shows, so a different
     # FiberHMM default cannot change a run silently. None: not passed (a Library re-call passes its recorded value).
     "min_mapq": 0,
 }
 CPG_POLICIES = ("unmethylated-only", "methylated-only")
+NUC_RECALL_POLICIES = ("conservative", "topology")
+NUC_RECALL_ENZYMES = ("hia5", "dddb")   # chemistries whose nucleosome recall takes --nuc-recall-policy
+# fiberhmm-call's --nuc-recall-policy, given to fiberhmm-pipeline through --call-args (FiberHMM 3.2 accepts it while
+# hiding it from fiberhmm-call's --help; 3.3 shows it). One word, so the value is not read as an option.
+TOPOLOGY_CALL_ARGS = "--call-args=--nuc-recall-policy topology"
 ALIGNMENT_SETS = ("primary", "primary-supplementary", "all")
 _help_cache: dict[tuple, Optional[str]] = {}
 
@@ -1167,6 +1175,10 @@ def normalize_options(raw: Optional[dict]) -> dict:
         raise InputError("Duplicate handling: choose mark (keep all reads) or collapse.", "options")
     if options["cpg_mask_policy"] not in CPG_POLICIES:
         raise InputError("CpG masking policy: unmethylated-only or methylated-only.", "options")
+    if options["nuc_recall_policy"] in (None, "", "auto"):
+        options["nuc_recall_policy"] = "conservative"
+    if options["nuc_recall_policy"] not in NUC_RECALL_POLICIES:
+        raise InputError("Nucleosome recall: conservative or topology.", "options")
     options["chimera_filter"] = bool(options["chimera_filter"])
     mapq = options["min_mapq"]
     if mapq in ("", None):
@@ -1229,6 +1241,8 @@ def changed_options(options: dict, enzyme: str) -> list[str]:
         labels.append(f"CpG-aware recall {options['use_m5c']}")
     if enzyme == "ddda" and options["cpg_mask_policy"] != "unmethylated-only":
         labels.append(f"CpG mask {options['cpg_mask_policy']}")
+    if enzyme in NUC_RECALL_ENZYMES and options.get("nuc_recall_policy") == "topology":
+        labels.append("topology nucleosome recall")
     return labels
 
 
@@ -1291,6 +1305,11 @@ def option_args(options: dict, enzyme: str, help_text: Optional[str]) -> list[st
                 f"This FiberHMM's fiberhmm-pipeline has no option for '{name}'. "
                 "Update FiberHMM, or leave that option at its default.", "options")
         args += chosen
+    if enzyme in NUC_RECALL_ENZYMES and options.get("nuc_recall_policy") == "topology":
+        if help_text is not None and not _has_flag(help_text, "--call-args"):
+            raise InputError("This FiberHMM's pipeline has no --call-args, which topology nucleosome recall needs; "
+                             "update FiberHMM.", "options")
+        args.append(TOPOLOGY_CALL_ARGS)
     return args
 
 

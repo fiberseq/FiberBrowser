@@ -385,9 +385,12 @@ client.set_cluster_settings(method="kmeans", k=10, small_footprint_threshold_bp=
 # Set backend interval-quality filters used by working sets and analyses
 client.set_quality_filters([{"layer": "fire", "quality_name": "aq", "min_value": 230}])
 
-# Toggle live display layers, metaprofiles, and read cache prefetching
+# Toggle live display layers, metaprofiles, and read cache prefetching.
+# The default metaprofile follows the layer toggles; naming its sources makes it
+# manual, and follow_active_layers=True makes it follow again.
 client.set_visible_layers(tf=True, nuc=True, fire=True, deam=False)
-client.set_metaprofile_layers(tf=True, nuc=True, fire=True)
+client.set_metaprofile_layers(tf=True, nuc=True, fire=False)
+client.set_metaprofile_follow(True)
 client.set_layer_cache(tf=True, nuc=True, fire=True, deam=False)
 
 # Configure display behavior and legacy layer inference
@@ -420,6 +423,101 @@ selected = client.get_selection()
 
 # Get browser status
 status = client.get_status()
+```
+
+## Features Added in 3.1
+
+Everything below works from a notebook as in the UI. The REST calls (pools,
+Find sequence, genomes, runs) need no browser tab. The live calls set the open
+tab's controls and read them back from its settings snapshot. With no tab
+open, the settings that change a figure (read filters, layers, metaprofile
+sources, layer colours, read filter and order) still reach `figure()`, which
+starts from them.
+
+### Read filters and the uncalled-read rule
+
+```python
+# The browser's toggles: Min footprints "All reads, including uncalled" (-1),
+# QC-fail (0x200) and duplicate (0x400) reads shown, footprint-quality gate.
+client.set_read_filters(all_reads=True, show_qc_fail=True, show_duplicates=False, min_fp_quality=0)
+client.get_read_filters()
+
+# The same rules for this client's own read requests (get_compact_reads,
+# get_all_reads, get_read_stats, get_coverage, get_reads, cluster):
+client.set_read_policy(include_qcfail=True, hide_uncalled=False)
+reads = client.get_compact_reads()
+stats = client.get_read_stats([r["id"] for r in reads], min_footprints=-1)
+client.set_read_policy(reset=True)
+```
+
+### Layer colours
+
+```python
+client.set_layer_colors(nuc="#4b5563", tf="#dc2626")   # the session's (saved with it)
+client.set_default_layer_colors(fire="#f59e0b")         # this computer's defaults
+client.get_layer_colors()        # {"session": ..., "saved_defaults": ..., "effective": ...}
+client.reset_layer_colors("tf")  # back to the saved default (or built-in) colour
+```
+
+The session's colour wins over the saved default, which wins over the built-in
+colour. Figures use the same order. The default metaprofile's sources that
+follow a layer take its colour.
+
+### Quantify a window and the relative axis
+
+```python
+client.set_metaprofile_axis("relative", anchor="tss")          # or "gene-end", "centre", "position", "site"
+client.set_quant_window(start=-200, end=200, relative=True)    # TSS ± 200 bp
+client.set_quant_spec(measures=["nuc", "tf"], comparison="datasets", value="enrichment")
+client.open_quantify("track")
+client.set_reverse_view(True)    # Flip to gene direction: reads and plots flip together
+client.get_window_quant()
+```
+
+### Plots
+
+```python
+client.open_plot(type="metaprofile", sources=["nuc", "tf"], group_by="cluster")
+client.keep_plot("Figure 2b")          # after it has drawn
+spec = client.get_plot_spec()          # reopen later with client.open_plot(spec)
+client.get_plots_state()["gallery"]
+client.close_plots()
+```
+
+The browser draws Plots, the Gallery and the Quantify card. `figure()` draws
+the read view and refuses those charts by name; export them with Save in the
+browser.
+
+### Meta-locus (Preview)
+
+```python
+pool = client.start_meta_locus_pool("tss.bed", anchor="centre", flank_bp=2000, wait=True)
+ws = client.get_meta_locus_reads(pool["pool_id"], seed=1, count=1000)            # working set
+more = client.get_meta_locus_reads(pool["pool_id"], seed=1, count=1000, cursor=ws.get("cursor"))
+
+# In the open browser (Preview features on, or enable_preview=True):
+client.open_meta_locus("tss.bed", flank_bp=2000, count=1000, seed=1, enable_preview=True)
+client.meta_locus_more_reads(500)
+client.meta_locus_resample(seed=2)
+client.meta_locus_find_more(k=200)     # like the selected reads
+client.meta_locus_back()
+```
+
+### Find sequence, genomes and runs
+
+```python
+job = client.find_sequence(">probe\nACGTTGCA...", max_mismatches=1)    # waits; job["result"]["hits"]
+client.add_sequence_search_track(job["job_id"], label="probe hits")
+
+client.get_recent_genomes()                     # pinned and recent, each with a key
+client.pin_genome(key)
+client.open_recent_genome(key)
+client.reset_annotation("dm6")                  # the registry annotation in place of the loaded one
+client.attach_panel_genome(["fly_bam"], genome_id="dm6", confirm_large=True)  # its own reference
+
+samples = client.scan_run_inputs(["/data/run1/"])["samples"]
+client.validate_fiberhmm_run(samples, {"genome_id": "dm6"}, enzyme="dddb", min_mapq=20)
+client.recall_library_entry(entry_id)          # dry run: the plan, with the recorded MAPQ kept
 ```
 
 ## TF Motif Search
@@ -849,7 +947,10 @@ Linked-session methods:
 
 ### Display, Layers & Labeling (Jupyter → Browser)
 - `set_visible_layers(layers=None, **layer_states)` - Toggle read-level layers; accepts aliases such as `msp=True` and normalizes them to `fire`
-- `set_metaprofile_layers(layers=None, **layer_states)` - Toggle metaprofile rows
+- `set_metaprofile_layers(layers=None, follow_active_layers=None, **layer_states)` - Show or hide the default metaprofile's sources (manual from then on); `follow_active_layers=True` / `set_metaprofile_follow(True)` makes it follow the layer toggles again
+- `set_read_filters(...)` / `get_read_filters()` - Min footprints (-1: all reads, including uncalled), footprint quality, duplicate and QC-fail toggles
+- `set_layer_colors(...)` / `reset_layer_colors(...)` / `get_layer_colors()` / `set_default_layer_colors(...)` - Session layer colours and this computer's saved defaults
+- `set_reverse_view(reversed=True)` - Reverse the view (Flip to gene direction)
 - `set_layer_cache(layers=None, **layer_states)` - Toggle which optional layers are prefetched into read-window caches
 - `set_display_settings(...)` - Push raw display/layer settings including `fill_read_height`, `read_row_height`, `show_coverage_histogram`, `cached_layer_types`, and `legacy_layer_inference`
 - `set_legacy_layer_inference(enabled=True, nuc_min_size=90)` - Configure legacy footprint splitting into inferred `nuc`, `tf`, and FIRE/MSP-compatible layers
@@ -879,6 +980,11 @@ Linked-session methods:
 - `set_quality_filters(filters)` / `get_quality_filters()` / `clear_quality_filters()` - Manage backend quality filters
 - `set_peak_lock(locked=True)` / `lock_peaks()` / `unlock_peaks()` - Toggle peak locking without changing rules
 - `clear_cache()` - Clear server-side read caches
+- `set_read_policy(...)` / `get_read_policy()` - Default duplicate, QC-fail, uncalled and quality rules for this client's read requests
+- `set_window_quant(...)`, `set_quant_window(...)`, `set_quant_spec(...)`, `set_metaprofile_axis(...)`, `open_quantify(...)`, `get_window_quant()` - Quantify a window and the relative axis
+- `open_plot(...)`, `keep_plot(...)`, `get_plots_state()`, `get_plot_spec()`, `set_workspace(...)` - Plots and the Gallery
+- `start_meta_locus_pool(...)`, `get_meta_locus_reads(...)`, `open_meta_locus(...)`, `meta_locus_more_reads(...)`, `meta_locus_resample(...)`, `meta_locus_find_more(...)` - Meta-locus pools and the live meta-locus
+- `find_sequence(...)`, `get_recent_genomes()`, `open_recent_genome(...)`, `reset_annotation(...)`, `run_fiberhmm(...)`, `recall_library_entry(...)` - Find sequence, genomes and runs
 
 ### Matrix Conversion (static methods)
 - `BrowserClient.to_matrix(reads_df, region_width=None)` - Convert to (n_reads, width) matrix
@@ -900,6 +1006,9 @@ python -m pytest tests/test_jupyter_workflows.py tests/test_browser_client.py
 
 # Slow smoke test that starts a standalone headless server and drives it
 python -m pytest tests/test_headless_workflow.py
+
+# 3.1 surfaces: client mapping, notebook settings in tab-less figures, docs coverage
+python -m pytest tests/test_browser_client_parity311.py tests/test_notebook_figure_settings.py tests/test_jupyter_api_docs.py
 ```
 
 The first suite verifies that navigation, pushed reads, ordering, filtering,

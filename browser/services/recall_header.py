@@ -58,11 +58,13 @@ RETIRED = {
 # pipeline's --call-args or an outputs.json's call_args).
 RETIRED_CAUSED_ARTIFACTS = "retired in FiberHMM 3.0: caused artifacts"
 DROPPED = {
-    "fiberhmm-call": {"--phase-nrl": RETIRED_CAUSED_ARTIFACTS, "--nuc-recall-policy": RETIRED_CAUSED_ARTIFACTS},
+    "fiberhmm-call": {"--phase-nrl": RETIRED_CAUSED_ARTIFACTS},
     "fiberhmm-pipeline": {},
 }
 # fiberhmm-call's dests for them (argparse's own derivation), for the parse comparison.
-DROPPED_DESTS = {"phase_nrl", "nuc_recall_policy"}
+DROPPED_DESTS = {"phase_nrl"}
+# --nuc-recall-policy is offered again from 3.1.1 (the run wizard's "Nucleosome recall: Topology", for Hia5 and DddB;
+# FiberHMM 3.2 accepts it, hidden from its help, and 3.3 shows it): a recorded value is replayed, not dropped.
 
 
 def _retired_spelling(word: str, table: Optional["Table"] = None) -> Optional[str]:
@@ -634,13 +636,14 @@ def changed_defaults(tool: str, enzyme: str, flags: set[str], ds: str, input_ind
                             "the original's decoder."})
     # Nucleosome recall the original ran with by default (an explicit option is dropped, and listed, instead).
     phase, policy = _ds_token(ds, "phase_nrl"), _ds_token(ds, "nuc_recall_policy")
-    if enzyme != "ddda" and lacks(*DROPPED["fiberhmm-call"]) and ((phase not in (None, "0", "off")) or policy == "topology"):
-        used = ", ".join(x for x in (f"phase_nrl={phase}" if phase not in (None, "0", "off") else "",
-                                     "nuc_recall_policy=topology" if policy == "topology" else "") if x)
+    if enzyme != "ddda" and lacks(*DROPPED["fiberhmm-call"]) and phase not in (None, "0", "off"):
         out.append({"id": "nuc_recall", "restore": None,
-                    "text": f"FiberHMM 3.0 calls nucleosomes with no periodicity prior and conservative recall; "
-                            f"the original used {used}, options {RETIRED_CAUSED_ARTIFACTS}, so nothing "
-                            "restores them."})
+                    "text": f"FiberHMM 3.0 calls nucleosomes with no periodicity prior; the original used "
+                            f"phase_nrl={phase}, an option {RETIRED_CAUSED_ARTIFACTS}, so nothing restores it."})
+    if enzyme != "ddda" and lacks("--nuc-recall-policy") and policy == "topology":
+        out.append({"id": "nuc_recall_policy", "restore": ["--nuc-recall-policy", "topology"],
+                    "text": "The original called nucleosomes with topology recall (its default then); this "
+                            "re-call uses conservative recall unless you restore it."})
     return out
 
 

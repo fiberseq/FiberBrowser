@@ -82,8 +82,32 @@ def _console_script(name: str) -> Callable[[], object]:
     raise SystemExit(f"{name}: no such command in this FiberBrowser app")
 
 
+def configure_tls_trust() -> None:
+    """Certificate authorities for the app's own HTTPS (update checks, genome downloads, remote files).
+
+    The bundled OpenSSL's default CA file is a path on the machine that built it (FiberBrowser 3.0.x and 3.1.0 were
+    built with a conda OpenSSL whose default is inside the builder's conda env, which no user has), so without this
+    every HTTPS check fails with CERTIFICATE_VERIFY_FAILED. The bundled certifi CA file is used instead, for Python
+    (SSL_CERT_FILE) and for htslib's libcurl (CURL_CA_BUNDLE). A CA file the user already set (a proxy that re-signs
+    traffic) wins."""
+    if os.environ.get("SSL_CERT_FILE") or os.environ.get("SSL_CERT_DIR"):
+        bundle = os.environ.get("SSL_CERT_FILE")
+    else:
+        try:
+            import certifi
+            bundle = certifi.where()
+        except Exception:
+            return
+        if not bundle or not os.path.isfile(bundle):
+            return
+        os.environ["SSL_CERT_FILE"] = bundle
+    if bundle:
+        os.environ.setdefault("CURL_CA_BUNDLE", bundle)
+
+
 def configure_frozen_process() -> None:
     """Keep caches out of the signed bundle and put helper programs on PATH."""
+    configure_tls_trust()
     # The frozen interpreter ignores PYTHON* variables (PYTHONUNBUFFERED,
     # PYTHONPYCACHEPREFIX): apply them here. Line-buffered output keeps the
     # server log current (it is a file, not a terminal).

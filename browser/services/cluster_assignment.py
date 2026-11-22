@@ -20,6 +20,37 @@ def log_cluster_assignment_diagnostic(message: str) -> None:
     log_if_enabled(CLUSTER_DIAGNOSTICS_ENV, message)
 
 
+def canonical_cluster_labels(labels, read_ids=None, centers=None, rank_out: dict | None = None) -> np.ndarray:
+    """k-means cluster numbers in a fixed order (3.1.1): by size, largest first; ties by the cluster's smallest read id
+    (``read_ids``, one per row), else by its centre (``centers``: {label: vector}, lexicographic), else by the old
+    label. sklearn numbers its clusters arbitrarily (and differently when the same reads arrive in another order), so
+    every k-means path (cluster_all, a fit on given rows, matched views, the read sort, headless re-cluster) numbers
+    through here and the same partition always carries the same numbers and colours. Negative labels are kept.
+    ``rank_out`` receives {old label: new label}."""
+    labels = np.asarray(labels)
+    if labels.size == 0:
+        return labels.astype(np.int32)
+    present = sorted(int(c) for c in np.unique(labels) if c >= 0)
+    sizes = {c: int(np.count_nonzero(labels == c)) for c in present}
+    first_id: dict = {}
+    if read_ids is not None:
+        for rid, c in zip(read_ids, labels.tolist()):
+            if c >= 0:
+                key = str(rid)
+                if c not in first_id or key < first_id[c]:
+                    first_id[c] = key
+
+    def order_key(c):
+        tie = first_id.get(c, "") if read_ids is not None else ""
+        centre = tuple(float(v) for v in centers[c]) if centers is not None and c in centers else ()
+        return (-sizes[c], tie, centre, c)
+
+    rank = {old: new for new, old in enumerate(sorted(present, key=order_key))}
+    if rank_out is not None:
+        rank_out.update(rank)
+    return np.array([rank.get(int(c), int(c)) if c >= 0 else int(c) for c in labels.tolist()], dtype=np.int32)
+
+
 def _kmeans_labels(X, n_clusters: int, random_state: int):
     from sklearn.cluster import KMeans
 
@@ -261,12 +292,12 @@ def cluster_reads(reads_df, peak_regions, n_clusters, start, method="kmeans",
             batch_size=256,
             n_init=3,
         )
-        labels = clusterer.fit_predict(X)
+        labels = canonical_cluster_labels(clusterer.fit_predict(X), read_ids)
         log_cluster_assignment_diagnostic(f"  MiniBatch KMeans: k={actual_k}")
 
     elif method == "kmeans":
         actual_k = _bounded_cluster_count(n_clusters, n_samples)
-        labels = _kmeans_labels(X, actual_k, random_state)
+        labels = canonical_cluster_labels(_kmeans_labels(X, actual_k, random_state), read_ids)
         log_cluster_assignment_diagnostic(f"  KMeans: k={actual_k}")
 
     t2 = time.time()
@@ -445,7 +476,7 @@ def cluster_compact_reads(compact_reads, peak_regions, region_start, n_clusters,
             fitted_ids = {original_ids[i] for i in fit_rows}
             fit_rows = [i for i, read_id in enumerate(read_ids) if read_id in fitted_ids]
         labels = _fit_predict(X, np.asarray(fit_rows, dtype=np.int64), n_clusters, method, random_state,
-                              centers_out=centers_out)
+                              centers_out=centers_out, ids=read_ids)
 
     elif method == "minibatch":
         try:
@@ -460,10 +491,11 @@ def cluster_compact_reads(compact_reads, peak_regions, region_start, n_clusters,
         except ImportError:
             actual_k = _bounded_cluster_count(n_clusters, n_samples)
             labels = _kmeans_labels(X, actual_k, random_state)
+        labels = canonical_cluster_labels(labels, read_ids)
 
     elif method == "kmeans":
         actual_k = _bounded_cluster_count(n_clusters, n_samples)
-        labels = _kmeans_labels(X, actual_k, random_state)
+        labels = canonical_cluster_labels(_kmeans_labels(X, actual_k, random_state), read_ids)
 
     elif method == "hdbscan":
         labels = _hdbscan_labels(X)

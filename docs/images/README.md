@@ -70,6 +70,20 @@ names (`workspace`, `metaprofile-bands`, `size-histogram`, `vplot`,
 `-f hg38.fa -g hg38.gtf` from a local genome cache (no download), and `nucleosomes` with `--nuc-bams A,B`
 (two synthetic samples from `tests/nuc_fixtures.py`, see the script header).
 
+## Window quantification and multi-source Plots (3.1.1)
+
+These four come from the e2e specs on the bundled NAPA demo (synthetic
+reference, scratch HOME), with `FIBERBROWSER_E2E_SHOTS` set to an output folder:
+
+| Image | Spec and shot |
+|---|---|
+| `guide/x24_quantify_window.png` | `window-quant.spec.ts`, `cluster_profiles_window_layers.png` |
+| `guide/x25_relative_axis.png` | `window-quant.spec.ts`, `relative_axis_window.png` |
+| `plots/multi-source.png` | `plots-multi-source.spec.ts`, `1440_multisource_panels_window.png` |
+| `plots/summary-bars.png` | `plots-multi-source.spec.ts`, `1440_multisource_summary_bars_card.png` |
+
+Compress them as the capture scripts do (1600 px wide, 256 colours).
+
 ## Images used by each page
 
 The table includes existing images so a reviewer can check each complete page.
@@ -86,13 +100,13 @@ New files remain pending until the coordinator captures them.
 | [structural-variants.md](../workflows/structural-variants.md) | [pangenome/sv-tab.png](pangenome/sv-tab.png)<br>[pangenome/sv-row-menu.png](pangenome/sv-row-menu.png)<br>[pangenome/sv-highlight.png](pangenome/sv-highlight.png)<br>[pangenome/sv-settings.png](pangenome/sv-settings.png) |
 | [graph-mode.md](../workflows/graph-mode.md) | [graph/graph-mode-host.png](graph/graph-mode-host.png)<br>[graph/graph-mode-strips.png](graph/graph-mode-strips.png)<br>[graph/graph-mode-menu.png](graph/graph-mode-menu.png)<br>[graph/graph-mode-joined.png](graph/graph-mode-joined.png)<br>[graph/graph-mode-popout.png](graph/graph-mode-popout.png)<br>[graph/graph-mode-site-sort.png](graph/graph-mode-site-sort.png)<br>[graph/graph-mode-cluster.png](graph/graph-mode-cluster.png)<br>[graph/graph-mode-not-a-carrier.png](graph/graph-mode-not-a-carrier.png)<br>[graph/graph-mode-handoff.png](graph/graph-mode-handoff.png) |
 | [feature-hub.md](../workflows/feature-hub.md) | [feature-hub/hub-panel.png](feature-hub/hub-panel.png)<br>[feature-hub/scan-dialog.png](feature-hub/scan-dialog.png)<br>[feature-hub/hub-paging.png](feature-hub/hub-paging.png)<br>[feature-hub/lifted-hits.png](feature-hub/lifted-hits.png)<br>[feature-hub/lifted-hits-graph.png](feature-hub/lifted-hits-graph.png)<br>[feature-hub/cluster-regions.png](feature-hub/cluster-regions.png)<br>[feature-hub/assoc-builder.png](feature-hub/assoc-builder.png)<br>[feature-hub/assoc-no-contrast.png](feature-hub/assoc-no-contrast.png)<br>[feature-hub/overlay-profile.png](feature-hub/overlay-profile.png)<br>[feature-hub/overlay-carriers.png](feature-hub/overlay-carriers.png) |
-| [plots.md](../workflows/plots.md) | [plots/workspace.png](plots/workspace.png)<br>[plots/metaprofile-bands.png](plots/metaprofile-bands.png)<br>[plots/vplot.png](plots/vplot.png)<br>[plots/size-histogram-random.png](plots/size-histogram-random.png)<br>[plots/heatmap-bed.png](plots/heatmap-bed.png)<br>[plots/co-accessibility.png](plots/co-accessibility.png)<br>[plots/summary-clusters.png](plots/summary-clusters.png)<br>[plots/compare-summary.png](plots/compare-summary.png)<br>[plots/gallery.png](plots/gallery.png) |
+| [plots.md](../workflows/plots.md) | [plots/workspace.png](plots/workspace.png)<br>[plots/metaprofile-bands.png](plots/metaprofile-bands.png)<br>[plots/vplot.png](plots/vplot.png)<br>[plots/size-histogram-random.png](plots/size-histogram-random.png)<br>[plots/heatmap-bed.png](plots/heatmap-bed.png)<br>[plots/co-accessibility.png](plots/co-accessibility.png)<br>[plots/summary-clusters.png](plots/summary-clusters.png)<br>[plots/compare-summary.png](plots/compare-summary.png)<br>[plots/multi-source.png](plots/multi-source.png)<br>[plots/summary-bars.png](plots/summary-bars.png)<br>[plots/gallery.png](plots/gallery.png) |
 | [meta-locus.md](../workflows/meta-locus.md) | [meta-locus/open-menu.png](meta-locus/open-menu.png)<br>[meta-locus/dialog.png](meta-locus/dialog.png)<br>[meta-locus/clustered.png](meta-locus/clustered.png) |
 | [nucleosome-panel.md](../workflows/nucleosome-panel.md) | [nucleosome/geometries.png](nucleosome/geometries.png)<br>[nucleosome/charts.png](nucleosome/charts.png) |
 | [session-migration.md](../workflows/session-migration.md) | No screenshot needed. |
 | [navigation-speed.md](../workflows/navigation-speed.md) | No screenshot needed. |
 | [footprint-classes.md](../workflows/footprint-classes.md) | No screenshot needed. |
-| [guide.md](../guide.md) (Layer colours; Recent and pinned genomes) | [guide/x22_layer_colours.png](guide/x22_layer_colours.png)<br>[guide/x23_change_colour.png](guide/x23_change_colour.png)<br>[genome/recent-genomes.png](genome/recent-genomes.png)<br>[genome/recent-match-banner.png](genome/recent-match-banner.png) |
+| [guide.md](../guide.md) (Layer colours; Recent and pinned genomes; Quantify a window) | [guide/x22_layer_colours.png](guide/x22_layer_colours.png)<br>[guide/x23_change_colour.png](guide/x23_change_colour.png)<br>[guide/x24_quantify_window.png](guide/x24_quantify_window.png)<br>[guide/x25_relative_axis.png](guide/x25_relative_axis.png)<br>[genome/recent-genomes.png](genome/recent-genomes.png)<br>[genome/recent-match-banner.png](genome/recent-match-banner.png) |
 
 The [user guide](../guide.md) keeps its existing `guide/*.png` tour images.
 Its new paragraphs link to the pages above and need no extra tour images.

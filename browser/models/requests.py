@@ -4,7 +4,7 @@ All request/response models used by API endpoints. Organized by feature area.
 """
 
 import math
-from typing import Annotated, Any, Optional, List, Dict, Literal
+from typing import Annotated, Any, Optional, List, Dict, Literal, Union
 from pydantic import BaseModel, BeforeValidator, Field
 
 
@@ -547,6 +547,21 @@ class RenderRequest(BaseModel):
     subnuc_threshold: int = 90
     dataset_ids: Optional[List[str]] = None
     sample_seed: Optional[str] = None
+    # Headless engine, scripted figures (services/figure/options.py; a session's "headless_figure" block can set
+    # these too). None / unset: the view's own behaviour, unchanged.
+    max_reads_by_dataset: Optional[Dict[str, int]] = None   # reads per panel, by dataset id, panel id or label
+    hide_tracks: Optional[List[str]] = None                 # rows to leave out: "sv", "coverage", "axis", ...
+    annotations: Optional[Dict[str, Any]] = None            # BED overlay, opening classes, side stats
+    page_size: Optional[Any] = None                         # "180x120mm", "7x5in", [w, h, "mm"]
+    page_fit: Optional[Literal["contain", "width", "height", "stretch"]] = None
+    min_font_pt: Optional[float] = None                     # smallest text on the page, in final points
+    raster_dpi: Optional[float] = None                      # read rasters (and PNG) at this many px per inch
+    pdf_fonts: Optional[Literal["standard", "truetype"]] = None  # "truetype": embedded TrueType (fonttype 42)
+    manifest: bool = False                  # JSON reply: the figure (base64) plus per-panel read counts and stats
+    manifest_read_ids: bool = False         # the manifest also lists each panel's drawn read ids, in order
+    # A meta-locus (pooled loci, services/figure/meta_locus.py): {bed, anchor, flank_bp, datasets, seed, count, ...}
+    # or a pool id. A session saved on a meta:<pool> view brings its own; this one wins.
+    meta_locus: Optional[Union[Dict[str, Any], str]] = None
     # "numpy" = original PIL/numpy compositor with hard-coded 3-bin palette.
     # "playwright" = drive the live React app via headless Chromium so colors,
     # rules, layers, and cluster state match the on-screen browser exactly.
@@ -572,6 +587,29 @@ class RenderRequest(BaseModel):
     # Per-request Playwright render timeout in ms. Accept the frontend/JS-style
     # key used by the headless worker contract.
     timeout_ms: Optional[int] = Field(default=None, alias="timeoutMs")
+
+class RenderClusterRequest(BaseModel):
+    """/api/render/cluster: re-cluster a session's panels reproducibly (services/figure/recluster.py)."""
+    session: Optional[Dict[str, Any]] = None
+    session_path: Optional[str] = None
+    load_session: bool = True
+    region: Optional[str] = None
+    method: str = "kmeans"
+    k: int = Field(5, ge=1, le=200)
+    seed: str = "fiberbrowser-analysis"
+    features: Optional[List[List[int]]] = None   # absolute [start, end) intervals; None: the whole region
+    feature_mode: str = "accessibility"
+    balance_windows: bool = True
+    max_reads: Optional[int] = Field(None, ge=1)
+    dataset_ids: Optional[List[str]] = None
+    subnucleosomal_threshold: int = 90
+    accessibility_threshold: float = 0.5
+    # A meta-locus view (services/figure/meta_locus.py): the spec or pool id; a session on a meta:<pool> view brings its
+    # own. features_relative: [from, to] bp from the anchor; default on a meta-locus: +-anchor_window around it.
+    meta_locus: Optional[Union[Dict[str, Any], str]] = None
+    features_relative: Optional[List[List[int]]] = None
+    anchor_window: int = Field(500, ge=1, le=50_000)
+
 
 class CompileRegion(BaseModel):
     chrom: str
@@ -904,6 +942,28 @@ class JupyterBrowserSettingsRequest(BaseModel):
     open_panel: Optional[str] = None
     close_panel: Optional[str] = None
     hidden_strip_panels: Optional[List[str]] = None
+    # 3.1.1 parity. Read filters as the read track applies them: Min footprints (-1: "All reads, including
+    # uncalled"), the footprint-quality gate, the duplicate and QC-fail toggles.
+    min_footprints: Optional[int] = Field(None, ge=-1, le=100_000)
+    min_fp_quality: Optional[int] = Field(None, ge=0, le=255)
+    show_duplicate_reads: Optional[bool] = None
+    show_qc_fail_reads: Optional[bool] = None
+    # The default metaprofile follows the Tracks layer toggles (True) or keeps its sources (False).
+    metaprofile_follow_active_layers: Optional[bool] = None
+    # Layer colours, layer key -> #rrggbb (null forgets one): the session's, merged (or replacing), and the saved
+    # defaults (this computer's preferences).
+    layer_color_overrides: Optional[Dict[str, Optional[str]]] = None
+    replace_layer_color_overrides: Optional[bool] = None
+    user_layer_colors: Optional[Dict[str, Optional[str]]] = None
+    # Quantify a window (window, spec, axis, open_in), a PlotSpec to open in Plots, and the workspace.
+    window_quant: Optional[Dict[str, Any]] = None
+    plot: Optional[Dict[str, Any]] = None
+    plots_region_sets: Optional[List[Dict[str, Any]]] = None
+    # Set by the server in the merged summary: apply the follow switch before the toggles (summary-only tabs).
+    metaprofile_follow_first: Optional[bool] = None
+    workspace: Optional[Literal["browser", "plots", "hub"]] = None
+    # Reverse the view (Flip to gene direction: reads and metaprofiles flip together).
+    reversed: Optional[bool] = None
 
 
 class JupyterBrowserSettingsSnapshotRequest(JupyterBrowserSettingsRequest):
@@ -916,6 +976,9 @@ class JupyterBrowserSettingsSnapshotRequest(JupyterBrowserSettingsRequest):
     cluster_assignments: Optional[dict] = None
     cluster_order: Optional[dict] = None
     read_sort_order: Optional[dict] = None
+    plots_workspace: Optional[Dict[str, Any]] = None
+    plots_gallery: Optional[List[dict]] = None
+    meta_locus: Optional[Dict[str, Any]] = None
 
 
 # ── Motif Search ────────────────────────────────────────────────────────────

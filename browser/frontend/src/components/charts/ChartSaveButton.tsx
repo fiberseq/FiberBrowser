@@ -19,6 +19,9 @@ interface ChartSaveButtonProps {
   drawFn?: ChartDrawFn;
   width?: number;
   height?: number;
+  /** PNG is drawn through `drawFn` at `width` × `height` (2x), not copied from the canvas on screen: the export adds
+   *  content the screen draws outside the canvas (a relative x-axis strip). */
+  pngFromDrawFn?: boolean;
 }
 
 const NO_CANVAS = { current: null } as React.RefObject<HTMLCanvasElement | null>;
@@ -32,6 +35,7 @@ export function ChartSaveButton({
   width,
   height,
   dataTsv,
+  pngFromDrawFn = false,
 }: ChartSaveButtonProps) {
   const [showMenu, setShowMenu] = useState(false);
 
@@ -62,8 +66,8 @@ export function ChartSaveButton({
       setShowMenu(false);
       return;
     }
-    let canvas = canvasRef.current;
-    // No canvas on screen (a figure drawn only for export): draw it at 2x for the PNG.
+    let canvas = pngFromDrawFn ? null : canvasRef.current;
+    // No canvas on screen (a figure drawn only for export), or an export with more than the screen: draw it at 2x.
     if (!canvas && drawFn && width !== undefined && height !== undefined) {
       canvas = document.createElement('canvas');
       canvas.width = Math.round(width * 2);
@@ -78,7 +82,7 @@ export function ChartSaveButton({
       if (blob) downloadBlob(blob, `${filename}_${ts()}.png`);
     }, 'image/png');
     setShowMenu(false);
-  }, [canvasRef, getSvg, filename, downloadBlob, drawFn, width, height]);
+  }, [canvasRef, getSvg, filename, downloadBlob, drawFn, width, height, pngFromDrawFn]);
 
   const saveSVG = useCallback(async () => {
     const inline = getSvg?.();

@@ -195,7 +195,7 @@ describe('ClusterPanel toolbar groups', () => {
       expect(toggle.textContent).toBe('');
       expect(toggle.getAttribute('aria-label')).toMatch(/options$/);
       expect(toggle.getAttribute('data-tour')).toBe(`${id}-controls-expand`);
-      expect(byId(`toolbar-group-${id}`)!.firstElementChild!.textContent).toBe(id === 'cluster' ? 'ClusterPanels: all▾ Sizes' : name);
+      expect(byId(`toolbar-group-${id}`)!.firstElementChild!.textContent).toBe(id === 'cluster' ? 'ClusterPanels: all▾' : name);
     }
     expect(byId('toolbar-group-toggle-reads')!.textContent).toBe('Reads');
   });
@@ -571,18 +571,16 @@ describe('ClusterPanel toolbar groups', () => {
   });
 });
 
-describe('Footprint size enrichment from the Cluster group', () => {
-  it('is on show beside Cluster (and in its options), before any clustering', async () => {
-    const { openFootprintSizes } = await import('../../utils/footprintSizeEntry');
-    expect(typeof openFootprintSizes).toBe('function');
+describe('the Cluster group has no footprint size buttons (Plots draws them)', () => {
+  it('shows neither the Sizes quick button nor Footprint sizes, before or after clustering', async () => {
     useBrowserStore.setState({ clusterAssignments: {} } as never);
     const host = document.createElement('div');
     document.body.appendChild(host);
     const r = createRoot(host);
     await act(async () => { r.render(<ClusterPanel />); });
-    const quick = host.querySelector('[data-testid="cluster-footprint-sizes-quick"]') as HTMLButtonElement;
-    expect(quick?.getAttribute('aria-label')).toBe('Footprint size enrichment');
-    expect(quick.title).toMatch(/No clustering needed/);
+    expect(host.querySelector('[data-testid="cluster-footprint-sizes-quick"]')).toBeNull();
+    expect(host.querySelector('[data-testid="cluster-footprint-sizes-button"]')).toBeNull();
+    expect(host.textContent).not.toMatch(/Footprint sizes/);
     act(() => r.unmount());
     host.remove();
   });

@@ -7,7 +7,7 @@ import type { RecentGenomeMatch } from '../../api/recentGenomes';
 import { recentGenomeLabel, useRecentGenomesStore } from '../../stores/recentGenomesStore';
 import { useReferenceFastaLoader } from '../../hooks/useReferenceFastaLoader';
 import { useBrowserStore } from '../../stores/browserStore';
-import { customGenomeKey, problemKey, unknownToEveryAssembly, useGenomeCheckStore, visibleProblems } from '../../stores/genomeCheckStore';
+import { customGenomeKey, invalidateGenomeCheck, problemKey, unknownToEveryAssembly, useGenomeCheckStore, visibleProblems } from '../../stores/genomeCheckStore';
 import { usePanelGenomeStore } from '../../stores/panelGenomeStore';
 import { isSandboxPage } from '../../utils/sandbox';
 import { useLaunchUiStore } from '../../utils/launchSession';
@@ -69,10 +69,27 @@ export function useGenomeCheckWatcher(): void {
     refreshGeneration: s.refreshGeneration,
   })));
   const refresh = useGenomeCheckStore(s => s.refresh);
+  const lastReference = useRef<string | null>(null);
   useEffect(() => {
-    // No datasets: nothing can mismatch (and an old answer must not linger).
-    if (!datasetKey) useGenomeCheckStore.setState({ check: null });
-    else void refresh();
+    const reference = `${currentGenome ?? ''}|${fastaPath ?? ''}|${hasFasta ? 1 : 0}`;
+    const sameReference = lastReference.current === null || lastReference.current === reference;   // (first run: whatever is there)
+    lastReference.current = reference;
+    if (datasetKey) { void refresh(); return; }
+    // No datasets and no reference: nothing to check (an old answer must not linger).
+    if (!hasFasta && !currentGenome) { useGenomeCheckStore.setState({ check: null }); return; }
+    // A reference alone is still checked for its gene annotation (the genes prompt). Its dataset fields go at once
+    // (nothing can mismatch), but the annotation status stays while it refreshes, so the prompt (and an error with
+    // Retry it shows) is not unmounted by a refresh of the same reference.
+    const withoutDatasets = () => {
+      const check = useGenomeCheckStore.getState().check;
+      if (check && !useBrowserStore.getState().datasets.length) {
+        useGenomeCheckStore.setState({ check: { ...check, datasets: [], problems: [], suggestion: null, recent_match: null } });
+      }
+    };
+    // Another reference: the last one's status never stands in for it (its prompt would load the wrong genes).
+    if (sameReference) withoutDatasets();
+    else invalidateGenomeCheck();
+    void refresh().then(withoutDatasets);
   }, [datasetKey, currentGenome, hasFasta, fastaPath, chromKey, refreshGeneration, refresh]);
 }
 

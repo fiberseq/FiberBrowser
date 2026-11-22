@@ -1,5 +1,5 @@
 /**
- * The footprint size plots' data (Clusters › Footprint sizes and the Plots workspace): one request per clustering
+ * The footprint size plots' data (the Plots workspace's size plots): one request per clustering
  * round, or one per view for all reads (group_by 'all'), to /api/cluster/vplot, keyed by everything a plot depends
  * on. The result carries the key and the locus it was computed for, so a caller can tell a current result from a
  * previous view's (the Plots stale-state guard) and never show the latter's numbers as current.
@@ -173,7 +173,9 @@ export function useFootprintSizeData(o: FootprintSizeDataOptions): {
             ...common, groupBy: 'cluster', clusterAssignments: round.assignments, datasetIds: Object.keys(round.assignments),
           }).then(res => Object.entries(round.keyByDataset).flatMap(([ds, k]) => {
             const d = res.data?.[ds];
-            return d && !('error' in d) ? [[k, ds, d as Record<string, FootprintSizeData>]] as Array<[string, string, Record<string, FootprintSizeData>]> : [];
+            // A dataset that failed fails the plot (as by dataset), never a partial result drawn as the whole.
+            if (d && 'error' in d) throw new Error(String((d as { error: string }).error));
+            return d ? [[k, ds, d as Record<string, FootprintSizeData>]] as Array<[string, string, Record<string, FootprintSizeData>]> : [];
           })));
         }
       } else if (readGroups) {
@@ -189,7 +191,8 @@ export function useFootprintSizeData(o: FootprintSizeDataOptions): {
           jobs.push(fetchFootprintSizes(target.chrom, target.start, target.end, { ...common, groupBy: 'cluster', clusterAssignments: assignments, datasetIds: dsIds })
             .then(res => dsIds.flatMap(ds => {
               const d = res.data?.[ds];
-              return d && !('error' in d) ? [[`${g.id}@${ds}`, ds, d as Record<string, FootprintSizeData>]] as Array<[string, string, Record<string, FootprintSizeData>]> : [];
+              if (d && 'error' in d) throw new Error(String((d as { error: string }).error));
+              return d ? [[`${g.id}@${ds}`, ds, d as Record<string, FootprintSizeData>]] as Array<[string, string, Record<string, FootprintSizeData>]> : [];
             })));
         }
       } else if (pooled) {

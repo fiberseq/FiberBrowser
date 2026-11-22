@@ -17,11 +17,20 @@
 # Settings (environment variables):
 #   FB_FLAVOR         public (default); legacy lab is an alias for the same complete release
 #   FB_BUILD_DIR        work and output folder (default: <repo>/build/macos)
-#   FB_PYTHON           base Python for the build venv: 3.10+, native arm64 (default: python3.12,
-#                       python3.11, python3.10, python3). Its minimum macOS carries into the app.
+#   FB_PYTHON_RUNTIME   the base Python of the build venv (the app's runtime; its minimum macOS carries into the app):
+#                       standalone (default): the pinned python-build-standalone CPython (packaging/third_party.sh),
+#                         downloaded once into FB_BUILD_DIR, checksum-checked. Built under a generic prefix, so the
+#                         app's libpython carries no builder's path (a conda or Homebrew Python's carries its
+#                         install prefix, and the private-path check below then fails the build).
+#                       path: FB_PYTHON, else the first of python3.12, python3.11, python3.13, python3.10, python3
+#                         (the pre-3.1.1 builds; a conda Python then needs FB_ALLOW_PRIVATE_PATHS=1)
+#   FB_PYTHON           base Python for FB_PYTHON_RUNTIME=path: 3.10+, native arm64. Setting it without
+#                       FB_PYTHON_RUNTIME selects path.
+#   FB_PYTHON_STANDALONE_TARBALL  a local copy of the pinned python-build-standalone tarball (offline builds;
+#                       checksum-checked)
 #   FB_FIBERBROWSER     what to install as FiberBrowser (default: this checkout)
 #   FB_FIBERHMM         FiberHMM to bundle: a pip requirement or a source folder
-#                       (default: fiberhmm[consensus]>=3.2.0,<4 from PyPI)
+#                       (default: fiberhmm[consensus]>=3.2.2,<4 from PyPI)
 #   FB_MINIMAP2         an existing arm64 minimap2 to bundle (default: build v$MINIMAP2_VERSION
 #                       from source; MIT licence, copied into the app)
 #   FB_BLAST_TARBALL    a local copy of NCBI's ncbi-blast-<version>+-aarch64-macosx.tar.gz (offline
@@ -131,10 +140,39 @@ pick_python() {
   done
   die "no native arm64 Python 3.10+ built for macOS <= $MACOS_TARGET found; set FB_PYTHON (python.org or conda Pythons target macOS 11)"
 }
+# The runtime: FB_PYTHON_RUNTIME, else path when FB_PYTHON is given, else standalone.
+PYTHON_RUNTIME="${FB_PYTHON_RUNTIME:-$( [ -n "${FB_PYTHON:-}" ] && echo path || echo standalone)}"
+case "$PYTHON_RUNTIME" in
+  standalone)
+    [ -z "${FB_PYTHON:-}" ] || die "FB_PYTHON is set but FB_PYTHON_RUNTIME=standalone: unset one of them"
+    say "Python runtime: python-build-standalone CPython $PYTHON_STANDALONE_VERSION ($PYTHON_STANDALONE_TAG)"
+    fetch_pinned "$BUILD/$PYTHON_STANDALONE_MACOS_TARBALL" "$PYTHON_STANDALONE_MACOS_SHA256" \
+      "$PYTHON_STANDALONE_URL/${PYTHON_STANDALONE_MACOS_TARBALL//+/%2B}" "${FB_PYTHON_STANDALONE_TARBALL:-}" \
+      || die "no python-build-standalone tarball: set FB_PYTHON_STANDALONE_TARBALL to a local $PYTHON_STANDALONE_MACOS_TARBALL"
+    STANDALONE_DIR="$BUILD/python-standalone-$PYTHON_STANDALONE_VERSION-$PYTHON_STANDALONE_TAG"
+    if [ ! -x "$STANDALONE_DIR/python/bin/python3" ]; then
+      rm -rf "$STANDALONE_DIR" && mkdir -p "$STANDALONE_DIR"
+      tar -xzf "$BUILD/$PYTHON_STANDALONE_MACOS_TARBALL" -C "$STANDALONE_DIR" || die "could not unpack $PYTHON_STANDALONE_MACOS_TARBALL"
+    fi
+    BASE="$STANDALONE_DIR/python/bin/python3"
+    python_ok "$BASE" || die "$BASE is not a native arm64 Python 3.10+ built for macOS <= $MACOS_TARGET"
+    RUNTIME_STAMP="standalone $PYTHON_STANDALONE_MACOS_SHA256 $BASE"
+    ;;
+  path)
+    BASE="$(pick_python)"
+    RUNTIME_STAMP="path $BASE"
+    ;;
+  *) die "FB_PYTHON_RUNTIME must be standalone or path (got $PYTHON_RUNTIME)" ;;
+esac
+# A venv made from another runtime is made again (the venv is otherwise reused between builds).
+if [ -x "$VENV/bin/python" ] && [ "$(cat "$VENV/.fb-python-runtime" 2>/dev/null)" != "$RUNTIME_STAMP" ]; then
+  say "The build venv was made from another Python runtime: making it again"
+  rm -rf "$VENV"
+fi
 if [ ! -x "$VENV/bin/python" ]; then
-  BASE="$(pick_python)"
   say "Creating the build venv with $BASE"
   "$BASE" -m venv "$VENV"
+  printf '%s' "$RUNTIME_STAMP" > "$VENV/.fb-python-runtime"
 fi
 python_ok "$VENV/bin/python" || die "the build venv $VENV was made with a Python built for a macOS newer than $MACOS_TARGET; delete it and rerun"
 # A clean PATH: a conda on PATH makes pyBigWig build against conda's libcurl,
@@ -142,7 +180,7 @@ python_ok "$VENV/bin/python" || die "the build venv $VENV was made with a Python
 pip_install() { env PATH="$VENV/bin:$CLEAN_PATH" "$VENV/bin/python" -m pip install --disable-pip-version-check "$@"; }
 say "Installing FiberBrowser, FiberHMM, pywebview and PyInstaller into $VENV"
 pip_install -q --upgrade pip
-FIBERHMM_SPEC="${FB_FIBERHMM:-fiberhmm[consensus]>=3.2.0,<4}"
+FIBERHMM_SPEC="${FB_FIBERHMM:-fiberhmm[consensus]>=3.2.2,<4}"
 if [ -d "$FIBERHMM_SPEC" ]; then
   # A source folder: always reinstall it (its version may not have changed).
   pip_install -q --force-reinstall --no-deps "$FIBERHMM_SPEC"
@@ -173,11 +211,11 @@ BUILT_FLAVOR="$(cd "$VENV" && "$VENV/bin/python" -I -c 'from fiberbrowser._paths
 [ "$BUILT_FLAVOR" = "$FLAVOR" ] \
   || die "FB_FLAVOR=$FLAVOR, but the FiberBrowser installed from ${FB_FIBERBROWSER:-$ROOT} is a $BUILT_FLAVOR build"
 # pyBigWig has no macOS arm64 wheel: pip builds it, and may reuse a wheel it
-# built earlier against another libcurl. Rebuild it if it doesn't load.
-if ! "$VENV/bin/python" -c "import pyBigWig" 2>/dev/null; then
-  say "Rebuilding pyBigWig against the system libcurl"
-  pip_install -q --no-cache-dir --force-reinstall --no-deps pyBigWig
-fi
+# built earlier against another libcurl (one that loads on this Mac, e.g. a conda
+# env's, which would then be bundled with its install path). Always rebuild it
+# against the system libcurl, from source, without pip's wheel cache.
+say "Building pyBigWig against the system libcurl"
+pip_install -q --no-cache-dir --force-reinstall --no-deps --no-binary pyBigWig pyBigWig
 # pip picks the newest wheel for *this* Mac; swap any that need a newer macOS
 # than the app's target for one that doesn't (e.g. orjson's macOS 15 wheel).
 "$VENV/bin/python" - "$MACOS_TARGET" > "$BUILD/too_new.txt" <<'PY'
@@ -209,6 +247,41 @@ print(f"  FiberBrowser {fiberbrowser.__version__}, FiberHMM {fiberhmm.__version_
       f"PyInstaller {PyInstaller.__version__}")
 PY
 VERSION="$("$VENV/bin/python" -c 'import fiberbrowser; print(fiberbrowser.__version__)')"
+# Every native library the venv's packages load must come from macOS or from the bundle itself
+# (@rpath/@loader_path); a library linked from elsewhere on the build Mac (a conda or Homebrew lib folder)
+# would be bundled with its install path, or missing on users' Macs. FB_ALLOW_PRIVATE_PATHS=1 skips this too.
+if [ "${FB_ALLOW_PRIVATE_PATHS:-0}" != 1 ]; then
+  "$VENV/bin/python" - "$VENV" <<'PY' || die "packages in the build venv link libraries outside macOS and the bundle (above)"
+import subprocess, sys
+from pathlib import Path
+ok = ("/usr/lib/", "/System/", "@rpath/", "@loader_path/", "@executable_path/")
+bad = []
+loads = ("LC_LOAD_DYLIB", "LC_LOAD_WEAK_DYLIB", "LC_REEXPORT_DYLIB", "LC_LAZY_LOAD_DYLIB", "LC_LOAD_UPWARD_DYLIB")
+for path in Path(sys.argv[1]).rglob("*"):
+    if path.suffix not in (".so", ".dylib") or path.is_symlink() or not path.is_file() or ".dSYM" in path.parts[-4:-1]:
+        continue
+    # The libraries it loads (its load commands; not its own install name, LC_ID_DYLIB).
+    words = subprocess.run(["otool", "-l", str(path)], capture_output=True, text=True).stdout.split()
+    deps, rpaths = [], []
+    for i, word in enumerate(words):
+        if word == "cmd" and i + 1 < len(words) and words[i + 1] in loads:
+            deps.append(words[words.index("name", i) + 1])
+        elif word == "cmd" and i + 1 < len(words) and words[i + 1] == "LC_RPATH":
+            rpaths.append(words[words.index("path", i) + 1])
+    for dep in deps:
+        if not dep.startswith(ok):
+            bad.append(f"  {path}: {dep}")
+        elif dep.startswith("@rpath/"):
+            # An absolute run path that exists on this Mac (a conda env's lib folder, say: pyBigWig built in one
+            # links @rpath/libcurl with the env's lib as run path) loads the build Mac's library. Upstream wheels'
+            # run paths name their CI machines' folders, which don't exist here.
+            for rp in rpaths:
+                if not rp.startswith("@") and rp != "/usr/lib" and Path(rp, dep[len("@rpath/"):]).exists():
+                    bad.append(f"  {path}: {dep} from the run path {rp}")
+print("\n".join(bad) if bad else "  venv libraries: macOS and bundle-relative only")
+sys.exit(1 if bad else 0)
+PY
+fi
 
 # --- 2. minimap2 -----------------------------------------------------------------
 MM2_DIR="$BUILD/minimap2-$MINIMAP2_VERSION"
@@ -226,6 +299,8 @@ else
     echo "$MINIMAP2_SHA256  $tarball" | shasum -a 256 -c - >/dev/null || die "minimap2 download checksum mismatch"
     rm -rf "$MM2_DIR" && tar -xjf "$tarball" -C "$BUILD"
     (cd "$MM2_DIR" && env PATH="$CLEAN_PATH" MACOSX_DEPLOYMENT_TARGET=11.0 make -s -j4 arm_neon=1 aarch64=1 >/dev/null)
+    # No debug map: its object-file entries carry the build folder's path.
+    strip -S "$MINIMAP2"
   fi
 fi
 "$MINIMAP2" --version >/dev/null || die "minimap2 at $MINIMAP2 doesn't run"
@@ -258,6 +333,9 @@ rm -rf "$DIST/FiberBrowser" "$APP"
     --distpath "$DIST" --workpath "$BUILD/work" "$HERE/FiberBrowser.spec")
 [ -d "$APP" ] || die "PyInstaller made no app"
 rm -rf "$DIST/FiberBrowser"  # the onedir copy; the app holds the same files
+# numba's in-tree caches (.nbi/.nbc) that importing pynndescent (UMAP) wrote into the build venv: they record the
+# build venv's path, and the app never reads them (frozen_entry sets NUMBA_CACHE_DIR to the user's cache folder).
+find "$APP" -type f \( -name '*.nbi' -o -name '*.nbc' \) -delete
 
 # --- 4. helper programs --------------------------------------------------------------
 say "Adding minimap2, BLAST+ and the fiberhmm-* commands"
@@ -284,6 +362,9 @@ mkdir -p "$TE_DEST"
 cp "$TE_SRC"/*.fa "$TE_SRC"/*.gff "$TE_DEST/"
 cat "$ROOT/packaging/third_party/drosophila-transposons-NOTICE.txt" "$TE_SRC/LICENSE" > "$LICENSES/drosophila-transposons-LICENSE.txt"
 cp "$LICENSES/drosophila-transposons-LICENSE.txt" "$TE_DEST/LICENSE.txt"
+# The Python runtime's licence (python-build-standalone: CPython's, with its statically linked libraries).
+PY_LICENSE="$("$VENV/bin/python" -c 'import os, sys, sysconfig; print(os.path.join(sysconfig.get_path("stdlib"), "LICENSE.txt"))')"
+[ -f "$PY_LICENSE" ] && cp "$PY_LICENSE" "$LICENSES/Python-LICENSE.txt"
 # The notices, without the export's section markers.
 sed -E '/^# lab:(begin|end)$/d' "$ROOT/packaging/third_party/THIRD_PARTY_NOTICES.txt" > "$LICENSES/THIRD_PARTY_NOTICES.txt"
 # The build: flavour (= update channel), version, build number, bundled FiberHMM (services/app_build.py). Its presence
@@ -341,9 +422,14 @@ cp "$ROOT/packaging/package_metadata.py" "$APP/Contents/Resources/package_metada
 "$VENV/bin/python" "$APP/Contents/Resources/package_metadata.py" --remove-direct-urls --record-build-home \
   --build-home "$HOME" "$APP/Contents" || die "private build paths in package metadata"
 # No bundled binary may carry the builder's home path (compilers embed source and install paths: the graph helper's
-# ~/.cargo paths, a conda Python's prefix, a local tool's debug map). FB_ALLOW_PRIVATE_PATHS=1: development builds.
+# ~/.cargo paths, a conda Python's prefix, a local tool's debug map). Release builds have no exceptions. FB_ALLOW_PRIVATE_PATHS=1: development builds.
 # FB_PRIVATE_PATHS_ALLOW: space-separated file names accepted as exceptions (a release decision, listed in the log).
-if [ "${FB_ALLOW_PRIVATE_PATHS:-0}" != 1 ]; then
+# On GitHub Actions the builder's home is the runner's, the same path upstream wheels (numpy, pysam ...) were built
+# under, so the scan would refuse every CI build for strings that are not ours. Releases are built locally, where the
+# scan runs; CI skips it (FB_PRIVATE_PATHS_ON_CI=1 runs it there too). The linked-library gate above still runs.
+if [ "${GITHUB_ACTIONS:-}" = true ] && [ "${FB_PRIVATE_PATHS_ON_CI:-0}" != 1 ]; then
+  echo "Private-path scan skipped on CI: the runner's home is where upstream wheels were built; releases are built locally."
+elif [ "${FB_ALLOW_PRIVATE_PATHS:-0}" != 1 ]; then
   ALLOW_ARGS=()
   for name in ${FB_PRIVATE_PATHS_ALLOW:-}; do ALLOW_ARGS+=(--allow "$name"); done
   "$VENV/bin/python" "$ROOT/packaging/check_private_paths.py" ${FB_REAL_HOME:+--forbid "$FB_REAL_HOME"} ${ALLOW_ARGS[@]+"${ALLOW_ARGS[@]}"} "$APP" \

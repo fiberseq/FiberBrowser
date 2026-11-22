@@ -24,12 +24,12 @@ FiberBrowser started from source or pip, and scripts.
 2. else `fiberhmm_source_dir` in `~/.fiberhmm/browser_settings.json`;
 3. else the `fiberhmm` package installed in FiberBrowser's Python.
 
-**What a build needs.** Each build declares the FiberHMM features it needs (FiberHMM 3.2.0 or later, with its scan, nucleosome, association and lift modules, for every 3.1 build; a plugin
+**What a build needs.** Each build declares the FiberHMM features it needs (FiberHMM 3.2.2 or later, with its scan, nucleosome, association and lift modules, for every 3.1 build; a plugin
 pack adds its own in its `fiberbrowser-pack.json`, ARCHITECTURE.md). The FiberHMM chosen above is checked from its
 files when FiberBrowser starts. An app whose custom FiberHMM lacks something falls back to its bundled FiberHMM and
 says so in one line (in the server log, in Settings and in About), for example:
 
-> Custom FiberHMM at /src/FiberHMM lacks the provenance API; using the bundled FiberHMM 3.2.0.
+> Custom FiberHMM at /src/FiberHMM lacks the provenance API; using the bundled FiberHMM 3.2.2.
 
 A pip or source run keeps the FiberHMM it was given and says what won't work with it. Nothing runs silently without
 the features it needs.
@@ -69,7 +69,7 @@ only when there is an update or the check needs you to sign in. Turn it off with
 **pip.** Update both packages in FiberBrowser's Python:
 
 ```bash
-pip install -U fiberbrowser "fiberhmm[consensus]>=3.2.0,<4"
+pip install -U fiberbrowser "fiberhmm[consensus]>=3.2.2,<4"
 ```
 
 (`pip install -U fiberhmm` updates FiberHMM alone; FiberHMM's own commands also tell pip users when a newer FiberHMM
@@ -86,7 +86,7 @@ applies to every FiberBrowser on this computer; remove that key to go back to th
 ### FiberHMM updates
 
 The same update check also queries `https://pypi.org/pypi/fiberhmm/json` for the newest stable,
-non-yanked `fiberhmm` wheel in this build's supported range (FiberHMM 3, at or above the build's minimum: 3.2.0 for FiberBrowser 3.1).
+non-yanked `fiberhmm` wheel in this build's supported range (FiberHMM 3, at or above the build's minimum: 3.2.2 for FiberBrowser 3.1.1).
 It compares that release with the FiberHMM in use. Network failures are logged silently and do not
 block startup; the startup switch and check cadence apply to both packages.
 
@@ -105,7 +105,7 @@ to bundled FiberHMM at startup, with a notice in Settings and the log. `FIBERHMM
 **Custom path** always take precedence; install, revert and restart actions for overlays are
 unavailable while either override is selected. Public and lab visitors cannot use these routes.
 
-Source and pip runs show the `pip install -U "fiberhmm[consensus]>=3.2.0,<4"` command for FiberBrowser's Python,
+Source and pip runs show the `pip install -U "fiberhmm[consensus]>=3.2.2,<4"` command for FiberBrowser's Python,
 without modifying that environment themselves.
 
 ### Privacy

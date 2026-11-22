@@ -190,22 +190,6 @@ export function scaleRgb(v: number, scale: ColorScale, dark = false): [number, n
 }
 
 /**
- * log2(A / B) per cell (null where either is blank or not positive). Counts are first divided by each panel's
- * footprints, so the ratio compares the size-by-position distributions, not how many reads each panel had.
- */
-export function ratioMatrix(a: SizeMatrix, b: SizeMatrix, s: Pick<FootprintSizeSettings, 'normalization'>,
-  footprintsA = 1, footprintsB = 1): SizeMatrix {
-  const counts = !isEnrichment(s.normalization);
-  const fa = counts ? Math.max(1, footprintsA) : 1;
-  const fb = counts ? Math.max(1, footprintsB) : 1;
-  return a.map((row, i) => row.map((va, j) => {
-    const vb = b[i]?.[j];
-    if (va == null || vb == null || !(va > 0) || !(vb > 0)) return null;
-    return Math.log2((va / fa) / (vb / fb));
-  }));
-}
-
-/**
  * A note when the panels rest on very different numbers of reads (largest / smallest >= `fold`): their plots are
  * less alike in noise than in biology. Null when they are similar (or there is one panel).
  */

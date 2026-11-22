@@ -11,6 +11,8 @@ import { useLayerColorVersion } from '../../features/layerColours/state';
 import { logPerfTiming, nowMs } from '../../utils/perfDebug';
 import { drawTrackLabel } from '../../utils/trackLabels';
 import { HoverLabel, useTrackLabels } from './TrackLabels';
+import { armAfterMovement } from '../../utils/dragThreshold';
+import { TrackWindowOverlay } from '../../features/windowQuant/TrackWindowOverlay';
 
 interface Props {
   width: number;
@@ -263,15 +265,15 @@ export function MetaTrack({ width, height, datasetId: datasetIdProp, profileKey,
     const rect = e.currentTarget.getBoundingClientRect();
     canvasRectRef.current = rect;
     const x = referenceCanvasX(canvasRef.current, logicalOffset(e.clientX - rect.left, e.currentTarget.clientWidth, rect.width));
-    setIsDragging(true);
-    setDragStartX(x);
-    setDragEndX(x);
     e.preventDefault();
+    // A click (no real movement) never starts a drag-to-zoom: it would repaint and reload for nothing.
+    armAfterMovement(e.clientX, e.clientY, () => { setIsDragging(true); setDragStartX(x); setDragEndX(x); });
   }, []);
 
   return (
     <div style={{ width, height, overflow: 'hidden', position: 'relative' }}>
       {datasetLabel && <HoverLabel title={datasetTitle}>{datasetLabel}</HoverLabel>}
+      <TrackWindowOverlay width={width} height={height} sidebarWidth={sidebarWidth} view={{ chrom, start, end }} reversed={isReversed} />
       <canvas
         ref={canvasRef}
         title={datasetTitle || datasetLabel}

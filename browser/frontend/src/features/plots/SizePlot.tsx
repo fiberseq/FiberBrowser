@@ -67,6 +67,8 @@ export interface SizePlotProps {
 const GAP = 10;
 const NO_PANELS: FootprintSizesTarget['panels'] = [];
 
+const NO_PLOTS: FootprintSizePlot[] = [];
+
 export function SizePlot({ plot, target, clusters, pending, width, sampleSeed, settingsKey, onPosition, onCompare, wanted, seed, onResult, onOpenClustered, readGroups = null, groupsSig = '', groupsBlocker = null }: SizePlotProps) {
   const dark = useBrowserStore(s => s.darkMode);
   const byCluster = plot.groupBy === 'cluster';
@@ -80,7 +82,6 @@ export function SizePlot({ plot, target, clusters, pending, width, sampleSeed, s
   const shownClusters = useMemo(() => (useClusters ? clusters!.visible.map(c => ({ cluster: c.cluster, color: c.color })) : []), [useClusters, clusters]);
   const byGroups = !!readGroups;
   const nGroups = byGroups ? readGroups!.length : useClusters ? shownClusters.length * clusters!.panels.length : plot.groupBy === 'none' ? 1 : new Set(shownTarget.panels.map(p => p.datasetId)).size;
-  const settings = useMemo(() => requestSettings(plot, nGroups), [plot, nGroups]);
   // Group by None: every dataset pooled into one matrix (the server sums raw counts, then normalises once).
   const pooled = plot.groupBy === 'none' && !useClusters;
   // The box mean's seeded bootstrap over reads (summaries): the server resamples each read's own counts.
@@ -93,6 +94,9 @@ export function SizePlot({ plot, target, clusters, pending, width, sampleSeed, s
   const drawableGroups = byGroups
     ? readGroups!.reduce((n, g) => n + Object.entries(g.members).filter(([ds, ids]) => shownDatasets.has(ds) && ids.size > 0).length, 0)
     : nGroups;
+  // Planned on the matrices the drawing makes (a read group in two datasets draws two), so the comparison it fetches for
+  // (counts, or normalised A vs B) is the one it draws.
+  const settings = useMemo(() => requestSettings(plot, drawableGroups), [plot, drawableGroups]);
   const bootOn = plot.summary.on && resolveCi('box-mean', plot.summary) === 'bootstrap' && !box.note && !isComparing(plot, drawableGroups);
   const bootSeed = plot.summary.bootSeed ?? plot.sampling.seed;
   const { entry, requestKey, loading, error } = useFootprintSizeData({
@@ -103,7 +107,7 @@ export function SizePlot({ plot, target, clusters, pending, width, sampleSeed, s
   });
   const fresh = plotFreshness({ resultKey: entry?.key ?? null, wantKey: requestKey, pending, loading, error });
   const panels = useMemo(() => (pooled && shownTarget.panels.length ? [POOLED_PANEL] : shownTarget.panels), [pooled, shownTarget.panels]);
-  const plots: FootprintSizePlot[] = useMemo(() => {
+  const answered: FootprintSizePlot[] = useMemo(() => {
     if (!byGroups) return footprintSizePlots(fresh.showResult ? entry!.byPanel : null, panels, useClusters, shownClusters);
     if (!fresh.showResult || !entry) return [];
     // Read groups: one plot per group (per dataset when a group spans several), titled by the group.
@@ -119,6 +123,11 @@ export function SizePlot({ plot, target, clusters, pending, width, sampleSeed, s
     }
     return out;
   }, [byGroups, readGroups, fresh.showResult, entry, panels, useClusters, shownClusters, shownTarget.panels]);
+  // Counts fetched for a comparison that came back with one group (sampling left the other empty): never drawn,
+  // summarised, hovered or kept as this plot's values; the plot says so instead.
+  const oneLeft = answered.length > 0 && !isComparing(plot, answered.length)
+    && answered.some(p => !!p.data.normalization && p.data.normalization !== effectiveSizeSettings(plot).normalization);
+  const plots = oneLeft ? NO_PLOTS : answered;
   const computedFor = entry?.locus ?? null;
   const stale = fresh.stale;
   const comparing = isComparing(plot, plots.length);
@@ -261,7 +270,10 @@ export function SizePlot({ plot, target, clusters, pending, width, sampleSeed, s
           measures={summaryMeasures('box-mean', box.sEff, 'the plot above',
             bootOn ? (plots.some(p => p.data.box_ci) ? ciText('bootstrap', plot.summary, bootSeed, 'reads', false, 'box-mean') : 'interval not available') : undefined, { scale: box.scale, isDefault: box.win.isDefault })} />
       )}
-      {fresh.state === 'current' && entry && plots.length === 0 && !clustersGone && (
+      {fresh.state === 'current' && entry && oneLeft && (
+        <AnalysisStatus kind="empty" center><span data-testid="plots-size-one-group">Compare needs two groups with footprints: only one came back here (with Random reads, sample more). Turn Compare off to see it.</span></AnalysisStatus>
+      )}
+      {fresh.state === 'current' && entry && plots.length === 0 && !clustersGone && !oneLeft && (
         <AnalysisStatus kind="empty" center>No footprints in this window for these panels.</AnalysisStatus>
       )}
       {!comparing && (

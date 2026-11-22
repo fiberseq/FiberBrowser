@@ -7,14 +7,44 @@ import { collectFrontendState } from '../api/session';
 import { fetchApiResponse } from '../api/sharedFetch';
 import { AUTO_SAVE_WATCHED_KEYS } from './useAutoSave';
 import { extensionKeys } from '../stores/storeExtensions';
+import { useReadActionsStore } from '../stores/readActionsStore';
 
 const PUSH_DEBOUNCE_MS = 1500;
-const WATCHED_KEYS = [
+/**
+ * A change to any of these pushes the view again. Every frontend field the headless figure engine reads
+ * (browser/services/figure) must be here, in AUTO_SAVE_WATCHED_KEYS or a store extension's keys, or `figure()` draws
+ * a stale view after that setting changes (useLiveFigureState.parity.test.ts checks it).
+ */
+export const LIVE_FIGURE_WATCHED_KEYS = [
   ...AUTO_SAVE_WATCHED_KEYS,
   'chrom', 'start', 'end', 'datasets', 'orthogonalTracks', 'slotOrder',
   'enabledCigarTypes', 'svDisplayEnabled', 'svMinLen', 'svMinSupport', 'svConflictOptions', 'svSplits', 'clusterGroupLabels', 'readRowHeight', 'fillReadHeight', 'showCoverageHistogram',
   'isReversed', 'collapsedRows', 'uiScale', 'darkMode', 'fullViewPanelId', 'readScrollOffsets',
+  // Read filters and gap settings the figure engine applies (Min footprints, quality, duplicates, QC-fail).
+  'minFootprints', 'minFpQuality', 'showDuplicateReads', 'showQcFailReads', 'hideShortEndFootprints',
+  'fillSmallGaps', 'fillGapSize', 'hideTerminalGaps', 'terminalGapThreshold',
+  'legacyLayerInference', 'legacyNucMinSize', 'trackFilters', 'dynamicClustering', 'peakModes',
+  'showRelativeCoords', 'relativeTSS', 'showAnalysisDetails',
+  // The panel scope headless numbers read (services/panel_scope.py: which panels and view a Quantify of the current
+  // view compares) and the y-scale baseline its enrichment follows.
+  'currentGenome', 'fastaPath', 'navigationMode', 'lastMovedPanels', 'clusterViewSettings',
 ] as const;
+const WATCHED_KEYS = LIVE_FIGURE_WATCHED_KEYS;
+
+/** Fields the figure engine reads that live in other stores, each with its own subscription below. */
+export const LIVE_FIGURE_OTHER_STORE_KEYS = ['excludedReadIds'] as const;
+
+/**
+ * Fields the figure engine reads that a session does not keep in its frontend state (the annotation tracks' name
+ * filters are saved on the server's track list; the details toggle is a chrome preference; per-panel navigation
+ * history is not saved): the live push adds them,
+ * so `figure()` of the current view draws them as the tab does.
+ */
+export const LIVE_ONLY_FIGURE_KEYS = ['trackFilters', 'showAnalysisDetails', 'lastMovedPanels'] as const;
+
+export function liveOnlyFigureFields(state: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(LIVE_ONLY_FIGURE_KEYS.map(key => [key, state[key]]));
+}
 
 /** Track-area size without the analysis strip, which figure renders leave out. */
 function trackAreaSize(): { width: number; height: number } | null {
@@ -47,7 +77,7 @@ export function useLiveFigureState() {
       inFlight = true;
       const body = {
         viewport: { chrom: state.chrom, start: state.start, end: state.end },
-        frontend_state: collectFrontendState(),
+        frontend_state: { ...collectFrontendState(), ...liveOnlyFigureFields(state as unknown as Record<string, unknown>) },
         layout: trackAreaSize(),
       };
       fetchApiResponse('/api/render/live_state', {
@@ -75,6 +105,8 @@ export function useLiveFigureState() {
     const unsubCoacc = useCoaccStore.subscribe(schedule);
     // The strip comes and goes with Analysis panels: Strip/Sidebar rail (the track area's height changes).
     const unsubLauncher = usePanelLauncherStore.subscribe((state, prev) => { if (state.mode !== prev.mode) schedule(); });
+    // Reads hidden with "Exclude selected" (serialized with the session as excludedReadIds).
+    const unsubExcluded = useReadActionsStore.subscribe((state, prev) => { if (state.excludedReadIds !== prev.excludedReadIds) schedule(); });
     const onVisible = () => { if (document.visibilityState === 'visible') schedule(); };
     window.addEventListener('resize', schedule);
     window.addEventListener('focus', schedule);
@@ -86,6 +118,7 @@ export function useLiveFigureState() {
       unsubDafc();
       unsubCoacc();
       unsubLauncher();
+      unsubExcluded();
       window.removeEventListener('resize', schedule);
       window.removeEventListener('focus', schedule);
       document.removeEventListener('visibilitychange', onVisible);

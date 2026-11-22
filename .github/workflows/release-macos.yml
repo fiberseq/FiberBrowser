@@ -44,7 +44,7 @@ jobs:
       ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
       ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
       FB_BUILD_DIR: ${{ github.workspace }}/build/macos
-      FB_FIBERHMM: ${{ inputs.fiberhmm || vars.FIBERHMM_REQUIREMENT || 'fiberhmm[consensus]>=3.2.0,<4' }}
+      FB_FIBERHMM: ${{ inputs.fiberhmm || vars.FIBERHMM_REQUIREMENT || 'fiberhmm[consensus]>=3.2.2,<4' }}
       FB_NOTARIZE: "0"
       FIBERHMM_NO_UPDATE_CHECK: "1"
     steps:
@@ -105,7 +105,9 @@ jobs:
         run: echo "::warning::MACOS_CERT_P12 is not set; building an ad-hoc signed, un-notarized app (Gatekeeper will block it on other Macs)."
 
       - name: Build FiberBrowser.app and the DMG
-        run: FB_PYTHON="$(command -v python)" bash packaging/macos/build_app.sh
+        # The app's runtime is the pinned python-build-standalone CPython (build_app.sh's default): a
+        # setup-python Python's libraries carry the runner's home path, which the private-path check refuses.
+        run: bash packaging/macos/build_app.sh
 
       - name: Smoke-test the app
         run: bash packaging/macos/check_app.sh "$FB_BUILD_DIR/dist/FiberBrowser.app"

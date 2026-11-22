@@ -8,7 +8,7 @@ Which FiberHMM a process runs (``fiberhmm_selection``):
   ``~/.fiberhmm/browser_settings.json`` does not apply to them.
 - **Source runs and pip installs** (``python browser.py``, ``fiberbrowser``): ``FIBERHMM_SOURCE_DIR`` >
   ``fiberhmm_source_dir`` in ``~/.fiberhmm/browser_settings.json`` > the ``fiberhmm`` installed in their Python
-  (``pip install "fiberhmm[consensus]>=3.2.0,<4"``).
+  (``pip install "fiberhmm[consensus]>=3.2.2,<4"``).
 
 A source tree is put first on ``sys.path`` so an older installed package never shadows it.
 
@@ -41,8 +41,9 @@ ACTIVE_CHOICE_ENV = "FIBERBROWSER_ACTIVE_FIBERHMM"
 
 MIN_FIBERHMM_MAJOR = 3
 # FiberHMM 3.2.0 is the first release with fiberhmm.scan, fiberhmm.nuc, fiberhmm.assoc, fiberhmm.io.scan_ma and
-# fiberhmm.io.graph_lift; the feature checks below still refuse a FiberHMM without them.
-FIBERHMM_REQUIREMENT = "fiberhmm[consensus]>=3.2.0,<4"
+# fiberhmm.io.graph_lift; 3.2.2 is the first whose scans read MA groups first, as FiberBrowser 3.1.1's read rows do
+# (so scans and the read panel agree). The feature checks below still refuse a FiberHMM without the modules.
+FIBERHMM_REQUIREMENT = "fiberhmm[consensus]>=3.2.2,<4"
 # The supported range as versions, derived from the requirement above (compatibility checks and messages).
 MIN_FIBERHMM_VERSION = re.search(r">=\s*([0-9][0-9.]*)", FIBERHMM_REQUIREMENT).group(1)
 MAX_FIBERHMM_MAJOR = int(re.search(r"<\s*([0-9]+)", FIBERHMM_REQUIREMENT).group(1))
@@ -52,7 +53,7 @@ MAX_FIBERHMM_MAJOR = int(re.search(r"<\s*([0-9]+)", FIBERHMM_REQUIREMENT).group(
 #                              "schema": {"module": "fiberhmm.x.y.z", "name": "SCHEMA", "min": "prefix.v1"}}],
 #                "min_version": "3.0"}                                             (optional)
 CORE_REQUIREMENTS = {
-    "min_version": "3.2",
+    "min_version": "3.2.2",
     "features": [
         {"label": "FiberHMM 3.0 core (footprint classes)", "module": "fiberhmm.inference.consensus.workflow"},
         {"label": "FiberHMM 3.0 core (strand rescue)", "module": "fiberhmm.inference.strand_rescue"},

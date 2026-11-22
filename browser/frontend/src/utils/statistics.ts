@@ -246,3 +246,58 @@ export function formatPValue(value: number): string {
   if (value < 0.001) return value.toExponential(1);
   return value.toFixed(3);
 }
+
+/** The regularized upper incomplete gamma Q(a, x) (series below a + 1, continued fraction above: Numerical Recipes). */
+export function regularizedGammaQ(a: number, x: number): number {
+  if (!(a > 0) || !(x >= 0) || !Number.isFinite(x)) return x === Infinity ? 0 : Number.NaN;
+  if (x === 0) return 1;
+  const gln = logGamma(a);
+  if (x < a + 1) {
+    let sum = 1 / a, del = sum, ap = a;
+    for (let n = 0; n < 500; n++) { ap += 1; del *= x / ap; sum += del; if (Math.abs(del) < Math.abs(sum) * 1e-15) break; }
+    return Math.max(0, Math.min(1, 1 - sum * Math.exp(-x + a * Math.log(x) - gln)));
+  }
+  const FPMIN = 1e-300;
+  let b = x + 1 - a, c = 1 / FPMIN, d = 1 / b, h = d;
+  for (let i = 1; i < 500; i++) {
+    const an = -i * (i - a);
+    b += 2;
+    d = an * d + b; if (Math.abs(d) < FPMIN) d = FPMIN;
+    c = b + an / c; if (Math.abs(c) < FPMIN) c = FPMIN;
+    d = 1 / d;
+    const del = d * c;
+    h *= del;
+    if (Math.abs(del - 1) < 1e-15) break;
+  }
+  return Math.max(0, Math.min(1, Math.exp(-x + a * Math.log(x) - gln) * h));
+}
+
+/** The chi-squared upper tail P(X >= x) with `df` degrees of freedom. */
+export function chiSquareSf(x: number, df: number): number {
+  if (!(df > 0)) return Number.NaN;
+  if (!(x > 0)) return 1;
+  return regularizedGammaQ(df / 2, x / 2);
+}
+
+/**
+ * A test of equal shares across groups: the groups × (member, not member) table, k members of n per group. Pearson
+ * chi-squared or the likelihood-ratio G; df = groups − 1. Groups with n = 0 are left out; null under two groups or when
+ * every read (or none) is a member (no variation to test).
+ */
+export function equalSharesTest(rows: ReadonlyArray<{ k: number; n: number }>, method: 'chi2' | 'g' = 'chi2'): { stat: number; df: number; p: number } | null {
+  const used = rows.filter(r => r.n > 0);
+  if (used.length < 2) return null;
+  const K = used.reduce((a, r) => a + r.k, 0), N = used.reduce((a, r) => a + r.n, 0);
+  if (!(K > 0) || !(K < N)) return null;
+  const pHat = K / N;
+  let stat = 0;
+  for (const r of used) {
+    const cells: Array<[number, number]> = [[r.k, r.n * pHat], [r.n - r.k, r.n * (1 - pHat)]];
+    for (const [o, e] of cells) {
+      if (method === 'chi2') stat += ((o - e) ** 2) / e;
+      else if (o > 0) stat += 2 * o * Math.log(o / e);
+    }
+  }
+  const df = used.length - 1;
+  return { stat, df, p: chiSquareSf(stat, df) };
+}

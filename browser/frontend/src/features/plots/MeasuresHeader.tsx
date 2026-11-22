@@ -2,12 +2,11 @@
  * A plot's header: one short line (what, where, grouping, seed) and the rest of what it measures in a collapsible
  * Details line (the full text stays in the element, for exports and tests).
  */
-import { footprintSizeLayerLabel } from '../../utils/footprintSizeSettings';
-import { PLOT_GROUP_BY, plotTypeInfo, type PlotSpec } from './plotModel';
+import { PLOT_GROUP_BY, plotSources, plotTypeInfo, sourceLabel, type PlotSpec } from './plotModel';
 
 /** "Metaprofile of All footprints · the view · by dataset · seed 1". */
 export function shortHeader(plot: PlotSpec, where: string): string {
-  const what = `${plotTypeInfo(plot.type).label} of ${footprintSizeLayerLabel(plot.source)}`;
+  const what = `${plotTypeInfo(plot.type).label} of ${plotSources(plot).map(x => sourceLabel(x, plot.sourceLabels)).join(' + ')}`;
   const group = plot.groupBy === 'none' ? 'pooled' : `by ${PLOT_GROUP_BY.find(g => g.value === plot.groupBy)?.label.toLowerCase() ?? plot.groupBy}`;
   return [what, where, group, `seed ${plot.sampling.seed}`].join(' · ');
 }

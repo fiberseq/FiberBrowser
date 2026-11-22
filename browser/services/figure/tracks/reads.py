@@ -181,6 +181,8 @@ def _panel_state(fe: dict, key: str) -> dict:
     focus_raw = _per_key(fe, 'clusterFocus', key)
     focus = {int(c) for c in focus_raw} if focus_raw else None
     filt = _filter_set(_per_key(fe, 'filteredReadIds', key))
+    # Reads hidden with "Exclude selected" (stores/readActionsStore.ts; ReadTrack effectiveExcludeIds).
+    excluded = {str(i) for i in (_per_key(fe, 'excludedReadIds', key) or []) if i}
     nodes = fe.get('clusterTreeNodes') or {}
     active_id = fe.get('activeClusterTreeNodeId')
     branch_node = nodes.get(active_id) if isinstance(nodes, dict) and active_id else None
@@ -197,6 +199,7 @@ def _panel_state(fe: dict, key: str) -> dict:
         'sort': [str(r) for r in (_per_key(fe, 'readSortOrder', key) or [])],
         'focus': focus,
         'filter': filt,
+        'excluded': excluded,
         'has_cluster': bool(assignments),
         'branch_active': branch_active,
         'branch_ids': scope_ids(focus if branch_active else None, branch_active),
@@ -513,7 +516,7 @@ def _compute_display(ctx: TrackContext) -> dict:
     n_datasets = len(getattr(ctx.state, 'datasets', {}) or {}) or len(spec.panels)
     # canUseServerMetaprofile (ReadTrack.tsx)
     use_server_meta = (plan['server_meta_ok'] and not st['has_cluster'] and n_datasets <= 1
-                       and (st['filter'] is None or 0 < len(st['filter']) <= 5000))
+                       and (st['filter'] is None or 0 < len(st['filter']) <= 5000) and not st['excluded'])
     base = {'state': st, 'plan': plan, 'reads': [], 'pool': [], 'payload': {}, 'zoomed_out': region > max_region,
             'use_server_meta': use_server_meta}
     if base['zoomed_out']:
@@ -524,8 +527,9 @@ def _compute_display(ctx: TrackContext) -> dict:
     profile_cap = 0 if bg_cap is None else max(1, min(1_000_000, int(_num(bg_cap, 1000))))
     mode = fe.get('readDisplayMode') or 'sample'
     downsample = fe.get('downsampleCount')
-    if spec.max_reads:
-        fit_limit = max(1, int(spec.max_reads))
+    panel_cap = spec.panel_max_reads(panel) if hasattr(spec, 'panel_max_reads') else spec.max_reads
+    if panel_cap:
+        fit_limit = max(1, int(panel_cap))
         desired = fit_limit
         sample_display = mode != 'all'
     elif mode == 'all':
@@ -566,6 +570,8 @@ def _compute_display(ctx: TrackContext) -> dict:
         reads = [r for r in reads if not r.get('duplicate')]
     if not fe.get('showQcFailReads'):
         reads = [r for r in reads if not r.get('qcfail')]
+    if st['excluded']:
+        reads = [r for r in reads if r['id'] not in st['excluded'] and strip_segment_suffix(r['id']) not in st['excluded']]
     if st['filter'] is not None:
         # An applied filter matching no reads shows none (useReadTrackData.ts).
         expanded = st['filter'] | {strip_segment_suffix(i) for i in st['filter']}
@@ -1663,6 +1669,10 @@ def draw(surface, ctx: TrackContext, track, height: float) -> None:
     on, min_len, _collapsed = sv.settings(fe)
     if on and ctx.panel.dataset.get('data_type') == 'bam':
         sv.draw_read_marks(surface, painter, reads, geo['hist'], geo['stride'], ctx.start, ctx.end, min_len)
+    if (ctx.spec.options or {}).get('annotations'):
+        # Scripted figures: BED boxes, opening classes and statistics (services/figure/annotations.py).
+        from services.figure.annotations import draw_over_reads
+        draw_over_reads(surface, ctx, view, geo, painter)
 
 
 register("reads", measure, draw)

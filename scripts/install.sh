@@ -120,7 +120,7 @@ fi
 # A clean PATH: only the venv and the system tools (no conda / Homebrew
 # curl-config or compilers leaking into source builds).
 CLEAN_PATH="$VENV/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-# The supported FiberHMM range, from requirements.txt (e.g. fiberhmm[consensus]>=3.2.0,<4).
+# The supported FiberHMM range, from requirements.txt (e.g. fiberhmm[consensus]>=3.2.2,<4).
 FIBERHMM_REQ="$(grep -i '^fiberhmm' requirements.txt | head -n 1 | sed 's/[[:space:]]*#.*//; s/[[:space:]]*$//')"
 FIBERHMM_MIN="$(printf '%s' "$FIBERHMM_REQ" | sed -n 's/.*>=[[:space:]]*\([0-9][0-9.]*\).*/\1/p')"
 FIBERHMM_MAX_MAJOR="$(printf '%s' "$FIBERHMM_REQ" | sed -n 's/.*<[[:space:]]*\([0-9][0-9]*\).*/\1/p')"

@@ -14,10 +14,10 @@ download, and the reference lock around it, forever. ``fetch``:
 - removes the partial file on any failure, so the caller can retry or fall back;
 - has no size cap, but warns above a size threshold (``warn_bytes``: the ``downloads.warn_bytes`` app setting,
   ``FIBERBROWSER_DOWNLOAD_WARN_BYTES``, default 4 GB). A caller that can ask the user (the run wizard,
-  /api/load_genome) sets ``download_policy``: a download whose ``Content-Length`` is over it is then refused with
-  ``LargeDownload`` before any of the body is read unless it was confirmed. Every other caller (a FASTA URL opened
-  at start-up, from a session or a link, a panel genome) cannot ask: its large download goes ahead with a warning
-  line. One of unknown size that streams past it is reported once (``events``) and goes on.
+  /api/load_genome, a panel genome's attachment) sets ``download_policy``: a download whose ``Content-Length`` is
+  over it is then refused with ``LargeDownload`` before any of the body is read unless it was confirmed. Every
+  other caller (a FASTA URL opened at start-up, from a session or a link) cannot ask: its large download goes
+  ahead with a warning line. One of unknown size that streams past it is reported once (``events``) and goes on.
 
 It keeps urlretrieve's progress-hook signature.
 """

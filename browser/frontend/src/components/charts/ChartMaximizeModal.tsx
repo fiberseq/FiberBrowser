@@ -8,6 +8,9 @@ interface ChartMaximizeModalProps {
   renderChart: (width: number, height: number) => React.ReactNode;
   title?: string;
   filename?: string;
+  /** Exports draw through this at the chart's size plus `exportExtraHeight` (content outside the canvas on screen). */
+  exportDrawFn?: import('../../utils/chartVectorExport').ChartDrawFn;
+  exportExtraHeight?: number;
   onClose: () => void;
 }
 
@@ -26,7 +29,7 @@ function useModalSize() {
   return size;
 }
 
-export function ChartMaximizeModal({ renderChart, title, filename, onClose }: ChartMaximizeModalProps) {
+export function ChartMaximizeModal({ renderChart, title, filename, exportDrawFn, exportExtraHeight = 0, onClose }: ChartMaximizeModalProps) {
   const contentRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const { width, height } = useModalSize();
@@ -71,7 +74,8 @@ export function ChartMaximizeModal({ renderChart, title, filename, onClose }: Ch
             {title || 'Chart'}
           </span>
           <div className="flex items-center gap-2">
-            <ChartSaveButton canvasRef={canvasRef as React.RefObject<HTMLCanvasElement>} filename={filename || 'chart_hires'} inline />
+            <ChartSaveButton canvasRef={canvasRef as React.RefObject<HTMLCanvasElement>} filename={filename || 'chart_hires'} inline
+              {...(exportDrawFn ? { drawFn: exportDrawFn, width, height: height + exportExtraHeight, pngFromDrawFn: true } : {})} />
             <button
               onClick={onClose}
               className="w-6 h-6 flex items-center justify-center rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400 text-sm"

@@ -218,3 +218,22 @@ def test_render_current_refusal_is_409(lift_env, engine, monkeypatch):
     response = client.post('/api/render/figure' if engine == 'figure' else '/api/render', json=body)
     assert response.status_code == 409, response.text
     assert response.json()['notice']
+
+
+def test_the_guard_resolves_routes_of_included_routers():
+    """FastAPI 0.142 keeps included routers as branches without a path: the guard still finds the template and the
+    path parameters (it passed every included route through before, 3.1.1 audit)."""
+    from fastapi import APIRouter, FastAPI
+    from services.lift.guard import _route_match
+
+    app = FastAPI()
+    router = APIRouter()
+
+    @router.get("/api/x/{dataset_id}/reads")
+    async def _reads(dataset_id: str):
+        return {}
+
+    app.include_router(router)
+    scope = {"type": "http", "method": "GET", "path": "/api/x/ds1/reads", "root_path": "", "query_string": b"", "headers": []}
+    assert _route_match(app, scope) == ("/api/x/{dataset_id}/reads", {"dataset_id": "ds1"})
+    assert _route_match(app, dict(scope, path="/api/nothing"))[0] is None

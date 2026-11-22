@@ -1,7 +1,8 @@
 /**
- * Footprint size enrichment without clustering: right-click the reads → "Footprint size enrichment here" opens
- * Clusters › Footprint sizes in the Size enrichment view, plotting the dataset from all its reads (group_by 'all');
- * one click switches to the V-plot; Export TSV saves the matrices with their settings. ⌘K finds it by name.
+ * Footprint size enrichment without clustering, in Plots (3.1.1: the Clusters panel's Footprint sizes tab is gone):
+ * right-click the reads → "Footprint size enrichment here" opens Plots on Size enrichment by dataset, plotting the
+ * dataset from all its reads (group_by 'all'); one click switches to the V-plot; the Data TSV saves the matrix with
+ * its settings. ⌘K finds it by name; the Clusters panel's "Footprint sizes → Plots" opens the same plot.
  *
  * Pinned to the tracked NAPA demo BAM (chr19:47514000-47518000).
  */
@@ -58,29 +59,32 @@ test('right-click → Footprint size enrichment here, no clustering; switch to V
   expect(all.length).toBe(1);
   expect(all[0].n_reads).toBeGreaterThan(0);
 
-  const panel = page.locator('[data-panel-content-type="cluster-detail"]');
-  const sizes = panel.getByTestId('footprint-sizes');
-  await expect(sizes).toHaveAttribute('data-view', 'enrichment');
-  await expect(sizes).toHaveAttribute('data-group', 'datasets');
-  await expect(panel).toContainText('no clustering needed');
-  await expect(sizes.getByTestId('footprint-sizes-plot').locator('canvas')).toHaveCount(1, { timeout: 60_000 });
+  const ws = page.getByTestId('plots-workspace');
+  await expect(ws).toBeVisible();
+  await expect(page.locator('[data-panel-content-type="cluster-detail"]')).toHaveCount(0);
+  await expect(ws.getByTestId('plots-type-size-enrichment')).toHaveAttribute('aria-pressed', 'true');
+  await expect(ws.getByTestId('plots-group-dataset')).toHaveAttribute('aria-pressed', 'true');
+  const plot = ws.getByTestId('plots-size-plot');
+  await expect(plot).toHaveAttribute('data-state', 'current', { timeout: 90_000 });
+  await expect(plot.getByTestId('plots-size-panel')).toHaveCount(1);
 
   // One click to the classic V-plot (midpoints, counts on a sequential scale).
   const mid = sizesRequest(page, b => b.mode === 'midpoint' && b.normalization === 'raw');
-  await sizes.getByTestId('footprint-sizes-view-vplot').click();
+  await ws.getByTestId('plots-type-vplot').click();
   await mid;
-  await expect(sizes).toHaveAttribute('data-view', 'vplot');
-  await expect(panel.getByTestId('vplot-caption')).toContainText('Midpoint');
+  await expect(plot).toHaveAttribute('data-state', 'current', { timeout: 90_000 });
+  await expect(ws.getByTestId('plots-caption')).toContainText('Midpoint');
 
   // Back to Size enrichment, then export the matrix with its settings.
   const back = sizesRequest(page, b => b.mode === 'span' && b.normalization === 'row');
-  await sizes.getByTestId('footprint-sizes-view-enrichment').click();
+  await ws.getByTestId('plots-type-size-enrichment').click();
   await back;
-  await expect(sizes.getByTestId('footprint-sizes-plot').locator('canvas')).toHaveCount(1, { timeout: 60_000 });
+  await expect(plot).toHaveAttribute('data-state', 'current', { timeout: 90_000 });
+  await ws.getByTestId('plots-export').getByTestId('chart-save').click();
   const download = page.waitForEvent('download');
-  await sizes.getByTestId('footprint-sizes-export-tsv').click();
+  await page.getByTestId('chart-save-tsv').click();
   const file = await download;
-  expect(file.suggestedFilename()).toMatch(/^footprint_size_enrichment_chr19_\d+-\d+\.tsv$/);
+  expect(file.suggestedFilename()).toMatch(/^Size_enrichment.*\.tsv$/);
   const text = readFileSync((await file.path())!, 'utf8');
   expect(text).toMatch(/# view: size enrichment/);
   expect(text).toMatch(/# normalization: row/);
@@ -99,5 +103,28 @@ test('⌘K finds Footprint size enrichment by name', async ({ server, page }) =>
   const first = sizesRequest(page, b => b.group_by === 'all');
   await option.click();
   await first;
-  await expect(page.locator('[data-panel-content-type="cluster-detail"]').getByTestId('footprint-sizes')).toHaveAttribute('data-view', 'enrichment');
+  await expect(page.getByTestId('plots-workspace').getByTestId('plots-type-size-enrichment')).toHaveAttribute('aria-pressed', 'true');
+});
+
+test('the Clusters panel offers one "Footprint sizes → Plots" action and no size tab or buttons', async ({ server, page }) => {
+  test.setTimeout(120_000);
+  await openDemo(page, server.baseUrl);
+  await expect(page.getByTestId('cluster-footprint-sizes-quick')).toHaveCount(0);
+  await expect(page.getByTestId('cluster-footprint-sizes-button')).toHaveCount(0);
+  await page.locator('[data-testid="panel-rail-cluster-detail"], [data-testid="analysis-strip-button-cluster-detail"]').first().click();
+  const panel = page.locator('[data-panel-content-type="cluster-detail"]');
+  await expect(panel).toContainText('No clusters computed');
+  await expect(panel.locator('[data-analysis-tab="vplot"]')).toHaveCount(0);
+  const first = sizesRequest(page, b => b.group_by === 'all');
+  await panel.getByTestId('cluster-detail-sizes-in-plots').click();
+  await first;
+  const ws = page.getByTestId('plots-workspace');
+  await expect(ws.getByTestId('plots-type-size-enrichment')).toHaveAttribute('aria-pressed', 'true');
+  await expect(ws.getByTestId('plots-size-plot')).toHaveAttribute('data-state', 'current', { timeout: 90_000 });
+  // The tour / Copilot anchors' reveal chain (clusters-vplot → plots-sizes-more-options → clusters-vplot-settings):
+  // the action opened Plots, More options opens the size Display settings.
+  const more = ws.getByTestId('plots-more-options');
+  await expect(more).toHaveAttribute('aria-expanded', 'false');
+  await more.click();
+  await expect(ws.getByTestId('plots-display')).toBeVisible();
 });

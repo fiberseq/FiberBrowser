@@ -53,7 +53,7 @@ async function select(page: Page, which: 'human' | 'fly' | 'both') {
   }, which);
 }
 
-async function openChart(page: Page, tab: 'projection' | 'vplot' | 'enrichment') {
+async function openChart(page: Page, tab: 'projection' | 'enrichment') {
   const panel = page.locator('[data-panel-content-type="cluster-detail"]');
   if (!(await panel.count())) await panelButton(page, 'cluster-detail').click();
   await panel.locator(`[data-analysis-tab="${tab}"]`).first().click({ force: true });
@@ -155,10 +155,12 @@ test('clusters stay on one reference, and their charts plot the clustered panel 
   await expect(panel).not.toContainText('run clustering first');
   await expect(panel).not.toContainText('left out');
 
+  // Footprint sizes → Plots: per cluster, pinned to the clustered panel's own locus.
   const vplot = page.waitForRequest(r => r.url().includes('/api/cluster/vplot'), { timeout: 60_000 });
-  await openChart(page, 'vplot');
+  await panel.getByTestId('cluster-detail-sizes-in-plots').click();
   const v = query(await vplot);
   expect([v.get('chrom'), v.get('region_start'), v.get('region_end')]).toEqual([HUMAN.chrom, String(HUMAN.start), String(HUMAN.end)]);
+  await page.keyboard.press('Escape');
   await expect(page.getByTestId('cluster-detail-off-locus-note')).toHaveCount(0);
 
   const enrichmentReads = page.waitForRequest(r => r.url().includes('/api/reads/compact') && query(r).get('include_layers') === 'true', { timeout: 60_000 });

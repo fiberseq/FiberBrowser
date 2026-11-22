@@ -22,7 +22,7 @@ def no_scan_package(monkeypatch):
 
 def test_resolve_settings_reports_unavailable_without_fiberhmm_scan(no_scan_package):
     engine = no_scan_package
-    with pytest.raises(engine.NucUnavailable, match='3.2.0'):
+    with pytest.raises(engine.NucUnavailable, match='3.2.2'):
         engine.resolve_settings(None)
     assert engine.available()['available'] is False
 
@@ -32,4 +32,4 @@ def test_status_route_answers_unavailable_without_fiberhmm_scan(no_scan_package)
     from routers import nuc as nuc_router
     from state.browser_state import BrowserState
     out = asyncio.run(nuc_router.nuc_status({'datasets': ['ds0']}, state=BrowserState(None)))
-    assert out['available'] is False and '3.2.0' in out['reason'] and out['datasets'] == []
+    assert out['available'] is False and '3.2.2' in out['reason'] and out['datasets'] == []

@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback, useMemo } from 'react';
+import { useRef, useEffect, useCallback, useMemo, useState } from 'react';
 import { ChartSaveButton } from './ChartSaveButton';
 import { ChartMaximizeButton } from './ChartMaximizeButton';
 import { formatProfileChartTsv } from '../../utils/analysisExport';
@@ -43,7 +43,16 @@ interface OverlayProfileChartProps {
   /** The full legend of the set this chart belongs to (utils/plotSetLegend): drawn instead of the series' own, so
    *  every chart in the set gives its legend the same room; entries without data here are drawn hollow. */
   legendItems?: PlotLegendItem[];
+  /** Drawn over the chart, given the plot area (the quantification window band). */
+  overlay?: (geom: OverlayPlotGeometry) => React.ReactNode;
+  /** Drawn under the chart (in flow), given the plot area: an x-axis strip (relative coordinates). */
+  footer?: (geom: OverlayPlotGeometry) => React.ReactNode;
+  /** The footer as drawn into an export (SVG, PDF, PNG): `height` px under the chart, drawn given the plot area and its top. */
+  exportFooter?: { height: number; draw: (ctx: CanvasRenderingContext2D, geom: OverlayPlotGeometry, top: number) => void };
 }
+
+/** The plot area inside the chart, in CSS px: x of bin i = left + i / (n − 1) · width. */
+export interface OverlayPlotGeometry { left: number; width: number; top: number; height: number }
 
 /** The y domain a chart draws: the given one, else its series' own (always holding 0, signed when values are negative). */
 export function overlayProfileDomain(series: ProfileSeries[], yDomain?: YDomain, refLine?: number): YDomain {
@@ -121,7 +130,7 @@ export function drawOverlayProfile(
   refLine?: number,
   cornerMax?: boolean,
   legendItems?: PlotLegendItem[],
-) {
+): OverlayPlotGeometry | null {
   ctx.clearRect(0, 0, width, height);
 
   const { validSeries, leftPad, topPad, plotW, plotH, legend } = overlayProfileLayout(ctx, width, height,
@@ -135,13 +144,13 @@ export function drawOverlayProfile(
       ctx.textBaseline = 'middle';
       ctx.fillText('No profile data', leftPad + plotW / 2, topPad + plotH / 2);
       drawLegend(ctx, legend);
-      return;
+      return { left: leftPad, width: plotW, top: topPad, height: plotH };
     }
     ctx.fillStyle = '#999';
     ctx.font = '11px sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText('No profile data', width / 2, height / 2);
-    return;
+    return null;
   }
 
   // The vertical domain always holds 0; a channel with negative values (a log2 regularity score) gets a signed domain
@@ -312,6 +321,7 @@ export function drawOverlayProfile(
   }
 
   drawLegend(ctx, legend);
+  return { left: leftPad, width: plotW, top: topPad, height: plotH };
 }
 
 const LEGEND_FONT = '9px sans-serif';
@@ -372,12 +382,23 @@ export function OverlayProfileChart({
   cornerMax = false,
   valueLabel,
   legendItems,
+  overlay,
+  footer,
+  exportFooter,
 }: OverlayProfileChartProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [geom, setGeom] = useState<OverlayPlotGeometry | null>(null);
 
   const drawFn = useCallback((ctx: CanvasRenderingContext2D, w: number, h: number) => {
     drawOverlayProfile(ctx, w, h, series, showLegend, isReversed, windowBp, yLabel, noAxes, caption, yDomain, refLine, cornerMax, legendItems);
   }, [series, showLegend, isReversed, windowBp, yLabel, noAxes, caption, yDomain, refLine, cornerMax, legendItems]);
+  // Exports draw the footer (the relative x-axis) under the chart, so a saved figure keeps its axis.
+  const exportHeight = height + (exportFooter?.height ?? 0);
+  const exportDrawFn = useCallback((ctx: CanvasRenderingContext2D, w: number, h: number) => {
+    const fh = exportFooter?.height ?? 0;
+    const g = drawOverlayProfile(ctx, w, h - fh, series, showLegend, isReversed, windowBp, yLabel, noAxes, caption, yDomain, refLine, cornerMax, legendItems);
+    if (exportFooter && g) exportFooter.draw(ctx, g, h - fh);
+  }, [series, showLegend, isReversed, windowBp, yLabel, noAxes, caption, yDomain, refLine, cornerMax, legendItems, exportFooter]);
   const shownDomain = overlayProfileDomain(series, yDomain, refLine);
   // The same layout as the drawing: the plot's place (for tests lining up a set) and hover boxes over the legend.
   const layout = useMemo(() => overlayProfileLayout(measureContext(), width, height,
@@ -395,8 +416,9 @@ export function OverlayProfileChart({
     canvas.width = width * dpr;
     canvas.height = height * dpr;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    drawFn(ctx, width, height);
-  }, [drawFn, width, height]);
+    const g = drawOverlayProfile(ctx, width, height, series, showLegend, isReversed, windowBp, yLabel, noAxes, caption, yDomain, refLine, cornerMax, legendItems);
+    if (overlay || footer) setGeom(prev => (g && prev && prev.left === g.left && prev.width === g.width && prev.top === g.top && prev.height === g.height ? prev : g));
+  }, [drawFn, width, height]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="relative group" data-y-max={formatAxisValue(shownDomain.max)} data-y-min={formatAxisValue(shownDomain.min)}
@@ -412,22 +434,28 @@ export function OverlayProfileChart({
           title={s.title ?? s.label} aria-label={s.title ?? s.label}
           style={{ left: x, top: y - LEGEND_ROW / 2, width: layout.legend.columnWidth - 4, height: LEGEND_ROW }} />
       ))}
+      {overlay && geom && overlay(geom)}
+      {footer && geom && footer(geom)}
       <ChartSaveButton
         canvasRef={canvasRef}
         filename={filename}
-        drawFn={drawFn}
+        drawFn={exportFooter ? exportDrawFn : drawFn}
         width={width}
-        height={height}
+        height={exportFooter ? exportHeight : height}
+        pngFromDrawFn={!!exportFooter}
         dataTsv={() => formatProfileChartTsv(series, { windowBp, isReversed, valueLabel })}
       />
       <ChartMaximizeButton
         title="Overlay Profile"
         filename={filename}
+        exportDrawFn={exportFooter ? exportDrawFn : undefined}
+        exportExtraHeight={exportFooter?.height}
         renderChart={(w, h) => (
           <OverlayProfileChart series={series} width={w} height={h}
             showLegend={showLegend} filename={filename} isReversed={isReversed}
             windowBp={windowBp} yLabel={yLabel} noAxes={noAxes} caption={caption}
-            yDomain={yDomain} refLine={refLine} cornerMax={cornerMax} valueLabel={valueLabel} legendItems={legendItems} />
+            yDomain={yDomain} refLine={refLine} cornerMax={cornerMax} valueLabel={valueLabel} legendItems={legendItems}
+            overlay={overlay} footer={footer} exportFooter={exportFooter} />
         )}
       />
     </div>

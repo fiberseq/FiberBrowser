@@ -11,6 +11,7 @@ import type { Gene } from '../../types';
 import { drawTrackLabel } from '../../utils/trackLabels';
 import { HoverHint, HoverLabel, useTrackLabels } from './TrackLabels';
 import { TRACK_BACKGROUND } from './TrackContainerConstants';
+import { GenesPromptControls, useGenesPrompt } from '../../features/genesPrompt/GenesPromptControls';
 
 interface Props {
   width: number;
@@ -76,6 +77,7 @@ function mergeIsoforms(genes: Gene[]): { merged: Gene[]; isoformCounts: Map<stri
 
 export function GeneTrack({ width, height, overrideChrom, overrideStart, overrideEnd, genome }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const genesPrompt = useGenesPrompt();
   const trackLabels = useTrackLabels();
   const canvasRenderVersion = useCanvasRenderVersion();
   // Redraw on entering/leaving an export: figures leave out the collapse hint.
@@ -300,7 +302,10 @@ export function GeneTrack({ width, height, overrideChrom, overrideStart, overrid
       ctx.fillStyle = '#999';
       ctx.font = '11px sans-serif';
       ctx.textAlign = 'center';
-      drawTrackLabel(ctx, 'No genes in region', width / 2, height / 2, { ...trackLabels, pill: false });
+      // (With the genes prompt over it, the prompt says it; figures draw the plain hint.)
+      if (!(genesPrompt && !genome) || exportInProgress) {
+        drawTrackLabel(ctx, 'No genes in region', width / 2, height / 2, { ...trackLabels, pill: false });
+      }
       return;
     }
 
@@ -409,7 +414,7 @@ export function GeneTrack({ width, height, overrideChrom, overrideStart, overrid
       ctx.textAlign = 'right';
       drawTrackLabel(ctx, `${totalCollapsed} isoforms merged \u2014 resize to expand`, width - 4, height - 3, { ...trackLabels, pill: false });
     }
-  }, [displayGenes, geneRows, start, end, width, height, selectedGeneIds, genomeToScreen, isReversed, isCollapsed, isoformCounts, canvasRenderVersion, exportInProgress, trackLabels]);
+  }, [displayGenes, geneRows, start, end, width, height, selectedGeneIds, genomeToScreen, isReversed, isCollapsed, isoformCounts, canvasRenderVersion, exportInProgress, trackLabels, genesPrompt, genome]);
 
   // Determine cursor style based on hover state
   const cursorClass = enableSelection && hoveredGene ? 'cursor-pointer' : '';
@@ -425,7 +430,15 @@ export function GeneTrack({ width, height, overrideChrom, overrideStart, overrid
         onMouseMove={handleMouseMove}
         onMouseLeave={handleMouseLeave}
       />
-      {displayGenes.length === 0 && <HoverHint>No genes in region</HoverHint>}
+      {displayGenes.length === 0 && (genesPrompt && !genome
+        ? (
+          // No annotation at all on the main reference: say so in place and offer the one click that loads it.
+          <div className="absolute inset-0 flex items-center justify-center px-2 text-[11px] text-ink-secondary dark:text-gray-300"
+            data-testid="genes-track-empty">
+            <GenesPromptControls key={genesPrompt.key} prompt={genesPrompt} testId="genes-prompt" />
+          </div>
+        )
+        : <HoverHint>No genes in region</HoverHint>)}
       {isCollapsed && displayGenes.length > 0 && Array.from(isoformCounts.values()).reduce((n, c) => n + c, 0) > isoformCounts.size && (
         <HoverLabel style={{ left: 'auto', right: 4, top: 'auto', bottom: 1 }}>
           {Array.from(isoformCounts.values()).reduce((n, c) => n + c, 0) - isoformCounts.size} isoforms merged — resize to expand

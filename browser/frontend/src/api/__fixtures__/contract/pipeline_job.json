@@ -4,11 +4,11 @@
  "basecall": null,
  "command": "fiberhmm-pipeline /data/sample_a.fastq --reference /data/ref.fa --enzyme dddb -o /data/r1 --sample sample_a --cores 1 --progress-json /data/progress.jsonl --min-mapq 0 --dedup off",
  "cores": 1,
- "created": 1795183525.904,
+ "created": 1795320150.923,
  "enzyme": "dddb",
  "exit_code": 0,
  "finished_at": 0,
- "group": "f6979b4b",
+ "group": "51d75782",
  "id": "job-1",
  "input_kind": "reads",
  "opener": null,
@@ -23,6 +23,7 @@
   "dedup": "off",
   "dedup_mode": "flag",
   "min_mapq": 0,
+  "nuc_recall_policy": "conservative",
   "prob_threshold": null,
   "snp_mask": "",
   "snp_screen": "auto",
@@ -151,7 +152,7 @@
     "tracks": []
    },
    "status": "ok",
-   "time": 1795183526.28
+   "time": 1795320151.292
   },
   "eta_s": null,
   "fraction": 1.0,
@@ -192,7 +193,7 @@
   "version": "3.0.0-fake",
   "warnings": []
  },
- "queued_at": 1795183525.904,
+ "queued_at": 1795320150.923,
  "reads": [
   "/data/sample_a.fastq"
  ],

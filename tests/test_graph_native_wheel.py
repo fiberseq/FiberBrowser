@@ -109,8 +109,18 @@ def _venv(tmp_path: Path) -> Path:
 def _resolve_from(env_dir: Path) -> dict:
     """FiberBrowser's helper resolution, seeing only the venv's installed packages for the companion."""
     site = next((env_dir / "lib").glob("python*/site-packages"))
+    # The companion module only from the fresh venv, never from the interpreter running the tests (which may have
+    # fiberbrowser-graph-native installed itself); everything else (orjson ...) comes from that interpreter.
     code = (
         "import json, sys; sys.path.insert(0, %r); sys.path.insert(0, %r)\n"
+        "import importlib.machinery as _m\n"
+        "class _OnlyFresh:\n"
+        "    def find_spec(self, name, path=None, target=None):\n"
+        "        if name.split('.')[0] != 'fiberbrowser_graph_native': return None\n"
+        "        spec = _m.PathFinder.find_spec(name, path if '.' in name else [sys.path[0]])\n"
+        "        if spec is None: raise ModuleNotFoundError(name)\n"
+        "        return spec\n"
+        "sys.meta_path.insert(0, _OnlyFresh())\n"
         "from services.graph_panel import helper\n"
         "helper._bundled_candidates = lambda: []\n"
         "s = helper.resolve(environ={})\n"

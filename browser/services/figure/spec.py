@@ -57,7 +57,15 @@ class FigureSpec:
     include_coords: bool = False
     read_row_height: Optional[float] = None   # px per read row (None: from the view)
     max_reads: Optional[int] = None            # reads drawn per panel (None: from the view)
-    options: dict = field(default_factory=dict)
+    options: dict = field(default_factory=dict)  # scripted-figure options (services/figure/options.py)
+    max_reads_by_panel: dict = field(default_factory=dict)  # panel id -> reads drawn (overrides max_reads)
+    meta: Optional[dict] = None  # a meta-locus figure: the pool record (services/figure/meta_locus.py MetaView.record)
+
+    def panel_max_reads(self, panel) -> Optional[int]:
+        return self.max_reads_by_panel.get(panel.id, self.max_reads)
+
+    def hidden(self) -> set:
+        return set(self.options.get("hide_tracks") or ())
 
 
 # Browser-equivalent names for the older /api/render ``tracks`` list.
@@ -106,7 +114,8 @@ def _panel_region(view) -> Optional[tuple]:
 
 def build_panels(state, fe: dict, dataset_ids: Optional[list[str]] = None,
                  track_types: Optional[list[str]] = None,
-                 default_ids: Optional[list[str]] = None) -> list[PanelSpec]:
+                 default_ids: Optional[list[str]] = None,
+                 hidden: Optional[set] = None) -> list[PanelSpec]:
     """Dataset panels as the browser shows them (or its defaults when there is no view)."""
     datasets = {ds_id: dataset_dict(ds) for ds_id, ds in (getattr(state, "datasets", {}) or {}).items()}
     fe_datasets = {d.get("id"): d for d in fe.get("datasets") or [] if isinstance(d, dict)}
@@ -170,13 +179,17 @@ def build_panels(state, fe: dict, dataset_ids: Optional[list[str]] = None,
         used_ids.add(panel_id)
         ds = {**datasets[ds_id], **{k: v for k, v in fe_datasets.get(ds_id, {}).items() if k in ("label", "color")}}
         tracks: list[TrackSpec] = []
-        rows_off: set[str] = set()
+        # Rows the figure leaves out (hide_tracks) count as hidden rows whether or not the panel lists them:
+        # sessions saved before the SV and coverage rows were tracks of their own have no row to hide.
+        rows_off: set[str] = set(hidden or ())
         for t in p.get("subTracks") or default_sub_tracks(composites):
             if isinstance(t, dict) and (not t.get("visible", True) or t.get("removed")):
                 rows_off.add(str(t.get("type")))
             if not isinstance(t, dict) or not t.get("visible", True) or t.get("removed"):
                 continue
             kind = str(t.get("type"))
+            if hidden and (kind in hidden or (kind.startswith("composite-") and "composite" in hidden)):
+                continue
             composite = None
             if kind.startswith("composite-"):
                 composite = by_id.get(kind[len("composite-"):])
@@ -204,9 +217,13 @@ def resolve_spec(state, *, chrom: Optional[str] = None, start: Optional[int] = N
                  dataset_ids: Optional[list[str]] = None, tracks: Optional[list[str]] = None,
                  title: Optional[str] = None, include_coords: bool = False,
                  read_row_height: Optional[float] = None, max_reads: Optional[int] = None,
-                 overrides: Optional[dict] = None, read_ids: Optional[list[str]] = None) -> FigureSpec:
+                 overrides: Optional[dict] = None, read_ids: Optional[list[str]] = None,
+                 options: Optional[dict] = None) -> FigureSpec:
     fe_raw, viewport, used = resolve_frontend(state, source, session)
     fe = _merge_defaults(fe_raw)
+    if used == "defaults":  # no tab, no session: what the notebook set (services/figure/notebook_settings.py)
+        from services.figure.notebook_settings import apply as apply_notebook_settings
+        apply_notebook_settings(fe, state)
     for key, value in (overrides or {}).items():
         if key == "_enableModTypes":  # turn layers on without dropping the rest
             fe["enabledModTypes"] = {**(fe.get("enabledModTypes") or {}), **value}
@@ -242,7 +259,12 @@ def resolve_spec(state, *, chrom: Optional[str] = None, start: Optional[int] = N
     # The user's layer colours (the session's over the saved defaults), as the browser draws them.
     from services.figure.layer_colours import apply as apply_layer_colours
     apply_layer_colours(fe)
-    panels = build_panels(state, fe, dataset_ids, tracks, default_ids=session_ids)
+    options = dict(options or {})
+    if "sv_marks" in (options.get("hide_tracks") or ()):
+        fe["svDisplayEnabled"] = False  # the browser's SV display switch: strip and per-read marks
+    panels = build_panels(state, fe, dataset_ids, tracks, default_ids=session_ids,
+                          hidden=set(options.get("hide_tracks") or ()) or None)
+    _drop_meta_hidden_rows(panels, str(chrom), fe)
     if not panels:
         if any(isinstance(p, dict) and p.get("collapsed") for p in fe.get("panels") or []):
             raise ValueError("Every dataset panel is collapsed; expand one or name dataset_ids to draw")
@@ -255,4 +277,48 @@ def resolve_spec(state, *, chrom: Optional[str] = None, start: Optional[int] = N
         chrom=str(chrom), start=int(start), end=int(end),
         width=float(width or layout.get("width") or 1400), panels=panels, fe=fe, source=used,
         title=title, include_coords=include_coords, read_row_height=read_row_height, max_reads=max_reads,
+        options=options, max_reads_by_panel=_max_reads_by_panel(panels, options.get("max_reads_by_dataset")),
     )
+
+
+def _max_reads_by_panel(panels: list[PanelSpec], by: Optional[dict]) -> dict:
+    """Per-dataset read caps -> {panel id: cap}; a key names a panel id, a dataset id or a dataset label."""
+    if not by:
+        return {}
+    out, used = {}, set()
+    for panel in panels:
+        for key in (panel.id, panel.dataset_id, panel.label):
+            if key in by:
+                out[panel.id] = int(by[key])
+                used.add(key)
+                break
+    unknown = sorted(set(by) - used)
+    if unknown:
+        raise ValueError("max_reads: no panel for " + ", ".join(unknown)
+                         + " (use dataset ids, panel ids or labels: "
+                         + ", ".join(sorted({p.dataset_id for p in panels})) + ")")
+    return out
+
+
+def _drop_meta_hidden_rows(panels: list[PanelSpec], chrom: str, fe: dict) -> None:
+    """On a meta-locus contig, the rows that need a real genome position are left out (SubTrackDispatch with
+    metaHiddenTrack): sequence, genes, primers, Micro-C, the SV row, capture, external and annotation composites.
+    Metaprofile composites stay (computed from the reads)."""
+    from services.figure.meta_locus import is_meta_chrom, meta_hidden_track
+    default_id = "__default_metaprofile__"
+    by_id = {c.get("id"): c for c in fe.get("compositeTracks") or [] if isinstance(c, dict)}
+
+    def metaprofile_row(kind: str) -> bool:
+        if not kind.startswith("composite-"):
+            return False
+        cid = kind[len("composite-"):]
+        comp = by_id.get(cid)
+        return cid == default_id or bool(comp and any(((s or {}).get("ref") or {}).get("kind") == "metaprofile"
+                                                      for s in comp.get("sources") or []))
+
+    for panel in panels:
+        if not is_meta_chrom(panel.region[0] if panel.region else chrom):
+            continue
+        hidden = [t.type for t in panel.tracks if meta_hidden_track(t.type, metaprofile_row(t.type))]
+        panel.tracks = [t for t in panel.tracks if t.type not in hidden]
+        panel.rows_off |= set(hidden) | {"sv"}

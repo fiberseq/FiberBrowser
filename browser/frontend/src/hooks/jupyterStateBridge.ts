@@ -14,6 +14,7 @@ import type { ParsedPeakBedEntry } from '../utils/peakBed';
 import { normalizeAnnotationLayer, normalizeLayerToggleMap } from '../utils/layerAliases';
 import { applyDefaultMetaprofileToggles } from '../utils/defaultMetaprofile';
 import { keepPickedSourceColors } from '../stores/compositeTracksSlice';
+import { applyFollowFirst, applyParitySettings } from './jupyterParityBridge';
 
 type BrowserSettingsSource = Omit<BrowserSettingsSnapshot, 'selected_read_ids'> & {
   selected_peaks_set: Set<number>;
@@ -89,6 +90,185 @@ function selectedReadIdsFromJupyter(state: JupyterState): Record<string, Set<str
   return null;
 }
 
+type SettingsUpdate = NonNullable<JupyterState['settings_update']>;
+
+/** One notebook settings call (BrowserClient.set_*), applied as the browser's own controls would apply it. */
+export function applySettingsUpdate(update: SettingsUpdate): void {
+    const store = useBrowserStore.getState();
+    if (update.analysis_sample_seed != null) {
+      store.setAnalysisSampleSeed(update.analysis_sample_seed);
+    }
+    if ('analysis_sample_count' in update) {
+      store.setAnalysisSampleCount(update.analysis_sample_count ?? null);
+    }
+    if ('display_sample_count' in update) {
+      store.setDownsampleCount(update.display_sample_count ?? null);
+    }
+    if (update.read_display_mode === 'sample' || update.read_display_mode === 'all') {
+      store.setReadDisplayMode(update.read_display_mode);
+    }
+    if (update.all_reads_display_cap != null) {
+      store.setAllReadsDisplayCap(update.all_reads_display_cap);
+    }
+    if ('background_read_cap' in update) {
+      store.setBackgroundReadCap(update.background_read_cap ?? null);
+    }
+    if (update.spanning_only != null) {
+      store.setSpanningOnly(update.spanning_only);
+    }
+    if (typeof update.peaks_locked === 'boolean') {
+      store.setPeaksLocked(update.peaks_locked);
+    }
+    if (Array.isArray(update.peak_rules)) {
+      store.setPeakRules(update.peak_rules);
+    }
+    if (update.peaks_by_rule && typeof update.peaks_by_rule === 'object') {
+      useBrowserStore.setState(keepMatched(useBrowserStore.getState(), { peaksByRule: update.peaks_by_rule } as any));
+    }
+    if (Array.isArray(update.selected_peaks)) {
+      useBrowserStore.setState({ selectedPeaks: new Set(update.selected_peaks) } as any);
+    }
+    if (update.peak_modes && typeof update.peak_modes === 'object') {
+      useBrowserStore.setState({ peakModes: update.peak_modes } as any);
+    }
+    if (Array.isArray(update.cluster_feature_rules)) {
+      store.setClusterFeatureRules(update.cluster_feature_rules);
+    }
+    if (Array.isArray(update.analysis_sort_rules)) {
+      store.setAnalysisSortRules(update.analysis_sort_rules);
+    }
+    if (Array.isArray(update.analysis_filter_rules)) {
+      store.setAnalysisFilterRules(update.analysis_filter_rules);
+    }
+    if (update.active_colormap) {
+      store.setActiveColormap(update.active_colormap);
+    }
+    if (update.cluster_method != null) {
+      store.setClusterMethod(update.cluster_method);
+    }
+    if (update.cluster_k != null) {
+      store.setClusterK(update.cluster_k);
+    }
+    if (update.small_footprint_threshold_bp != null) {
+      store.setSubnucleosomalThreshold(update.small_footprint_threshold_bp);
+    }
+    if (update.accessibility_threshold != null) {
+      store.setAccessibilityThreshold(update.accessibility_threshold);
+    }
+    if (Array.isArray(update.capture_regions)) {
+      store.setCaptureRegions(update.capture_regions);
+    }
+    if (update.capture_padding != null) {
+      store.setCapturePadding(update.capture_padding);
+    }
+    if (Array.isArray(update.catalog)) {
+      store.setCatalog(update.catalog);
+    }
+    if (Array.isArray(update.composite_tracks)) {
+      // A colour the notebook changed on a default-coloured source is the user's choice (keepPickedSourceColors).
+      store.setCompositeTracks(keepPickedSourceColors(update.composite_tracks, store.compositeTracks ?? []));
+    }
+    if (Array.isArray(update.saved_tracks)) {
+      store.setSavedTracks(update.saved_tracks);
+    }
+    if (Array.isArray(update.footprint_groups)) {
+      store.setFootprintGroups(update.footprint_groups);
+    }
+    if (Array.isArray(update.selected_genes)) {
+      store.setSelectedGenes(update.selected_genes);
+    }
+    if (update.transcription_state_filters && typeof update.transcription_state_filters === 'object') {
+      store.setTranscriptionStateFilters(update.transcription_state_filters);
+    }
+    if (Array.isArray(update.primer_saved_primers)) {
+      useBrowserStore.setState(current => ({
+        primer: { ...current.primer, savedPrimers: update.primer_saved_primers! },
+      }) as any);
+    }
+    if (update.primer_mode === 'standard' || update.primer_mode === 'dafc' || update.primer_mode === '4c') {
+      store.setPrimerMode(update.primer_mode);
+    }
+    if (update.primer_cart_track_display === 'off' || update.primer_cart_track_display === 'all' || update.primer_cart_track_display === 'imported' || update.primer_cart_track_display === 'design') {
+      store.setCartTrackDisplay(update.primer_cart_track_display);
+    }
+    // A merged summary that switched follow mode before these toggles: the switch first (jupyterParityBridge).
+    applyFollowFirst(update);
+    if (update.enabled_mod_types && typeof update.enabled_mod_types === 'object') {
+      const enabledModTypes = normalizeLayerToggleMap(update.enabled_mod_types as Record<string, boolean>);
+      useBrowserStore.setState({
+        enabledModTypes: { ...store.enabledModTypes, ...(enabledModTypes ?? {}) },
+      } as any);
+    }
+    // settings_update.enabled_meta_profiles (set_metaprofile_layers): explicit settings for the default
+    // metaprofile's sources. A change switches it to manual, as a hand edit does; a map that matches what it
+    // shows (a replayed snapshot) keeps it following (utils/defaultMetaprofile.ts).
+    if (update.enabled_meta_profiles && typeof update.enabled_meta_profiles === 'object') {
+      const toggles = normalizeLayerToggleMap(update.enabled_meta_profiles as Record<string, boolean>) ?? {};
+      const current = useBrowserStore.getState().compositeTracks;
+      const next = applyDefaultMetaprofileToggles(current, toggles);
+      if (next !== current) useBrowserStore.setState({ compositeTracks: next });
+    }
+    if (update.cached_layer_types && typeof update.cached_layer_types === 'object') {
+      const cachedLayerTypes = normalizeLayerToggleMap(update.cached_layer_types as Record<string, boolean>);
+      useBrowserStore.setState({
+        cachedLayerTypes: { ...store.cachedLayerTypes, ...(cachedLayerTypes ?? {}) },
+      } as any);
+    }
+    if (typeof update.legacy_layer_inference === 'boolean') {
+      store.setLegacyLayerInference(update.legacy_layer_inference);
+    }
+    if (update.legacy_nuc_min_size != null) {
+      store.setLegacyNucMinSize(update.legacy_nuc_min_size);
+    }
+    if ('click_target_layer' in update) {
+      store.setClickTargetLayer(normalizeAnnotationLayer(update.click_target_layer));
+    }
+    if ('footprint_analysis_layer' in update) {
+      store.setFootprintAnalysisLayer(normalizeAnnotationLayer(update.footprint_analysis_layer));
+    }
+    if ('coacc_settings' in update) {
+      applyCoaccSettings(update.coacc_settings);
+    }
+    if (typeof update.fill_read_height === 'boolean') {
+      store.setFillReadHeight(update.fill_read_height);
+    }
+    if ('read_row_height' in update) {
+      const next = update.read_row_height === 'auto'
+        ? 'auto'
+        : Number(update.read_row_height);
+      if (next === 'auto' || (typeof next === 'number' && Number.isFinite(next))) {
+        store.setReadRowHeight(next as number | 'auto');
+      }
+    }
+    if (typeof update.show_coverage_histogram === 'boolean') {
+      store.setShowCoverageHistogram(update.show_coverage_histogram);
+    }
+    if (update.max_region_for_reads != null) {
+      store.setMaxRegionForReads(update.max_region_for_reads);
+    }
+    if (typeof update.show_genome_overview === 'boolean') {
+      useBrowserStore.setState({ showGenomeOverview: update.show_genome_overview } as any);
+    }
+    if (Array.isArray(update.hidden_strip_panels)) {
+      store.setHiddenStripPanels(update.hidden_strip_panels);
+    }
+    // Queued opens/closes in order (a single open_panel/close_panel from an
+    // older server too).
+    const panelOps: Array<['open' | 'close', string]> = [...(update.panel_ops ?? [])];
+    if (update.close_panel) panelOps.push(['close', update.close_panel]);
+    if (update.open_panel) panelOps.push(['open', update.open_panel]);
+    for (const [verb, panelType] of panelOps) {
+      if (verb === 'open') {
+        useBrowserStore.getState().openAnalysisPanel(panelType as any);
+      } else {
+        const panel = findOpenAnalysisPanel(useBrowserStore.getState().panels, panelType);
+        if (panel) useBrowserStore.getState().closeAnalysisPanel(panel.id);
+      }
+    }
+    // Read filters, metaprofile follow mode, layer colours, Quantify a window, Plots, workspace (3.1.1).
+    applyParitySettings(update);
+  }
+
 export function applyJupyterStateToBrowser(state: JupyterState, debug = false): void {
   useBrowserStore.getState().setJupyterVersion(state.version);
   useBrowserStore.getState().setJupyterHighlights(state.highlights || []);
@@ -159,177 +339,9 @@ export function applyJupyterStateToBrowser(state: JupyterState, debug = false): 
     }
   }
 
-  if (state.settings_update) {
-    const store = useBrowserStore.getState();
-    if (state.settings_update.analysis_sample_seed != null) {
-      store.setAnalysisSampleSeed(state.settings_update.analysis_sample_seed);
-    }
-    if ('analysis_sample_count' in state.settings_update) {
-      store.setAnalysisSampleCount(state.settings_update.analysis_sample_count ?? null);
-    }
-    if ('display_sample_count' in state.settings_update) {
-      store.setDownsampleCount(state.settings_update.display_sample_count ?? null);
-    }
-    if (state.settings_update.read_display_mode === 'sample' || state.settings_update.read_display_mode === 'all') {
-      store.setReadDisplayMode(state.settings_update.read_display_mode);
-    }
-    if (state.settings_update.all_reads_display_cap != null) {
-      store.setAllReadsDisplayCap(state.settings_update.all_reads_display_cap);
-    }
-    if ('background_read_cap' in state.settings_update) {
-      store.setBackgroundReadCap(state.settings_update.background_read_cap ?? null);
-    }
-    if (state.settings_update.spanning_only != null) {
-      store.setSpanningOnly(state.settings_update.spanning_only);
-    }
-    if (typeof state.settings_update.peaks_locked === 'boolean') {
-      store.setPeaksLocked(state.settings_update.peaks_locked);
-    }
-    if (Array.isArray(state.settings_update.peak_rules)) {
-      store.setPeakRules(state.settings_update.peak_rules);
-    }
-    if (state.settings_update.peaks_by_rule && typeof state.settings_update.peaks_by_rule === 'object') {
-      useBrowserStore.setState(keepMatched(useBrowserStore.getState(), { peaksByRule: state.settings_update.peaks_by_rule } as any));
-    }
-    if (Array.isArray(state.settings_update.selected_peaks)) {
-      useBrowserStore.setState({ selectedPeaks: new Set(state.settings_update.selected_peaks) } as any);
-    }
-    if (state.settings_update.peak_modes && typeof state.settings_update.peak_modes === 'object') {
-      useBrowserStore.setState({ peakModes: state.settings_update.peak_modes } as any);
-    }
-    if (Array.isArray(state.settings_update.cluster_feature_rules)) {
-      store.setClusterFeatureRules(state.settings_update.cluster_feature_rules);
-    }
-    if (Array.isArray(state.settings_update.analysis_sort_rules)) {
-      store.setAnalysisSortRules(state.settings_update.analysis_sort_rules);
-    }
-    if (Array.isArray(state.settings_update.analysis_filter_rules)) {
-      store.setAnalysisFilterRules(state.settings_update.analysis_filter_rules);
-    }
-    if (state.settings_update.active_colormap) {
-      store.setActiveColormap(state.settings_update.active_colormap);
-    }
-    if (state.settings_update.cluster_method != null) {
-      store.setClusterMethod(state.settings_update.cluster_method);
-    }
-    if (state.settings_update.cluster_k != null) {
-      store.setClusterK(state.settings_update.cluster_k);
-    }
-    if (state.settings_update.small_footprint_threshold_bp != null) {
-      store.setSubnucleosomalThreshold(state.settings_update.small_footprint_threshold_bp);
-    }
-    if (state.settings_update.accessibility_threshold != null) {
-      store.setAccessibilityThreshold(state.settings_update.accessibility_threshold);
-    }
-    if (Array.isArray(state.settings_update.capture_regions)) {
-      store.setCaptureRegions(state.settings_update.capture_regions);
-    }
-    if (state.settings_update.capture_padding != null) {
-      store.setCapturePadding(state.settings_update.capture_padding);
-    }
-    if (Array.isArray(state.settings_update.catalog)) {
-      store.setCatalog(state.settings_update.catalog);
-    }
-    if (Array.isArray(state.settings_update.composite_tracks)) {
-      // A colour the notebook changed on a default-coloured source is the user's choice (keepPickedSourceColors).
-      store.setCompositeTracks(keepPickedSourceColors(state.settings_update.composite_tracks, store.compositeTracks ?? []));
-    }
-    if (Array.isArray(state.settings_update.saved_tracks)) {
-      store.setSavedTracks(state.settings_update.saved_tracks);
-    }
-    if (Array.isArray(state.settings_update.footprint_groups)) {
-      store.setFootprintGroups(state.settings_update.footprint_groups);
-    }
-    if (Array.isArray(state.settings_update.selected_genes)) {
-      store.setSelectedGenes(state.settings_update.selected_genes);
-    }
-    if (state.settings_update.transcription_state_filters && typeof state.settings_update.transcription_state_filters === 'object') {
-      store.setTranscriptionStateFilters(state.settings_update.transcription_state_filters);
-    }
-    if (Array.isArray(state.settings_update.primer_saved_primers)) {
-      useBrowserStore.setState(current => ({
-        primer: { ...current.primer, savedPrimers: state.settings_update!.primer_saved_primers! },
-      }) as any);
-    }
-    if (state.settings_update.primer_mode === 'standard' || state.settings_update.primer_mode === 'dafc' || state.settings_update.primer_mode === '4c') {
-      store.setPrimerMode(state.settings_update.primer_mode);
-    }
-    if (state.settings_update.primer_cart_track_display === 'off' || state.settings_update.primer_cart_track_display === 'all' || state.settings_update.primer_cart_track_display === 'imported' || state.settings_update.primer_cart_track_display === 'design') {
-      store.setCartTrackDisplay(state.settings_update.primer_cart_track_display);
-    }
-    if (state.settings_update.enabled_mod_types && typeof state.settings_update.enabled_mod_types === 'object') {
-      const enabledModTypes = normalizeLayerToggleMap(state.settings_update.enabled_mod_types as Record<string, boolean>);
-      useBrowserStore.setState({
-        enabledModTypes: { ...store.enabledModTypes, ...(enabledModTypes ?? {}) },
-      } as any);
-    }
-    // settings_update.enabled_meta_profiles (set_metaprofile_layers): explicit settings for the default
-    // metaprofile's sources. A change switches it to manual, as a hand edit does; a map that matches what it
-    // shows (a replayed snapshot) keeps it following (utils/defaultMetaprofile.ts).
-    if (state.settings_update.enabled_meta_profiles && typeof state.settings_update.enabled_meta_profiles === 'object') {
-      const toggles = normalizeLayerToggleMap(state.settings_update.enabled_meta_profiles as Record<string, boolean>) ?? {};
-      const current = useBrowserStore.getState().compositeTracks;
-      const next = applyDefaultMetaprofileToggles(current, toggles);
-      if (next !== current) useBrowserStore.setState({ compositeTracks: next });
-    }
-    if (state.settings_update.cached_layer_types && typeof state.settings_update.cached_layer_types === 'object') {
-      const cachedLayerTypes = normalizeLayerToggleMap(state.settings_update.cached_layer_types as Record<string, boolean>);
-      useBrowserStore.setState({
-        cachedLayerTypes: { ...store.cachedLayerTypes, ...(cachedLayerTypes ?? {}) },
-      } as any);
-    }
-    if (typeof state.settings_update.legacy_layer_inference === 'boolean') {
-      store.setLegacyLayerInference(state.settings_update.legacy_layer_inference);
-    }
-    if (state.settings_update.legacy_nuc_min_size != null) {
-      store.setLegacyNucMinSize(state.settings_update.legacy_nuc_min_size);
-    }
-    if ('click_target_layer' in state.settings_update) {
-      store.setClickTargetLayer(normalizeAnnotationLayer(state.settings_update.click_target_layer));
-    }
-    if ('footprint_analysis_layer' in state.settings_update) {
-      store.setFootprintAnalysisLayer(normalizeAnnotationLayer(state.settings_update.footprint_analysis_layer));
-    }
-    if ('coacc_settings' in state.settings_update) {
-      applyCoaccSettings(state.settings_update.coacc_settings);
-    }
-    if (typeof state.settings_update.fill_read_height === 'boolean') {
-      store.setFillReadHeight(state.settings_update.fill_read_height);
-    }
-    if ('read_row_height' in state.settings_update) {
-      const next = state.settings_update.read_row_height === 'auto'
-        ? 'auto'
-        : Number(state.settings_update.read_row_height);
-      if (next === 'auto' || (typeof next === 'number' && Number.isFinite(next))) {
-        store.setReadRowHeight(next as number | 'auto');
-      }
-    }
-    if (typeof state.settings_update.show_coverage_histogram === 'boolean') {
-      store.setShowCoverageHistogram(state.settings_update.show_coverage_histogram);
-    }
-    if (state.settings_update.max_region_for_reads != null) {
-      store.setMaxRegionForReads(state.settings_update.max_region_for_reads);
-    }
-    if (typeof state.settings_update.show_genome_overview === 'boolean') {
-      useBrowserStore.setState({ showGenomeOverview: state.settings_update.show_genome_overview } as any);
-    }
-    if (Array.isArray(state.settings_update.hidden_strip_panels)) {
-      store.setHiddenStripPanels(state.settings_update.hidden_strip_panels);
-    }
-    // Queued opens/closes in order (a single open_panel/close_panel from an
-    // older server too).
-    const panelOps: Array<['open' | 'close', string]> = [...(state.settings_update.panel_ops ?? [])];
-    if (state.settings_update.close_panel) panelOps.push(['close', state.settings_update.close_panel]);
-    if (state.settings_update.open_panel) panelOps.push(['open', state.settings_update.open_panel]);
-    for (const [verb, panelType] of panelOps) {
-      if (verb === 'open') {
-        useBrowserStore.getState().openAnalysisPanel(panelType as any);
-      } else {
-        const panel = findOpenAnalysisPanel(useBrowserStore.getState().panels, panelType);
-        if (panel) useBrowserStore.getState().closeAnalysisPanel(panel.id);
-      }
-    }
-  }
+  // The notebook's settings calls one by one, in order (settings_updates); an older server sends one merged update.
+  const settingsCalls = state.settings_updates?.length ? state.settings_updates : (state.settings_update ? [state.settings_update] : []);
+  for (const call of settingsCalls) applySettingsUpdate(call);
 
   if (state.refresh) {
     if (debug) console.log('Jupyter requested refresh');

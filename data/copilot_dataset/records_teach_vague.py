@@ -719,7 +719,7 @@ amb("tv_amb_compare_clusters_state", "compare these groups",
     [op("cluster-detail", "profiles"),
      ex("clusters-profiles", "Profiles overlays each cluster's average so you can see where they differ.", requires="has_clusters"),
      ex("clusters-composition", "Composition compares their mix of footprint types."),
-     ex("clusters-vplot", "V-Plot compares footprint sizes by position, cluster by cluster.")])
+     ex("clusters-vplot", "Footprint sizes → Plots compares footprint sizes by position, cluster by cluster.")])
 
 amb("tv_amb_compare_copy_state", "compare the two",
     ["compare these two views", "compare both panels", "how do the two panels differ"],
@@ -1377,10 +1377,10 @@ vague("tv_thing_timeline", "the timeline thing",
 vague("tv_thing_vplot", "the v shaped plot",
       ["the V plot", "the triangle plot", "the size vs position plot"],
       ctx_kw(V_DM6_2R, **CLUSTERED),
-      "V-Plot in the Clusters panel.",
+      "Footprint sizes → Plots, from the Clusters panel.",
       "The V-Plot",
-      [op("cluster-detail", "vplot"),
-       ex("clusters-vplot", "Footprint size (up) against position (across): nucleosomes sit high, TF footprints low.",
+      [op("cluster-detail"),
+       ex("clusters-vplot", "Footprint sizes → Plots: footprint size (up) against position (across); nucleosomes sit high, TF footprints low.",
           requires="has_clusters")])
 
 vague("tv_thing_scatter", "the scatter plot with dots",
@@ -1580,7 +1580,7 @@ goal("tv_footprint_sizes", "what sizes are the footprints here?",
      "Footprint sizes",
      [tr("reads-track", "Cmd/Ctrl+click a footprint.", "footprint_selected", skip_if="has_selected_footprint"),
       ex("footprints-classes", "Classes groups the footprints here by size range.", requires="has_selected_footprint"),
-      ex(None, "After clustering, the Clusters panel's V-Plot tab shows size against position for each cluster.")])
+      ex(None, "Footprint sizes → Plots, in the Clusters panel, shows size against position for each cluster (or each dataset, unclustered).")])
 
 goal("tv_strongest_open", "where is the most accessible spot here?",
      ["find the most open position", "strongest accessibility in view", "where is it most open"],

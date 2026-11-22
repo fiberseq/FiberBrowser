@@ -348,7 +348,7 @@ _c(id="cl_vplot_read", category="teach_read",
    command="what should I look for in the v-plot",
    phrasings=["interpreting the size versus position plot", "reading footprint size positions per cluster"],
    raw_state=CLUSTERED,
-   reference=plan("Reading the V-plot", op("cluster-detail", "vplot"),
+   reference=plan("Reading the V-plot", op("cluster-detail"),
                   ex("clusters-vplot", "Nucleosomes form a ~147 bp band; TFs sit low.", requires="has_clusters")),
    expect={"key_anchors": ["clusters-vplot"], "state_true": ["has_clusters"], "no_try_it": True,
            "allowed_anchors": ["clusters-vplot-settings"]})

@@ -1,0 +1,1602 @@
+{
+ "curve_clusters_raw": {
+  "result": {
+   "cells": [
+    {
+     "measure": "layer:nuc",
+     "group": "cl:0",
+     "value": 0.7693763440860214,
+     "lo": 0.7249784075573551,
+     "hi": 0.8113641495601169,
+     "n": 93,
+     "k": null,
+     "low": false,
+     "method": "bootstrap",
+     "enrich": null,
+     "enrichLo": null,
+     "enrichHi": null,
+     "cmp": null,
+     "cmpLo": null,
+     "cmpHi": null
+    },
+    {
+     "measure": "layer:nuc",
+     "group": "cl:1",
+     "value": 0.25600000000000006,
+     "lo": 0.15220285714285708,
+     "hi": 0.35936111111111113,
+     "n": 37,
+     "k": null,
+     "low": false,
+     "method": "bootstrap",
+     "enrich": null,
+     "enrichLo": null,
+     "enrichHi": null,
+     "cmp": null,
+     "cmpLo": null,
+     "cmpHi": null
+    },
+    {
+     "measure": "layer:nuc",
+     "group": "cl:2",
+     "value": 0.76475,
+     "lo": 0.6875238095238098,
+     "hi": 0.8362766666666668,
+     "n": 32,
+     "k": null,
+     "low": false,
+     "method": "bootstrap",
+     "enrich": null,
+     "enrichLo": null,
+     "enrichHi": null,
+     "cmp": null,
+     "cmpLo": null,
+     "cmpHi": null
+    },
+    {
+     "measure": "layer:tf",
+     "group": "cl:0",
+     "value": 0.07604301075268813,
+     "lo": 0.052589941972920703,
+     "hi": 0.10074841269841273,
+     "n": 93,
+     "k": null,
+     "low": false,
+     "method": "bootstrap",
+     "enrich": null,
+     "enrichLo": null,
+     "enrichHi": null,
+     "cmp": null,
+     "cmpLo": null,
+     "cmpHi": null
+    },
+    {
+     "measure": "layer:tf",
+     "group": "cl:1",
+     "value": 0.19999999999999993,
+     "lo": 0.14799756097560973,
+     "hi": 0.26339999999999975,
+     "n": 37,
+     "k": null,
+     "low": false,
+     "method": "bootstrap",
+     "enrich": null,
+     "enrichLo": null,
+     "enrichHi": null,
+     "cmp": null,
+     "cmpLo": null,
+     "cmpHi": null
+    },
+    {
+     "measure": "layer:tf",
+     "group": "cl:2",
+     "value": 0.060750000000000005,
+     "lo": 0.02421039136302294,
+     "hi": 0.10042680538555689,
+     "n": 32,
+     "k": null,
+     "low": false,
+     "method": "bootstrap",
+     "enrich": null,
+     "enrichLo": null,
+     "enrichHi": null,
+     "cmp": null,
+     "cmpLo": null,
+     "cmpHi": null
+    }
+   ],
+   "groups": [
+    {
+     "id": "cl:0",
+     "title": "C0",
+     "color": null,
+     "dataset": null
+    },
+    {
+     "id": "cl:1",
+     "title": "C1",
+     "color": null,
+     "dataset": null
+    },
+    {
+     "id": "cl:2",
+     "title": "C2",
+     "color": null,
+     "dataset": null
+    }
+   ],
+   "measures": [
+    {
+     "id": "layer:nuc",
+     "label": "Nuc",
+     "kind": "fraction",
+     "unit": "fraction of covered bp",
+     "source": "layers",
+     "enrichment": true,
+     "windowed": true,
+     "baseline": null,
+     "method": "bootstrap",
+     "units": "curve"
+    },
+    {
+     "id": "layer:tf",
+     "label": "TF",
+     "kind": "fraction",
+     "unit": "fraction of covered bp",
+     "source": "layers",
+     "enrichment": true,
+     "windowed": true,
+     "baseline": null,
+     "method": "bootstrap",
+     "units": "curve"
+    }
+   ],
+   "tests": {
+    "layer:nuc": null,
+    "layer:tf": null
+   },
+   "reference": "cl:0",
+   "boundsBp": 250,
+   "seed": 1,
+   "resamples": 1000
+  },
+  "readSource": "panel",
+  "tsv": "measure\tsource\tunit\tgroup\tn_reads\tmembers\tvalue\tlo95\thi95\tinterval\tenrichment\tenrich_lo95\tenrich_hi95\tvs_reference\tvs_ref_lo95\tvs_ref_hi95\tfew_reads\ttest_p\ttest_q\nNuc\tlayers\tfraction of covered bp\tC0\t93\tNA\t0.769376\t0.724978\t0.811364\tbootstrap\tNA\tNA\tNA\tNA\tNA\tNA\tno\tNA\tNA\nNuc\tlayers\tfraction of covered bp\tC1\t37\tNA\t0.256\t0.152203\t0.359361\tbootstrap\tNA\tNA\tNA\tNA\tNA\tNA\tno\tNA\tNA\nNuc\tlayers\tfraction of covered bp\tC2\t32\tNA\t0.76475\t0.687524\t0.836277\tbootstrap\tNA\tNA\tNA\tNA\tNA\tNA\tno\tNA\tNA\nTF\tlayers\tfraction of covered bp\tC0\t93\tNA\t0.076043\t0.0525899\t0.100748\tbootstrap\tNA\tNA\tNA\tNA\tNA\tNA\tno\tNA\tNA\nTF\tlayers\tfraction of covered bp\tC1\t37\tNA\t0.2\t0.147998\t0.2634\tbootstrap\tNA\tNA\tNA\tNA\tNA\tNA\tno\tNA\tNA\nTF\tlayers\tfraction of covered bp\tC2\t32\tNA\t0.06075\t0.0242104\t0.100427\tbootstrap\tNA\tNA\tNA\tNA\tNA\tNA\tno\tNA\tNA"
+ },
+ "curve_enrich_region_diff": {
+  "result": {
+   "cells": [
+    {
+     "measure": "layer:nuc",
+     "group": "cl:0",
+     "value": 0.7693763440860214,
+     "lo": 0.7249784075573551,
+     "hi": 0.8113641495601169,
+     "n": 93,
+     "k": null,
+     "low": false,
+     "method": "bootstrap",
+     "enrich": 0.2405668916255345,
+     "enrichLo": 0.1505067178507834,
+     "enrichHi": 0.348737698589276,
+     "cmp": 0.5133763440860213,
+     "cmpLo": 0.40275409833838494,
+     "cmpHi": 0.6234250396260926
+    },
+    {
+     "measure": "layer:nuc",
+     "group": "cl:1",
+     "value": 0.25600000000000006,
+     "lo": 0.15220285714285708,
+     "hi": 0.35936111111111113,
+     "n": 37,
+     "k": null,
+     "low": false,
+     "method": "bootstrap",
+     "enrich": -1.3469787701096239,
+     "enrichLo": -2.06633821672793,
+     "enrichHi": -0.909547834997332,
+     "cmp": 0,
+     "cmpLo": null,
+     "cmpHi": null
+    },
+    {
+     "measure": "layer:nuc",
+     "group": "cl:2",
+     "value": 0.76475,
+     "lo": 0.6875238095238098,
+     "hi": 0.8362766666666668,
+     "n": 32,
+     "k": null,
+     "low": false,
+     "method": "bootstrap",
+     "enrich": 0.23186562144857842,
+     "enrichLo": 0.07495374872442864,
+     "enrichHi": 0.3897858927530769,
+     "cmp": 0.50875,
+     "cmpLo": 0.3851973498425114,
+     "cmpHi": 0.6334058416389815
+    },
+    {
+     "measure": "layer:tf",
+     "group": "cl:0",
+     "value": 0.07604301075268813,
+     "lo": 0.052589941972920703,
+     "hi": 0.10074841269841273,
+     "n": 93,
+     "k": null,
+     "low": false,
+     "method": "bootstrap",
+     "enrich": -0.4142212644390296,
+     "enrichLo": -0.8424520835576866,
+     "enrichHi": -0.09140567883142982,
+     "cmp": -0.1239569892473118,
+     "cmpLo": -0.19332261327561315,
+     "cmpHi": -0.06523782679738555
+    },
+    {
+     "measure": "layer:tf",
+     "group": "cl:1",
+     "value": 0.19999999999999993,
+     "lo": 0.14799756097560973,
+     "hi": 0.26339999999999975,
+     "n": 37,
+     "k": null,
+     "low": false,
+     "method": "bootstrap",
+     "enrich": 0.9808911770522953,
+     "enrichLo": 0.6271945527066547,
+     "enrichHi": 1.3505853845155613,
+     "cmp": 0,
+     "cmpLo": null,
+     "cmpHi": null
+    },
+    {
+     "measure": "layer:tf",
+     "group": "cl:2",
+     "value": 0.060750000000000005,
+     "lo": 0.02421039136302294,
+     "hi": 0.10042680538555689,
+     "n": 32,
+     "k": null,
+     "low": false,
+     "method": "bootstrap",
+     "enrich": -0.7381525091166478,
+     "enrichLo": -1.9089525283894966,
+     "enrichHi": -0.02846429309859066,
+     "cmp": -0.13924999999999993,
+     "cmpLo": -0.21108947975140344,
+     "cmpHi": -0.07202258390035754
+    }
+   ],
+   "groups": [
+    {
+     "id": "cl:0",
+     "title": "C0",
+     "color": null,
+     "dataset": null
+    },
+    {
+     "id": "cl:1",
+     "title": "C1",
+     "color": null,
+     "dataset": null
+    },
+    {
+     "id": "cl:2",
+     "title": "C2",
+     "color": null,
+     "dataset": null
+    }
+   ],
+   "measures": [
+    {
+     "id": "layer:nuc",
+     "label": "Nuc",
+     "kind": "fraction",
+     "unit": "fraction of covered bp",
+     "source": "layers",
+     "enrichment": true,
+     "windowed": true,
+     "baseline": "region",
+     "method": "bootstrap",
+     "units": "curve"
+    },
+    {
+     "id": "layer:tf",
+     "label": "TF",
+     "kind": "fraction",
+     "unit": "fraction of covered bp",
+     "source": "layers",
+     "enrichment": true,
+     "windowed": true,
+     "baseline": "region",
+     "method": "bootstrap",
+     "units": "curve"
+    }
+   ],
+   "tests": {
+    "layer:nuc": null,
+    "layer:tf": null
+   },
+   "reference": "cl:1",
+   "boundsBp": 250,
+   "seed": 1,
+   "resamples": 1000
+  },
+  "readSource": "panel",
+  "tsv": "measure\tsource\tunit\tgroup\tn_reads\tmembers\tvalue\tlo95\thi95\tinterval\tenrichment\tenrich_lo95\tenrich_hi95\tvs_reference\tvs_ref_lo95\tvs_ref_hi95\tfew_reads\ttest_p\ttest_q\nNuc\tlayers\tfraction of covered bp\tC0\t93\tNA\t0.769376\t0.724978\t0.811364\tbootstrap\t0.240567\t0.150507\t0.348738\t0.513376\t0.402754\t0.623425\tno\tNA\tNA\nNuc\tlayers\tfraction of covered bp\tC1\t37\tNA\t0.256\t0.152203\t0.359361\tbootstrap\t-1.34698\t-2.06634\t-0.909548\t0\tNA\tNA\tno\tNA\tNA\nNuc\tlayers\tfraction of covered bp\tC2\t32\tNA\t0.76475\t0.687524\t0.836277\tbootstrap\t0.231866\t0.0749537\t0.389786\t0.50875\t0.385197\t0.633406\tno\tNA\tNA\nTF\tlayers\tfraction of covered bp\tC0\t93\tNA\t0.076043\t0.0525899\t0.100748\tbootstrap\t-0.414221\t-0.842452\t-0.0914057\t-0.123957\t-0.193323\t-0.0652378\tno\tNA\tNA\nTF\tlayers\tfraction of covered bp\tC1\t37\tNA\t0.2\t0.147998\t0.2634\tbootstrap\t0.980891\t0.627195\t1.35059\t0\tNA\tNA\tno\tNA\tNA\nTF\tlayers\tfraction of covered bp\tC2\t32\tNA\t0.06075\t0.0242104\t0.100427\tbootstrap\t-0.738153\t-1.90895\t-0.0284643\t-0.13925\t-0.211089\t-0.0720226\tno\tNA\tNA"
+ },
+ "curve_enrich_region_diff_ci_none": {
+  "result": {
+   "cells": [
+    {
+     "measure": "layer:nuc",
+     "group": "cl:0",
+     "value": 0.7693763440860214,
+     "lo": null,
+     "hi": null,
+     "n": 93,
+     "k": null,
+     "low": false,
+     "method": "none",
+     "enrich": 0.2405668916255345,
+     "enrichLo": null,
+     "enrichHi": null,
+     "cmp": 0.5133763440860213,
+     "cmpLo": null,
+     "cmpHi": null
+    },
+    {
+     "measure": "layer:nuc",
+     "group": "cl:1",
+     "value": 0.25600000000000006,
+     "lo": null,
+     "hi": null,
+     "n": 37,
+     "k": null,
+     "low": false,
+     "method": "none",
+     "enrich": -1.3469787701096239,
+     "enrichLo": null,
+     "enrichHi": null,
+     "cmp": 0,
+     "cmpLo": null,
+     "cmpHi": null
+    },
+    {
+     "measure": "layer:nuc",
+     "group": "cl:2",
+     "value": 0.76475,
+     "lo": null,
+     "hi": null,
+     "n": 32,
+     "k": null,
+     "low": false,
+     "method": "none",
+     "enrich": 0.23186562144857842,
+     "enrichLo": null,
+     "enrichHi": null,
+     "cmp": 0.50875,
+     "cmpLo": null,
+     "cmpHi": null
+    },
+    {
+     "measure": "layer:tf",
+     "group": "cl:0",
+     "value": 0.07604301075268813,
+     "lo": null,
+     "hi": null,
+     "n": 93,
+     "k": null,
+     "low": false,
+     "method": "none",
+     "enrich": -0.4142212644390296,
+     "enrichLo": null,
+     "enrichHi": null,
+     "cmp": -0.1239569892473118,
+     "cmpLo": null,
+     "cmpHi": null
+    },
+    {
+     "measure": "layer:tf",
+     "group": "cl:1",
+     "value": 0.19999999999999993,
+     "lo": null,
+     "hi": null,
+     "n": 37,
+     "k": null,
+     "low": false,
+     "method": "none",
+     "enrich": 0.9808911770522953,
+     "enrichLo": null,
+     "enrichHi": null,
+     "cmp": 0,
+     "cmpLo": null,
+     "cmpHi": null
+    },
+    {
+     "measure": "layer:tf",
+     "group": "cl:2",
+     "value": 0.060750000000000005,
+     "lo": null,
+     "hi": null,
+     "n": 32,
+     "k": null,
+     "low": false,
+     "method": "none",
+     "enrich": -0.7381525091166478,
+     "enrichLo": null,
+     "enrichHi": null,
+     "cmp": -0.13924999999999993,
+     "cmpLo": null,
+     "cmpHi": null
+    }
+   ],
+   "groups": [
+    {
+     "id": "cl:0",
+     "title": "C0",
+     "color": null,
+     "dataset": null
+    },
+    {
+     "id": "cl:1",
+     "title": "C1",
+     "color": null,
+     "dataset": null
+    },
+    {
+     "id": "cl:2",
+     "title": "C2",
+     "color": null,
+     "dataset": null
+    }
+   ],
+   "measures": [
+    {
+     "id": "layer:nuc",
+     "label": "Nuc",
+     "kind": "fraction",
+     "unit": "fraction of covered bp",
+     "source": "layers",
+     "enrichment": true,
+     "windowed": true,
+     "baseline": "region",
+     "method": "none",
+     "units": "curve",
+     "resamplesUsed": 0
+    },
+    {
+     "id": "layer:tf",
+     "label": "TF",
+     "kind": "fraction",
+     "unit": "fraction of covered bp",
+     "source": "layers",
+     "enrichment": true,
+     "windowed": true,
+     "baseline": "region",
+     "method": "none",
+     "units": "curve",
+     "resamplesUsed": 0
+    }
+   ],
+   "tests": {
+    "layer:nuc": null,
+    "layer:tf": null
+   },
+   "reference": "cl:1",
+   "boundsBp": 250,
+   "seed": 1,
+   "resamples": 1000
+  },
+  "readSource": "panel",
+  "tsv": "measure\tsource\tunit\tgroup\tn_reads\tmembers\tvalue\tlo95\thi95\tinterval\tenrichment\tenrich_lo95\tenrich_hi95\tvs_reference\tvs_ref_lo95\tvs_ref_hi95\tfew_reads\ttest_p\ttest_q\nNuc\tlayers\tfraction of covered bp\tC0\t93\tNA\t0.769376\tNA\tNA\tnone\t0.240567\tNA\tNA\t0.513376\tNA\tNA\tno\tNA\tNA\nNuc\tlayers\tfraction of covered bp\tC1\t37\tNA\t0.256\tNA\tNA\tnone\t-1.34698\tNA\tNA\t0\tNA\tNA\tno\tNA\tNA\nNuc\tlayers\tfraction of covered bp\tC2\t32\tNA\t0.76475\tNA\tNA\tnone\t0.231866\tNA\tNA\t0.50875\tNA\tNA\tno\tNA\tNA\nTF\tlayers\tfraction of covered bp\tC0\t93\tNA\t0.076043\tNA\tNA\tnone\t-0.414221\tNA\tNA\t-0.123957\tNA\tNA\tno\tNA\tNA\nTF\tlayers\tfraction of covered bp\tC1\t37\tNA\t0.2\tNA\tNA\tnone\t0.980891\tNA\tNA\t0\tNA\tNA\tno\tNA\tNA\nTF\tlayers\tfraction of covered bp\tC2\t32\tNA\t0.06075\tNA\tNA\tnone\t-0.738153\tNA\tNA\t-0.13925\tNA\tNA\tno\tNA\tNA"
+ },
+ "curve_enrich_flank_log2ratio": {
+  "result": {
+   "cells": [
+    {
+     "measure": "layer:nuc",
+     "group": "cl:0",
+     "value": 0.800806451612903,
+     "lo": 0.7586509900990098,
+     "hi": 0.8421896440290344,
+     "n": 93,
+     "k": null,
+     "low": false,
+     "method": "bootstrap",
+     "enrich": 0.5357107241998277,
+     "enrichLo": 0.38519592384065476,
+     "enrichHi": 0.6898440712330159,
+     "cmp": 0,
+     "cmpLo": null,
+     "cmpHi": null
+    },
+    {
+     "measure": "layer:nuc",
+     "group": "cl:1",
+     "value": 0.17094594594594603,
+     "lo": 0.08599092741935484,
+     "hi": 0.2637093495934957,
+     "n": 37,
+     "k": null,
+     "low": false,
+     "method": "bootstrap",
+     "enrich": -1.956918606159262,
+     "enrichLo": -2.971884139826536,
+     "enrichHi": -1.2900566465666732,
+     "cmp": -2.227913388076137,
+     "cmpLo": -3.2004889481694363,
+     "cmpHi": -1.5908262849314248
+    },
+    {
+     "measure": "layer:nuc",
+     "group": "cl:2",
+     "value": 0.828125,
+     "lo": 0.7586476293103448,
+     "hi": 0.8901785714285716,
+     "n": 32,
+     "k": null,
+     "low": false,
+     "method": "bootstrap",
+     "enrich": 0.20719138288884703,
+     "enrichLo": 0.018230576288921514,
+     "enrichHi": 0.39507807734427647,
+     "cmp": 0.04839495230906328,
+     "cmpLo": -0.10310374404290126,
+     "cmpHi": 0.18498729677064174
+    }
+   ],
+   "groups": [
+    {
+     "id": "cl:0",
+     "title": "C0",
+     "color": null,
+     "dataset": null
+    },
+    {
+     "id": "cl:1",
+     "title": "C1",
+     "color": null,
+     "dataset": null
+    },
+    {
+     "id": "cl:2",
+     "title": "C2",
+     "color": null,
+     "dataset": null
+    }
+   ],
+   "measures": [
+    {
+     "id": "layer:nuc",
+     "label": "Nuc",
+     "kind": "fraction",
+     "unit": "fraction of covered bp",
+     "source": "layers",
+     "enrichment": true,
+     "windowed": true,
+     "baseline": "flank",
+     "method": "bootstrap",
+     "units": "curve",
+     "resamplesUsed": 743
+    }
+   ],
+   "tests": {
+    "layer:nuc": null
+   },
+   "reference": "cl:0",
+   "boundsBp": 240,
+   "seed": 11,
+   "resamples": 1000
+  },
+  "readSource": "panel",
+  "tsv": "measure\tsource\tunit\tgroup\tn_reads\tmembers\tvalue\tlo95\thi95\tinterval\tenrichment\tenrich_lo95\tenrich_hi95\tvs_reference\tvs_ref_lo95\tvs_ref_hi95\tfew_reads\ttest_p\ttest_q\nNuc\tlayers\tfraction of covered bp\tC0\t93\tNA\t0.800806\t0.758651\t0.84219\tbootstrap\t0.535711\t0.385196\t0.689844\t0\tNA\tNA\tno\tNA\tNA\nNuc\tlayers\tfraction of covered bp\tC1\t37\tNA\t0.170946\t0.0859909\t0.263709\tbootstrap\t-1.95692\t-2.97188\t-1.29006\t-2.22791\t-3.20049\t-1.59083\tno\tNA\tNA\nNuc\tlayers\tfraction of covered bp\tC2\t32\tNA\t0.828125\t0.758648\t0.890179\tbootstrap\t0.207191\t0.0182306\t0.395078\t0.048395\t-0.103104\t0.184987\tno\tNA\tNA"
+ },
+ "curve_enrich_dataset_ratio": {
+  "result": {
+   "cells": [
+    {
+     "measure": "layer:tf",
+     "group": "napa_ddda|0",
+     "value": 0.07166666666666667,
+     "lo": 0.04859627329192548,
+     "hi": 0.09386046511627909,
+     "n": 48,
+     "k": null,
+     "low": false,
+     "method": "bootstrap",
+     "enrich": 1.0094679962818216,
+     "enrichLo": 0.6944268311015548,
+     "enrichHi": 1.314543130748797,
+     "cmp": null,
+     "cmpLo": null,
+     "cmpHi": null
+    },
+    {
+     "measure": "layer:tf",
+     "group": "napa_ddda|1",
+     "value": 0.1523076923076923,
+     "lo": 0.07840000000000003,
+     "hi": 0.2173333333333333,
+     "n": 13,
+     "k": null,
+     "low": true,
+     "method": "bootstrap",
+     "enrich": 2.1453452228672703,
+     "enrichLo": 1.1385373973098667,
+     "enrichHi": 3.038222863465611,
+     "cmp": null,
+     "cmpLo": null,
+     "cmpHi": null
+    },
+    {
+     "measure": "layer:tf",
+     "group": "napa_ddda|2",
+     "value": 0.0553846153846154,
+     "lo": 0.01714285714285714,
+     "hi": 0.10178787878787875,
+     "n": 13,
+     "k": null,
+     "low": true,
+     "method": "bootstrap",
+     "enrich": 0.7801255355880985,
+     "enrichLo": 0.24372102688295083,
+     "enrichHi": 1.4430449419683444,
+     "cmp": null,
+     "cmpLo": null,
+     "cmpHi": null
+    },
+    {
+     "measure": "layer:tf",
+     "group": "demo_copy|0",
+     "value": 0.09733333333333329,
+     "lo": 0.06247809762202751,
+     "hi": 0.1349767441860465,
+     "n": 45,
+     "k": null,
+     "low": false,
+     "method": "bootstrap",
+     "enrich": 0.9892881533791795,
+     "enrichLo": 0.6456247223201173,
+     "enrichHi": 1.3356897884659211,
+     "cmp": null,
+     "cmpLo": null,
+     "cmpHi": null
+    },
+    {
+     "measure": "layer:tf",
+     "group": "demo_copy|1",
+     "value": 0.22083333333333344,
+     "lo": 0.15016666666666673,
+     "hi": 0.3006956521739131,
+     "n": 24,
+     "k": null,
+     "low": false,
+     "method": "bootstrap",
+     "enrich": 2.244532197307216,
+     "enrichLo": 1.5239902982251117,
+     "enrichHi": 3.0479745976266086,
+     "cmp": null,
+     "cmpLo": null,
+     "cmpHi": null
+    },
+    {
+     "measure": "layer:tf",
+     "group": "demo_copy|2",
+     "value": 0.13368421052631582,
+     "lo": 0.05846666666666667,
+     "hi": 0.21966666666666643,
+     "n": 19,
+     "k": null,
+     "low": true,
+     "method": "bootstrap",
+     "enrich": 1.3587555387075259,
+     "enrichLo": 0.6188285005187428,
+     "enrichHi": 2.27691671959512,
+     "cmp": null,
+     "cmpLo": null,
+     "cmpHi": null
+    }
+   ],
+   "groups": [
+    {
+     "id": "napa_ddda|0",
+     "title": "A · C0",
+     "color": null,
+     "dataset": "napa_ddda"
+    },
+    {
+     "id": "napa_ddda|1",
+     "title": "A · C1",
+     "color": null,
+     "dataset": "napa_ddda"
+    },
+    {
+     "id": "napa_ddda|2",
+     "title": "A · C2",
+     "color": null,
+     "dataset": "napa_ddda"
+    },
+    {
+     "id": "demo_copy|0",
+     "title": "B · C0",
+     "color": null,
+     "dataset": "demo_copy"
+    },
+    {
+     "id": "demo_copy|1",
+     "title": "B · C1",
+     "color": null,
+     "dataset": "demo_copy"
+    },
+    {
+     "id": "demo_copy|2",
+     "title": "B · C2",
+     "color": null,
+     "dataset": "demo_copy"
+    }
+   ],
+   "measures": [
+    {
+     "id": "layer:tf",
+     "label": "TF",
+     "kind": "fraction",
+     "unit": "fraction of covered bp",
+     "source": "layers",
+     "enrichment": true,
+     "windowed": true,
+     "baseline": "dataset",
+     "method": "bootstrap",
+     "units": "curve",
+     "resamplesUsed": 729
+    }
+   ],
+   "tests": {
+    "layer:tf": null
+   },
+   "reference": "napa_ddda|0",
+   "boundsBp": 300,
+   "seed": 1,
+   "resamples": 1000
+  },
+  "readSource": "panel",
+  "tsv": "measure\tsource\tunit\tgroup\tn_reads\tmembers\tvalue\tlo95\thi95\tinterval\tenrichment\tenrich_lo95\tenrich_hi95\tvs_reference\tvs_ref_lo95\tvs_ref_hi95\tfew_reads\ttest_p\ttest_q\nTF\tlayers\tfraction of covered bp\tA · C0\t48\tNA\t0.0716667\t0.0485963\t0.0938605\tbootstrap\t1.00947\t0.694427\t1.31454\tNA\tNA\tNA\tno\tNA\tNA\nTF\tlayers\tfraction of covered bp\tA · C1\t13\tNA\t0.152308\t0.0784\t0.217333\tbootstrap\t2.14535\t1.13854\t3.03822\tNA\tNA\tNA\tyes\tNA\tNA\nTF\tlayers\tfraction of covered bp\tA · C2\t13\tNA\t0.0553846\t0.0171429\t0.101788\tbootstrap\t0.780126\t0.243721\t1.44304\tNA\tNA\tNA\tyes\tNA\tNA\nTF\tlayers\tfraction of covered bp\tB · C0\t45\tNA\t0.0973333\t0.0624781\t0.134977\tbootstrap\t0.989288\t0.645625\t1.33569\tNA\tNA\tNA\tno\tNA\tNA\nTF\tlayers\tfraction of covered bp\tB · C1\t24\tNA\t0.220833\t0.150167\t0.300696\tbootstrap\t2.24453\t1.52399\t3.04797\tNA\tNA\tNA\tno\tNA\tNA\nTF\tlayers\tfraction of covered bp\tB · C2\t19\tNA\t0.133684\t0.0584667\t0.219667\tbootstrap\t1.35876\t0.618829\t2.27692\tNA\tNA\tNA\tyes\tNA\tNA"
+ },
+ "exact_area_clusters_datasets": {
+  "result": {
+   "cells": [
+    {
+     "measure": "layer:nuc",
+     "group": "napa_ddda|0",
+     "value": 196.20833333333334,
+     "lo": 186.9765012254902,
+     "hi": 207.4982469512195,
+     "n": 48,
+     "k": null,
+     "low": false,
+     "method": "bootstrap",
+     "enrich": null,
+     "enrichLo": null,
+     "enrichHi": null,
+     "cmp": null,
+     "cmpLo": null,
+     "cmpHi": null
+    },
+    {
+     "measure": "layer:nuc",
+     "group": "napa_ddda|1",
+     "value": 70.07692307692308,
+     "lo": 32.846306818181816,
+     "hi": 122.11999999999998,
+     "n": 13,
+     "k": null,
+     "low": true,
+     "method": "bootstrap",
+     "enrich": null,
+     "enrichLo": null,
+     "enrichHi": null,
+     "cmp": null,
+     "cmpLo": null,
+     "cmpHi": null
+    },
+    {
+     "measure": "layer:nuc",
+     "group": "napa_ddda|2",
+     "value": 196.76923076923077,
+     "lo": 178.53616071428573,
+     "hi": 213.96912878787876,
+     "n": 13,
+     "k": null,
+     "low": true,
+     "method": "bootstrap",
+     "enrich": null,
+     "enrichLo": null,
+     "enrichHi": null,
+     "cmp": null,
+     "cmpLo": null,
+     "cmpHi": null
+    },
+    {
+     "measure": "layer:nuc",
+     "group": "demo_copy|0",
+     "value": 178.7111111111111,
+     "lo": 156.8347972972973,
+     "hi": 199.37635135135133,
+     "n": 45,
+     "k": null,
+     "low": false,
+     "method": "bootstrap",
+     "enrich": null,
+     "enrichLo": null,
+     "enrichHi": null,
+     "cmp": null,
+     "cmpLo": null,
+     "cmpHi": null
+    },
+    {
+     "measure": "layer:nuc",
+     "group": "demo_copy|1",
+     "value": 56.583333333333336,
+     "lo": 28.21277777777779,
+     "hi": 90.41354166666665,
+     "n": 24,
+     "k": null,
+     "low": false,
+     "method": "bootstrap",
+     "enrich": null,
+     "enrichLo": null,
+     "enrichHi": null,
+     "cmp": null,
+     "cmpLo": null,
+     "cmpHi": null
+    },
+    {
+     "measure": "layer:nuc",
+     "group": "demo_copy|2",
+     "value": 178.94736842105263,
+     "lo": 147.6854166666667,
+     "hi": 207.85480769230767,
+     "n": 19,
+     "k": null,
+     "low": true,
+     "method": "bootstrap",
+     "enrich": null,
+     "enrichLo": null,
+     "enrichHi": null,
+     "cmp": null,
+     "cmpLo": null,
+     "cmpHi": null
+    },
+    {
+     "measure": "layer:tf",
+     "group": "napa_ddda|0",
+     "value": 13.479166666666668,
+     "lo": 7.955107526881726,
+     "hi": 18.842586436170212,
+     "n": 48,
+     "k": null,
+     "low": false,
+     "method": "bootstrap",
+     "enrich": null,
+     "enrichLo": null,
+     "enrichHi": null,
+     "cmp": null,
+     "cmpLo": null,
+     "cmpHi": null
+    },
+    {
+     "measure": "layer:tf",
+     "group": "napa_ddda|1",
+     "value": 28.692307692307693,
+     "lo": 16.06287878787879,
+     "hi": 40.21818181818181,
+     "n": 13,
+     "k": null,
+     "low": true,
+     "method": "bootstrap",
+     "enrich": null,
+     "enrichLo": null,
+     "enrichHi": null,
+     "cmp": null,
+     "cmpLo": null,
+     "cmpHi": null
+    },
+    {
+     "measure": "layer:tf",
+     "group": "napa_ddda|2",
+     "value": 3.8461538461538463,
+     "lo": 0.5714285714285715,
+     "hi": 9.074999999999998,
+     "n": 13,
+     "k": null,
+     "low": true,
+     "method": "bootstrap",
+     "enrich": null,
+     "enrichLo": null,
+     "enrichHi": null,
+     "cmp": null,
+     "cmpLo": null,
+     "cmpHi": null
+    },
+    {
+     "measure": "layer:tf",
+     "group": "demo_copy|0",
+     "value": 19.777777777777775,
+     "lo": 11.661197916666667,
+     "hi": 29.537117117117116,
+     "n": 45,
+     "k": null,
+     "low": false,
+     "method": "bootstrap",
+     "enrich": null,
+     "enrichLo": null,
+     "enrichHi": null,
+     "cmp": null,
+     "cmpLo": null,
+     "cmpHi": null
+    },
+    {
+     "measure": "layer:tf",
+     "group": "demo_copy|1",
+     "value": 49.583333333333336,
+     "lo": 31.89406318082789,
+     "hi": 66.96145833333333,
+     "n": 24,
+     "k": null,
+     "low": false,
+     "method": "bootstrap",
+     "enrich": null,
+     "enrichLo": null,
+     "enrichHi": null,
+     "cmp": null,
+     "cmpLo": null,
+     "cmpHi": null
+    },
+    {
+     "measure": "layer:tf",
+     "group": "demo_copy|2",
+     "value": 19,
+     "lo": 6.598750000000003,
+     "hi": 33.68974358974355,
+     "n": 19,
+     "k": null,
+     "low": true,
+     "method": "bootstrap",
+     "enrich": null,
+     "enrichLo": null,
+     "enrichHi": null,
+     "cmp": null,
+     "cmpLo": null,
+     "cmpHi": null
+    }
+   ],
+   "groups": [
+    {
+     "id": "napa_ddda|0",
+     "title": "A · C0",
+     "color": null,
+     "dataset": "napa_ddda"
+    },
+    {
+     "id": "napa_ddda|1",
+     "title": "A · C1",
+     "color": null,
+     "dataset": "napa_ddda"
+    },
+    {
+     "id": "napa_ddda|2",
+     "title": "A · C2",
+     "color": null,
+     "dataset": "napa_ddda"
+    },
+    {
+     "id": "demo_copy|0",
+     "title": "B · C0",
+     "color": null,
+     "dataset": "demo_copy"
+    },
+    {
+     "id": "demo_copy|1",
+     "title": "B · C1",
+     "color": null,
+     "dataset": "demo_copy"
+    },
+    {
+     "id": "demo_copy|2",
+     "title": "B · C2",
+     "color": null,
+     "dataset": "demo_copy"
+    }
+   ],
+   "measures": [
+    {
+     "id": "layer:nuc",
+     "label": "Nuc",
+     "kind": "fraction",
+     "unit": "fraction of covered bp",
+     "source": "layers",
+     "enrichment": true,
+     "windowed": true,
+     "baseline": null,
+     "method": "bootstrap",
+     "units": "exact"
+    },
+    {
+     "id": "layer:tf",
+     "label": "TF",
+     "kind": "fraction",
+     "unit": "fraction of covered bp",
+     "source": "layers",
+     "enrichment": true,
+     "windowed": true,
+     "baseline": null,
+     "method": "bootstrap",
+     "units": "exact"
+    }
+   ],
+   "tests": {
+    "layer:nuc": null,
+    "layer:tf": null
+   },
+   "reference": "napa_ddda|0",
+   "boundsBp": 250,
+   "seed": 1,
+   "resamples": 300
+  },
+  "readSource": "panel",
+  "tsv": "measure\tsource\tunit\tgroup\tn_reads\tmembers\tvalue\tlo95\thi95\tinterval\tenrichment\tenrich_lo95\tenrich_hi95\tvs_reference\tvs_ref_lo95\tvs_ref_hi95\tfew_reads\ttest_p\ttest_q\nNuc\tlayers\tfraction of covered bp\tA · C0\t48\tNA\t196.208\t186.977\t207.498\tbootstrap\tNA\tNA\tNA\tNA\tNA\tNA\tno\tNA\tNA\nNuc\tlayers\tfraction of covered bp\tA · C1\t13\tNA\t70.0769\t32.8463\t122.12\tbootstrap\tNA\tNA\tNA\tNA\tNA\tNA\tyes\tNA\tNA\nNuc\tlayers\tfraction of covered bp\tA · C2\t13\tNA\t196.769\t178.536\t213.969\tbootstrap\tNA\tNA\tNA\tNA\tNA\tNA\tyes\tNA\tNA\nNuc\tlayers\tfraction of covered bp\tB · C0\t45\tNA\t178.711\t156.835\t199.376\tbootstrap\tNA\tNA\tNA\tNA\tNA\tNA\tno\tNA\tNA\nNuc\tlayers\tfraction of covered bp\tB · C1\t24\tNA\t56.5833\t28.2128\t90.4135\tbootstrap\tNA\tNA\tNA\tNA\tNA\tNA\tno\tNA\tNA\nNuc\tlayers\tfraction of covered bp\tB · C2\t19\tNA\t178.947\t147.685\t207.855\tbootstrap\tNA\tNA\tNA\tNA\tNA\tNA\tyes\tNA\tNA\nTF\tlayers\tfraction of covered bp\tA · C0\t48\tNA\t13.4792\t7.95511\t18.8426\tbootstrap\tNA\tNA\tNA\tNA\tNA\tNA\tno\tNA\tNA\nTF\tlayers\tfraction of covered bp\tA · C1\t13\tNA\t28.6923\t16.0629\t40.2182\tbootstrap\tNA\tNA\tNA\tNA\tNA\tNA\tyes\tNA\tNA\nTF\tlayers\tfraction of covered bp\tA · C2\t13\tNA\t3.84615\t0.571429\t9.075\tbootstrap\tNA\tNA\tNA\tNA\tNA\tNA\tyes\tNA\tNA\nTF\tlayers\tfraction of covered bp\tB · C0\t45\tNA\t19.7778\t11.6612\t29.5371\tbootstrap\tNA\tNA\tNA\tNA\tNA\tNA\tno\tNA\tNA\nTF\tlayers\tfraction of covered bp\tB · C1\t24\tNA\t49.5833\t31.8941\t66.9615\tbootstrap\tNA\tNA\tNA\tNA\tNA\tNA\tno\tNA\tNA\nTF\tlayers\tfraction of covered bp\tB · C2\t19\tNA\t19\t6.59875\t33.6897\tbootstrap\tNA\tNA\tNA\tNA\tNA\tNA\tyes\tNA\tNA"
+ },
+ "sites_pools_pooled": {
+  "result": {
+   "cells": [
+    {
+     "measure": "layer:nuc",
+     "group": "ds:napa_ddda",
+     "value": 0.6738101333736953,
+     "lo": 0.650118769326355,
+     "hi": 0.6979430546618761,
+     "n": 74,
+     "k": null,
+     "low": false,
+     "method": "bootstrap",
+     "enrich": 0.058506861106864864,
+     "enrichLo": 0.013313750373418212,
+     "enrichHi": 0.09933702852025166,
+     "cmp": null,
+     "cmpLo": null,
+     "cmpHi": null
+    },
+    {
+     "measure": "layer:nuc",
+     "group": "ds:demo_copy",
+     "value": 0.6248439553772053,
+     "lo": 0.5963242596396892,
+     "hi": 0.652413573448568,
+     "n": 88,
+     "k": null,
+     "low": false,
+     "method": "bootstrap",
+     "enrich": -0.05033931896892561,
+     "enrichLo": -0.08756981507310284,
+     "enrichHi": -0.012891275707121543,
+     "cmp": null,
+     "cmpLo": null,
+     "cmpHi": null
+    }
+   ],
+   "groups": [
+    {
+     "id": "ds:napa_ddda",
+     "title": "A",
+     "color": "#3b82f6",
+     "dataset": "napa_ddda"
+    },
+    {
+     "id": "ds:demo_copy",
+     "title": "B",
+     "color": "#ef4444",
+     "dataset": "demo_copy"
+    }
+   ],
+   "measures": [
+    {
+     "id": "layer:nuc",
+     "label": "Nuc",
+     "kind": "fraction",
+     "unit": "fraction of covered bp",
+     "source": "layers",
+     "enrichment": true,
+     "windowed": true,
+     "baseline": "pooled",
+     "method": "bootstrap",
+     "units": "curve"
+    }
+   ],
+   "tests": {
+    "layer:nuc": null
+   },
+   "reference": "ds:napa_ddda",
+   "boundsBp": 3000,
+   "seed": 1,
+   "resamples": 200
+  },
+  "readSource": "panel",
+  "tsv": "measure\tsource\tunit\tgroup\tn_reads\tmembers\tvalue\tlo95\thi95\tinterval\tenrichment\tenrich_lo95\tenrich_hi95\tvs_reference\tvs_ref_lo95\tvs_ref_hi95\tfew_reads\ttest_p\ttest_q\nNuc\tlayers\tfraction of covered bp\tA\t74\tNA\t0.67381\t0.650119\t0.697943\tbootstrap\t0.0585069\t0.0133138\t0.099337\tNA\tNA\tNA\tno\tNA\tNA\nNuc\tlayers\tfraction of covered bp\tB\t88\tNA\t0.624844\t0.596324\t0.652414\tbootstrap\t-0.0503393\t-0.0875698\t-0.0128913\tNA\tNA\tNA\tno\tNA\tNA"
+ },
+ "fresh_layers": {
+  "result": {
+   "cells": [
+    {
+     "measure": "layer:nuc",
+     "group": "ds:napa_ddda",
+     "value": 0.6707333333333333,
+     "lo": 0.6214799584631361,
+     "hi": 0.7243422137404579,
+     "n": 120,
+     "k": null,
+     "low": false,
+     "method": "bootstrap",
+     "enrich": null,
+     "enrichLo": null,
+     "enrichHi": null,
+     "cmp": null,
+     "cmpLo": null,
+     "cmpHi": null
+    },
+    {
+     "measure": "layer:tf",
+     "group": "ds:napa_ddda",
+     "value": 0.06353333333333333,
+     "lo": 0.04821631540697675,
+     "hi": 0.08047139090309822,
+     "n": 120,
+     "k": null,
+     "low": false,
+     "method": "bootstrap",
+     "enrich": null,
+     "enrichLo": null,
+     "enrichHi": null,
+     "cmp": null,
+     "cmpLo": null,
+     "cmpHi": null
+    }
+   ],
+   "groups": [
+    {
+     "id": "ds:napa_ddda",
+     "title": "A",
+     "color": "#3b82f6",
+     "dataset": "napa_ddda"
+    }
+   ],
+   "measures": [
+    {
+     "id": "layer:nuc",
+     "label": "Nuc",
+     "kind": "fraction",
+     "unit": "fraction of covered bp",
+     "source": "layers",
+     "enrichment": true,
+     "windowed": true,
+     "baseline": null,
+     "method": "bootstrap",
+     "units": "exact"
+    },
+    {
+     "id": "layer:tf",
+     "label": "TF",
+     "kind": "fraction",
+     "unit": "fraction of covered bp",
+     "source": "layers",
+     "enrichment": true,
+     "windowed": true,
+     "baseline": null,
+     "method": "bootstrap",
+     "units": "exact"
+    }
+   ],
+   "tests": {
+    "layer:nuc": null,
+    "layer:tf": null
+   },
+   "reference": "ds:napa_ddda",
+   "boundsBp": 250,
+   "seed": 1,
+   "resamples": 1000
+  },
+  "readSource": "fetch",
+  "tsv": "measure\tsource\tunit\tgroup\tn_reads\tmembers\tvalue\tlo95\thi95\tinterval\tenrichment\tenrich_lo95\tenrich_hi95\tvs_reference\tvs_ref_lo95\tvs_ref_hi95\tfew_reads\ttest_p\ttest_q\nNuc\tlayers\tfraction of covered bp\tA\t120\tNA\t0.670733\t0.62148\t0.724342\tbootstrap\tNA\tNA\tNA\tNA\tNA\tNA\tno\tNA\tNA\nTF\tlayers\tfraction of covered bp\tA\t120\tNA\t0.0635333\t0.0482163\t0.0804714\tbootstrap\tNA\tNA\tNA\tNA\tNA\tNA\tno\tNA\tNA"
+ },
+ "fresh_size_band_flank": {
+  "result": {
+   "cells": [
+    {
+     "measure": "size:band",
+     "group": "ds:napa_ddda",
+     "value": 0.3508771929824561,
+     "lo": 0.28279697565236384,
+     "hi": 0.4078317796774068,
+     "n": 134,
+     "k": null,
+     "low": false,
+     "method": "bootstrap",
+     "enrich": -0.04121300965456867,
+     "enrichLo": -0.4420483281687771,
+     "enrichHi": 0.2628440187138861,
+     "cmp": null,
+     "cmpLo": null,
+     "cmpHi": null
+    }
+   ],
+   "groups": [
+    {
+     "id": "ds:napa_ddda",
+     "title": "A",
+     "color": "#3b82f6",
+     "dataset": "napa_ddda"
+    }
+   ],
+   "measures": [
+    {
+     "id": "size:band",
+     "label": "Footprints in the size band",
+     "kind": "ratio",
+     "unit": "share of footprints in the size band",
+     "source": "size-band",
+     "enrichment": true,
+     "windowed": true,
+     "note": "footprints counted by their centre (one wider than the view, with no known centre, is left out); the band is set in Options",
+     "baseline": "flank",
+     "method": "bootstrap"
+    }
+   ],
+   "tests": {
+    "size:band": null
+   },
+   "reference": "ds:napa_ddda",
+   "boundsBp": 250,
+   "seed": 1,
+   "resamples": 400
+  },
+  "readSource": null,
+  "tsv": "measure\tsource\tunit\tgroup\tn_reads\tmembers\tvalue\tlo95\thi95\tinterval\tenrichment\tenrich_lo95\tenrich_hi95\tvs_reference\tvs_ref_lo95\tvs_ref_hi95\tfew_reads\ttest_p\ttest_q\nFootprints in the size band\tsize-band\tshare of footprints in the size band\tA\t134\tNA\t0.350877\t0.282797\t0.407832\tbootstrap\t-0.041213\t-0.442048\t0.262844\tNA\tNA\tNA\tno\tNA\tNA"
+ },
+ "engine_shares_chi2": {
+  "result": {
+   "cells": [
+    {
+     "measure": "fam:a",
+     "group": "cl:0",
+     "value": 0.14864864864864866,
+     "lo": 0.085080595484994,
+     "hi": 0.246894925171926,
+     "n": 74,
+     "k": 11,
+     "low": false,
+     "method": "wilson",
+     "enrich": -1.397861450684875,
+     "enrichLo": -2.3867850961498704,
+     "enrichHi": -0.8144189856098674,
+     "cmp": 0,
+     "cmpLo": null,
+     "cmpHi": null
+    },
+    {
+     "measure": "fam:a",
+     "group": "cl:1",
+     "value": 0.5205479452054794,
+     "lo": 0.40781596889792504,
+     "hi": 0.6312254554326613,
+     "n": 73,
+     "k": 38,
+     "low": false,
+     "method": "wilson",
+     "enrich": 0.4102632508703456,
+     "enrichLo": 0.1650841477323352,
+     "enrichHi": 0.6581122646730095,
+     "cmp": 0.37189929655683074,
+     "cmpLo": 0.24239316876724593,
+     "cmpHi": 0.5088448089985735
+    },
+    {
+     "measure": "fam:a",
+     "group": "cl:2",
+     "value": 0.5142857142857142,
+     "lo": 0.39954383919009234,
+     "hi": 0.6275412161696143,
+     "n": 70,
+     "k": 36,
+     "low": false,
+     "method": "wilson",
+     "enrich": 0.39280228080412327,
+     "enrichLo": 0.08350700731668302,
+     "enrichHi": 0.6523027655084537,
+     "cmp": 0.36563706563706555,
+     "cmpLo": 0.2222222222222222,
+     "cmpHi": 0.5119081110095602
+    },
+    {
+     "measure": "fam:b",
+     "group": "cl:0",
+     "value": 0.36231884057971014,
+     "lo": 0.2589572436016878,
+     "hi": 0.4802022912619641,
+     "n": 69,
+     "k": 25,
+     "low": false,
+     "method": "wilson",
+     "enrich": -0.06549717318362146,
+     "enrichLo": -0.5269673538798946,
+     "enrichHi": 0.2605374682019533,
+     "cmp": 0,
+     "cmpLo": null,
+     "cmpHi": null
+    },
+    {
+     "measure": "fam:b",
+     "group": "cl:1",
+     "value": 0.4,
+     "lo": 0.2966251564586679,
+     "hi": 0.5131196120378932,
+     "n": 75,
+     "k": 30,
+     "low": false,
+     "method": "wilson",
+     "enrich": 0.07724299893246066,
+     "enrichLo": -0.2611271137926006,
+     "enrichHi": 0.3576490135375634,
+     "cmp": 0.03768115942028988,
+     "cmpLo": -0.11866391606203001,
+     "cmpHi": 0.2029268844248822
+    },
+    {
+     "measure": "fam:b",
+     "group": "cl:2",
+     "value": 0.373134328358209,
+     "lo": 0.2671815998117198,
+     "hi": 0.49284592809353583,
+     "n": 67,
+     "k": 25,
+     "low": false,
+     "method": "wilson",
+     "enrich": -0.023061906863224714,
+     "enrichLo": -0.45204250182235267,
+     "enrichHi": 0.30950039505448657,
+     "cmp": 0.010815487778498833,
+     "cmpLo": -0.15420282867245255,
+     "cmpHi": 0.17484557109557108
+    }
+   ],
+   "groups": [
+    {
+     "id": "cl:0",
+     "title": "C0",
+     "color": null,
+     "dataset": null
+    },
+    {
+     "id": "cl:1",
+     "title": "C1",
+     "color": null,
+     "dataset": null
+    },
+    {
+     "id": "cl:2",
+     "title": "C2",
+     "color": null,
+     "dataset": null
+    }
+   ],
+   "measures": [
+    {
+     "id": "fam:a",
+     "label": "fam:a",
+     "kind": "share",
+     "unit": "share of reads",
+     "source": "fp",
+     "enrichment": true,
+     "windowed": false,
+     "baseline": "pooled",
+     "method": "wilson"
+    },
+    {
+     "id": "fam:b",
+     "label": "fam:b",
+     "kind": "share",
+     "unit": "share of reads",
+     "source": "fp",
+     "enrichment": true,
+     "windowed": false,
+     "baseline": "pooled",
+     "method": "wilson"
+    }
+   ],
+   "tests": {
+    "fam:a": {
+     "stat": 27.847611556688914,
+     "df": 2,
+     "p": 8.973626375827056e-7,
+     "q": 0.0000017947252751654112,
+     "method": "chi2"
+    },
+    "fam:b": {
+     "stat": 0.2318476485808596,
+     "df": 2,
+     "p": 0.890543058463125,
+     "q": 0.890543058463125,
+     "method": "chi2"
+    }
+   },
+   "reference": "cl:0",
+   "boundsBp": 250,
+   "seed": 5,
+   "resamples": 1000
+  },
+  "readSource": null,
+  "tsv": "measure\tsource\tunit\tgroup\tn_reads\tmembers\tvalue\tlo95\thi95\tinterval\tenrichment\tenrich_lo95\tenrich_hi95\tvs_reference\tvs_ref_lo95\tvs_ref_hi95\tfew_reads\ttest_p\ttest_q\nfam:a\tfp\tshare of reads\tC0\t74\t11\t0.148649\t0.0850806\t0.246895\twilson\t-1.39786\t-2.38679\t-0.814419\t0\tNA\tNA\tno\t8.97363e-7\t0.00000179473\nfam:a\tfp\tshare of reads\tC1\t73\t38\t0.520548\t0.407816\t0.631225\twilson\t0.410263\t0.165084\t0.658112\t0.371899\t0.242393\t0.508845\tno\t8.97363e-7\t0.00000179473\nfam:a\tfp\tshare of reads\tC2\t70\t36\t0.514286\t0.399544\t0.627541\twilson\t0.392802\t0.083507\t0.652303\t0.365637\t0.222222\t0.511908\tno\t8.97363e-7\t0.00000179473\nfam:b\tfp\tshare of reads\tC0\t69\t25\t0.362319\t0.258957\t0.480202\twilson\t-0.0654972\t-0.526967\t0.260537\t0\tNA\tNA\tno\t0.890543\t0.890543\nfam:b\tfp\tshare of reads\tC1\t75\t30\t0.4\t0.296625\t0.51312\twilson\t0.077243\t-0.261127\t0.357649\t0.0376812\t-0.118664\t0.202927\tno\t0.890543\t0.890543\nfam:b\tfp\tshare of reads\tC2\t67\t25\t0.373134\t0.267182\t0.492846\twilson\t-0.0230619\t-0.452043\t0.3095\t0.0108155\t-0.154203\t0.174846\tno\t0.890543\t0.890543"
+ },
+ "engine_shares_g_none": {
+  "result": {
+   "cells": [
+    {
+     "measure": "fam:a",
+     "group": "cl:0",
+     "value": 0.14864864864864866,
+     "lo": 0.07045981772990886,
+     "hi": 0.2345526315789474,
+     "n": 74,
+     "k": 11,
+     "low": true,
+     "method": "bootstrap",
+     "enrich": null,
+     "enrichLo": null,
+     "enrichHi": null,
+     "cmp": null,
+     "cmpLo": null,
+     "cmpHi": null
+    },
+    {
+     "measure": "fam:a",
+     "group": "cl:1",
+     "value": 0.5205479452054794,
+     "lo": 0.4169574401502113,
+     "hi": 0.6467237527922561,
+     "n": 73,
+     "k": 38,
+     "low": true,
+     "method": "bootstrap",
+     "enrich": null,
+     "enrichLo": null,
+     "enrichHi": null,
+     "cmp": null,
+     "cmpLo": null,
+     "cmpHi": null
+    },
+    {
+     "measure": "fam:a",
+     "group": "cl:2",
+     "value": 0.5142857142857142,
+     "lo": 0.403317334839074,
+     "hi": 0.632429406037001,
+     "n": 70,
+     "k": 36,
+     "low": true,
+     "method": "bootstrap",
+     "enrich": null,
+     "enrichLo": null,
+     "enrichHi": null,
+     "cmp": null,
+     "cmpLo": null,
+     "cmpHi": null
+    },
+    {
+     "measure": "fam:b",
+     "group": "cl:0",
+     "value": 0.36231884057971014,
+     "lo": 0.2553250270855905,
+     "hi": 0.46624413145539906,
+     "n": 69,
+     "k": 25,
+     "low": true,
+     "method": "bootstrap",
+     "enrich": null,
+     "enrichLo": null,
+     "enrichHi": null,
+     "cmp": null,
+     "cmpLo": null,
+     "cmpHi": null
+    },
+    {
+     "measure": "fam:b",
+     "group": "cl:1",
+     "value": 0.4,
+     "lo": 0.27791693088142044,
+     "hi": 0.5,
+     "n": 75,
+     "k": 30,
+     "low": true,
+     "method": "bootstrap",
+     "enrich": null,
+     "enrichLo": null,
+     "enrichHi": null,
+     "cmp": null,
+     "cmpLo": null,
+     "cmpHi": null
+    },
+    {
+     "measure": "fam:b",
+     "group": "cl:2",
+     "value": 0.373134328358209,
+     "lo": 0.2762931034482759,
+     "hi": 0.5057835820895523,
+     "n": 67,
+     "k": 25,
+     "low": true,
+     "method": "bootstrap",
+     "enrich": null,
+     "enrichLo": null,
+     "enrichHi": null,
+     "cmp": null,
+     "cmpLo": null,
+     "cmpHi": null
+    }
+   ],
+   "groups": [
+    {
+     "id": "cl:0",
+     "title": "C0",
+     "color": null,
+     "dataset": null
+    },
+    {
+     "id": "cl:1",
+     "title": "C1",
+     "color": null,
+     "dataset": null
+    },
+    {
+     "id": "cl:2",
+     "title": "C2",
+     "color": null,
+     "dataset": null
+    }
+   ],
+   "measures": [
+    {
+     "id": "fam:a",
+     "label": "fam:a",
+     "kind": "share",
+     "unit": "share of reads",
+     "source": "fp",
+     "enrichment": true,
+     "windowed": false,
+     "baseline": null,
+     "method": "bootstrap"
+    },
+    {
+     "id": "fam:b",
+     "label": "fam:b",
+     "kind": "share",
+     "unit": "share of reads",
+     "source": "fp",
+     "enrichment": true,
+     "windowed": false,
+     "baseline": null,
+     "method": "bootstrap"
+    }
+   ],
+   "tests": {
+    "fam:a": null,
+    "fam:b": null
+   },
+   "reference": "cl:0",
+   "boundsBp": 250,
+   "seed": 5,
+   "resamples": 250
+  },
+  "readSource": null,
+  "tsv": "measure\tsource\tunit\tgroup\tn_reads\tmembers\tvalue\tlo95\thi95\tinterval\tenrichment\tenrich_lo95\tenrich_hi95\tvs_reference\tvs_ref_lo95\tvs_ref_hi95\tfew_reads\ttest_p\ttest_q\nfam:a\tfp\tshare of reads\tC0\t74\t11\t0.148649\t0.0704598\t0.234553\tbootstrap\tNA\tNA\tNA\tNA\tNA\tNA\tyes\tNA\tNA\nfam:a\tfp\tshare of reads\tC1\t73\t38\t0.520548\t0.416957\t0.646724\tbootstrap\tNA\tNA\tNA\tNA\tNA\tNA\tyes\tNA\tNA\nfam:a\tfp\tshare of reads\tC2\t70\t36\t0.514286\t0.403317\t0.632429\tbootstrap\tNA\tNA\tNA\tNA\tNA\tNA\tyes\tNA\tNA\nfam:b\tfp\tshare of reads\tC0\t69\t25\t0.362319\t0.255325\t0.466244\tbootstrap\tNA\tNA\tNA\tNA\tNA\tNA\tyes\tNA\tNA\nfam:b\tfp\tshare of reads\tC1\t75\t30\t0.4\t0.277917\t0.5\tbootstrap\tNA\tNA\tNA\tNA\tNA\tNA\tyes\tNA\tNA\nfam:b\tfp\tshare of reads\tC2\t67\t25\t0.373134\t0.276293\t0.505784\tbootstrap\tNA\tNA\tNA\tNA\tNA\tNA\tyes\tNA\tNA"
+ }
+}

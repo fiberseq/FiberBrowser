@@ -243,35 +243,36 @@ def test_fiberhmm_3_changed_defaults_supplementary_and_unaligned_mask(tmp_path):
         assert real_parse(result["args"])["alignments"] == value
 
 
-def test_retired_nucleosome_options_are_dropped_and_listed_not_refused(tmp_path):
-    """--phase-nrl and --nuc-recall-policy (retired in 3.0: they caused artifacts) are left out of
-    the re-call and listed as rewrites, in every spelling; the rest round-trips."""
+def test_retired_phase_nrl_is_dropped_and_listed_and_nuc_recall_policy_is_replayed(tmp_path):
+    """--phase-nrl (retired in 3.0: it caused artifacts) is left out of the re-call and listed as a rewrite, in
+    every spelling. --nuc-recall-policy is offered again from 3.1.1 (the run wizard's topology recall): replayed."""
     reads = make_bam(tmp_path / "in.bam")
     cl = (f"fiberhmm-call -i {reads} -o x.bam --enzyme dddb --phase-nrl auto --min-llr 6 "
           "--nuc-recall-policy=topology --primary")
     result = build(cl, tmp_path, ds=S01_DS)
     dropped = {r["flag"]: r for r in result["rewrites"] if r["to"] is None}
     assert dropped == {
-        "--phase-nrl": {"flag": "--phase-nrl", "from": "auto", "to": None, "why": rh.RETIRED_CAUSED_ARTIFACTS},
-        "--nuc-recall-policy": {"flag": "--nuc-recall-policy", "from": "topology", "to": None,
-                                "why": rh.RETIRED_CAUSED_ARTIFACTS}}
+        "--phase-nrl": {"flag": "--phase-nrl", "from": "auto", "to": None, "why": rh.RETIRED_CAUSED_ARTIFACTS}}
     assert rh.RETIRED_CAUSED_ARTIFACTS == "retired in FiberHMM 3.0: caused artifacts"
-    assert "--phase-nrl" not in result["args"] and "--nuc-recall-policy=topology" not in result["args"]
-    assert not any(w.startswith(("--phase-nrl", "--nuc-recall-policy")) for w in result["original_args"])
+    assert not any(w.startswith("--phase-nrl") for w in result["args"])
+    assert any(w.startswith("--nuc-recall-policy") for w in result["args"])
     before, after = real_parse(result["original_args"]), real_parse(result["args"])
     assert after["min_llr"] == 6 and after["alignments"] == "primary"
-    assert after["phase_nrl"] == "off" and after["nuc_recall_policy"] == "auto"  # FiberHMM's defaults
+    assert after["phase_nrl"] == "off" and after["nuc_recall_policy"] == "topology"
     assert rh.silent_changes(before, after, rh.allowed_changes("fiberhmm-call", result)) == []
     assert not result["warnings"]
-    # A fixed-bp value, an unquoted command (the value is the next word) and the last word.
-    result = build(f"fiberhmm-call -i {reads} -o x.bam --enzyme dddb --phase-nrl 185 --nuc-recall-policy",
-                   tmp_path, ds=S01_DS)
-    assert [(r["flag"], r["from"]) for r in result["rewrites"] if r["to"] is None] == [
-        ("--phase-nrl", "185"), ("--nuc-recall-policy", None)]
-    # A run that used them by default (DS) is told its nucleosome calls change; nothing restores them.
+    # A fixed-bp value, an unquoted command (the value is the next word).
+    result = build(f"fiberhmm-call -i {reads} -o x.bam --enzyme dddb --phase-nrl 185", tmp_path, ds=S01_DS)
+    assert [(r["flag"], r["from"]) for r in result["rewrites"] if r["to"] is None] == [("--phase-nrl", "185")]
+    # A run that used phase_nrl by default (DS) is told its nucleosome calls change; nothing restores it.
     changes = {c["id"]: c for c in build(f"fiberhmm-call -i {reads} -o x.bam --enzyme dddb", tmp_path,
                                          ds=S01_DS + " phase_nrl=auto nuc_recall_policy=auto")["changed_defaults"]}
     assert changes["nuc_recall"]["restore"] is None and "phase_nrl=auto" in changes["nuc_recall"]["text"]
+    assert "nuc_recall_policy" not in changes
+    # One that used topology recall by default can restore it.
+    changes = {c["id"]: c for c in build(f"fiberhmm-call -i {reads} -o x.bam --enzyme dddb", tmp_path,
+                                         ds=S01_DS + " nuc_recall_policy=topology")["changed_defaults"]}
+    assert changes["nuc_recall_policy"]["restore"] == ["--nuc-recall-policy", "topology"]
 
 
 def test_retired_options_in_a_pipeline_commands_call_args_are_dropped(tmp_path):
@@ -286,10 +287,13 @@ def test_retired_options_in_a_pipeline_commands_call_args_are_dropped(tmp_path):
     assert parse_args(result["args"]).call_args == "--with-scores" and result["call_args"] == ["--with-scores"]
     before, after = vars(parse_args(result["original_args"])), vars(parse_args(result["args"]))
     assert rh.silent_changes(before, after, rh.allowed_changes("fiberhmm-pipeline", result)) == []
-    # Only a retired option: --call-args goes altogether.
+    # Only a retired option: --call-args goes altogether. --nuc-recall-policy (offered again in 3.1.1) is kept.
     result = build_pipeline(f"fiberhmm-pipeline {reads} --reference {ref} --enzyme dddb -o /old/out "
-                            "--call-args '--nuc-recall-policy topology'", tmp_path)
+                            "--call-args '--phase-nrl auto'", tmp_path)
     assert parse_args(result["args"]).call_args == ""  # kept, emptied: see below
+    kept = build_pipeline(f"fiberhmm-pipeline {reads} --reference {ref} --enzyme dddb -o /old/out "
+                          "--call-args '--nuc-recall-policy topology'", tmp_path)
+    assert parse_args(kept["args"]).call_args == "--nuc-recall-policy topology"
     # An old pipeline (its DS records no alignment set): its three changed defaults, kept on request.
     changes = {c["id"]: c for c in result["changed_defaults"]}
     assert set(changes) == {"alignments", "soft_clips", "daf_unaligned_mask"}
@@ -650,8 +654,8 @@ def test_abbreviated_retired_options_are_dropped_by_their_full_name(with_table):
     table = call_table() if with_table else None
     kept, dropped = rh.drop_retired(["--phase-n=185", "--min-llr", "6", "--nuc-recall-pol", "topology",
                                      "--with-scores"], table)
-    assert kept == ["--min-llr", "6", "--with-scores"]
-    assert [(d["flag"], d["value"]) for d in dropped] == [("--phase-nrl", "185"), ("--nuc-recall-policy", "topology")]
+    assert kept == ["--min-llr", "6", "--nuc-recall-pol", "topology", "--with-scores"]   # offered again (3.1.1)
+    assert [(d["flag"], d["value"]) for d in dropped] == [("--phase-nrl", "185")]
     # Another option's own name is never taken for one.
     assert rh.drop_retired(["--min-llr", "6", "--min-opps", "3"], table)[1] == []
 
@@ -669,7 +673,7 @@ def test_abbreviated_retired_options_once_the_parser_has_removed_them(tmp_path):
     result = rh.build(tool="fiberhmm-call", cl=f"fiberhmm-call -i {reads} -o x.bam --enzyme dddb --nuc-recall-pol topology",
                       ds=S01_DS, table=table, entry_path=str(tmp_path / "entry.bam"), enzyme="dddb",
                       platform="nanopore", outdir=str(tmp_path / "out"), cores=2)
-    assert [(r["flag"], r["from"]) for r in result["rewrites"] if r["to"] is None] == [("--nuc-recall-policy", "topology")]
+    assert [(r["flag"], r["from"]) for r in result["rewrites"] if r["to"] is None] == []   # replayed (3.1.1)
 
 
 # --- raw Nanopore (POD5) pipelines and basecaller overrides (FiberHMM 3.0) ----------

@@ -56,7 +56,7 @@ def test_install_prompt_targets_browser_python_and_consensus_extra():
 def test_install_prompt_names_the_fiberhmm_3_requirement():
     from services.consensus_workflow import _consensus_install_help
     message=_consensus_install_help()
-    assert 'fiberhmm[consensus]>=3.2.0,<4' in message
+    assert 'fiberhmm[consensus]>=3.2.2,<4' in message
     assert '/path/to/FiberHMM' not in message
 
 
@@ -80,7 +80,7 @@ def test_startup_log_warns_about_fiberhmm_older_than_3(monkeypatch):
         'path':'/site-packages/fiberhmm','compatible':False,'error':None})
     lines=[]
     runtime.log_fiberhmm_runtime(lines.append)
-    assert 'WARNING' in lines[0] and '2.16.8' in lines[0] and 'fiberhmm[consensus]>=3.2.0,<4' in lines[0]
+    assert 'WARNING' in lines[0] and '2.16.8' in lines[0] and 'fiberhmm[consensus]>=3.2.2,<4' in lines[0]
     monkeypatch.setattr(runtime,'describe_fiberhmm',lambda:{'available':True,'version':'3.0.0',
         'path':'/site-packages/fiberhmm','compatible':True,'error':None})
     lines.clear()
@@ -98,9 +98,10 @@ def test_describe_fiberhmm_reports_the_imported_package():
 def test_compatibility_follows_the_declared_floor_not_just_the_major(monkeypatch):
     # Release audit 3.1.0 (recheck): 3.1.0 lacks scan/nuc/assoc/graph_lift and must not be reported compatible.
     import types
-    assert runtime.MIN_FIBERHMM_VERSION=='3.2.0' and runtime.MAX_FIBERHMM_MAJOR==4
-    for version,ok in [('3.1.0',False),('3.1.9',False),('2.16.8',False),('3.2.0',True),('3.2',True),
-                       ('3.2.1.dev3+gabc',True),('3.10.0',True),('4.0.0',False),('unknown',False)]:
+    # 3.1.1: the floor is 3.2.2 (FiberHMM's scans read MA first, as the browser's read rows do).
+    assert runtime.MIN_FIBERHMM_VERSION=='3.2.2' and runtime.MAX_FIBERHMM_MAJOR==4
+    for version,ok in [('3.1.0',False),('3.1.9',False),('2.16.8',False),('3.2.0',False),('3.2',False),('3.2.1',False),
+                       ('3.2.2',True),('3.2.3.dev3+gabc',True),('3.10.0',True),('4.0.0',False),('unknown',False)]:
         assert runtime.fiberhmm_version_supported(version) is ok, version
         monkeypatch.setitem(sys.modules,'fiberhmm',types.SimpleNamespace(__version__=version,__file__='/x/fiberhmm/__init__.py'))
         monkeypatch.setattr(runtime,'configure_fiberhmm_runtime',lambda **kw:None)

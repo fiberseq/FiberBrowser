@@ -193,6 +193,13 @@ ANALYSIS_PANEL_TYPES: Tuple[str, ...] = (
     "capture",
     "history",
     "circular-genome",
+    "dataset-layout",
+    "nucleosomes",
+    "sequence-search",
+    "variants",
+    "insertion-lens",
+    "graph-view",
+    "feature-hub",
 )
 
 ANALYSIS_PANEL_ALIASES = {
@@ -241,7 +248,27 @@ ANALYSIS_PANEL_ALIASES = {
     "circular-genome": "circular-genome",
     "plasmid": "circular-genome",
     "plasmids": "circular-genome",
+    "layout": "dataset-layout",
+    "dataset-layout": "dataset-layout",
+    "nuc": "nucleosomes",
+    "nucleosome": "nucleosomes",
+    "nucleosomes": "nucleosomes",
+    "find-sequence": "sequence-search",
+    "sequence": "sequence-search",
+    "sequence-search": "sequence-search",
+    "snps": "variants",
+    "variants": "variants",
+    "insertion": "insertion-lens",
+    "insertions": "insertion-lens",
+    "insertion-lens": "insertion-lens",
+    "graph": "graph-view",
+    "graph-view": "graph-view",
+    "hub": "feature-hub",
+    "feature-hub": "feature-hub",
 }
+
+# Plots and the feature hub's workspace cover the reads: they are workspaces (BrowserClient.set_workspace), not panels.
+WORKSPACES: Tuple[str, ...] = ("browser", "plots", "hub")
 
 def _ensure_pandas():
     global _pd
@@ -498,6 +525,68 @@ class BrowserClient:
             return [values]
         return [str(v) for v in values]
 
+    # The read track's read policy, as the browser's toggles set it: duplicates and QC-fail reads hidden unless
+    # shown, reads without footprint calls hidden unless "All reads, including uncalled", and the footprint-quality
+    # gate. ``set_read_policy`` sets the client's defaults; each read method also takes them per call.
+    READ_POLICY_KEYS = ("include_duplicates", "include_qcfail", "hide_uncalled", "min_fp_quality")
+
+    def set_read_policy(self, include_duplicates: Optional[bool] = None, include_qcfail: Optional[bool] = None,
+                        hide_uncalled: Optional[bool] = None, min_fp_quality: Optional[int] = None,
+                        reset: bool = False, sync_browser: bool = False) -> dict:
+        """Set the read policy this client's read methods send by default.
+
+        ``get_reads``, ``get_compact_reads``, ``get_all_reads`` / ``get_all_reads_response``,
+        ``get_read_stats``, ``get_coverage`` and ``cluster`` send these unless a call passes its own. A value left
+        ``None`` is not sent (the server's default: duplicates and QC-fail reads hidden, uncalled reads hidden,
+        no quality gate). ``reset=True`` forgets the earlier policy first. ``sync_browser=True`` also sets the open
+        browser's toggles (:meth:`set_read_filters`). Returns the policy.
+
+        Example::
+
+            b.set_read_policy(include_qcfail=True, hide_uncalled=False)   # all reads, QC-fail shown
+            reads = b.get_compact_reads()                                  # uses it
+        """
+        policy = {} if reset else dict(getattr(self, "_read_policy", None) or {})
+        given = {"include_duplicates": include_duplicates, "include_qcfail": include_qcfail,
+                 "hide_uncalled": hide_uncalled, "min_fp_quality": min_fp_quality}
+        for key, value in given.items():
+            if value is not None:
+                policy[key] = int(value) if key == "min_fp_quality" else bool(value)
+        self._read_policy = policy
+        if sync_browser:
+            self.set_read_filters(
+                show_duplicates=policy.get("include_duplicates"), show_qc_fail=policy.get("include_qcfail"),
+                min_fp_quality=policy.get("min_fp_quality"),
+                all_reads=(not policy["hide_uncalled"]) if "hide_uncalled" in policy else None,
+            )
+        return dict(policy)
+
+    def get_read_policy(self) -> dict:
+        """The read policy set with :meth:`set_read_policy` (empty: the server's defaults)."""
+        return dict(getattr(self, "_read_policy", None) or {})
+
+    def _read_policy_values(self, include_duplicates=None, include_qcfail=None, hide_uncalled=None,
+                            min_fp_quality=None, min_footprints=None) -> dict:
+        """This call's read policy: the call's values over the client's; None: not sent."""
+        policy = self.get_read_policy()
+        given = {"include_duplicates": include_duplicates, "include_qcfail": include_qcfail,
+                 "hide_uncalled": hide_uncalled, "min_fp_quality": min_fp_quality}
+        out = {k: (v if v is not None else policy.get(k)) for k, v in given.items()}
+        if min_footprints is not None and int(min_footprints) < 0:
+            # Min footprints -1 is the browser's "All reads, including uncalled".
+            out["hide_uncalled"] = False
+        return {k: v for k, v in out.items() if v is not None}
+
+    def _add_read_policy_params(self, params: dict, include_quality: bool = True, **values) -> dict:
+        """Add the read policy to query params (booleans as true/false)."""
+        for key, value in self._read_policy_values(**values).items():
+            if key == "min_fp_quality":
+                if include_quality and "min_fp_quality" not in params and int(value) > 0:
+                    params[key] = int(value)
+            else:
+                params[key] = str(bool(value)).lower()
+        return params
+
     @classmethod
     def _layer_names_param(cls, values: Optional[Union[str, Sequence[str]]]) -> Optional[str]:
         """Normalize layer-name params through user-facing annotation aliases."""
@@ -538,7 +627,8 @@ class BrowserClient:
     
     def get_reads(self, dataset_id: str = None, spanning: bool = True,
                   min_footprints: int = 0, as_dataframe: bool = True,
-                  sample_seed: str = None) -> Union[pd.DataFrame, List[dict]]:
+                  sample_seed: str = None,
+                  hide_uncalled: Optional[bool] = None) -> Union[pd.DataFrame, List[dict]]:
         """
         Get reads from the browser's WORKING SET (same reads used for analysis).
         
@@ -552,9 +642,12 @@ class BrowserClient:
             dataset_id: Specific dataset ID (default: browser's first/current dataset)
             spanning: Only return reads that span the entire region (default: True)
             min_footprints: Minimum footprints per read (default: 0, no filter).
-                           Set to 5 to filter out reads with <5 footprints.
+                           Set to 5 to filter out reads with <5 footprints;
+                           -1 is the browser's "All reads, including uncalled".
             as_dataframe: Return as pandas DataFrame (default: True)
             sample_seed: Optional seed for reproducible backend working-set caps
+            hide_uncalled: False keeps reads without footprint calls (default:
+                the client's read policy, else hidden as in the browser).
         
         Returns:
             DataFrame with columns:
@@ -573,10 +666,14 @@ class BrowserClient:
         params = {'spanning': str(spanning).lower()}
         if dataset_id:
             params['dataset_id'] = dataset_id
-        if min_footprints > 0:
-            params['min_footprints'] = min_footprints
+        if min_footprints:
+            params['min_footprints'] = int(min_footprints)
         if sample_seed:
             params['sample_seed'] = str(sample_seed)
+        # The working set always hides duplicates and QC-fail reads; only the uncalled rule applies here.
+        hide = self._read_policy_values(hide_uncalled=hide_uncalled, min_footprints=min_footprints).get("hide_uncalled")
+        if hide is not None:
+            params['hide_uncalled'] = str(bool(hide)).lower()
         
         result = self._get("/api/jupyter/reads", params)
         reads = result.get('reads', [])
@@ -2025,17 +2122,44 @@ class BrowserClient:
     def set_metaprofile_layers(
         self,
         layers: Optional[Union[Dict[str, bool], str, Sequence[str]]] = None,
+        follow_active_layers: Optional[bool] = None,
         **layer_states,
     ) -> dict:
         """
-        Toggle metaprofile rows from Python/Jupyter.
+        Show or hide the default metaprofile's layer sources from Python/Jupyter.
 
-        The browser merges these partial updates with current metaprofile
-        settings, matching the Track Settings UI.
+        The default metaprofile follows the Tracks layer toggles (each layer's
+        source is shown exactly when its layer is on). Naming sources here sets
+        them by hand, as editing the track does: if that changes what it shows,
+        the track stops following (a map matching what it shows already, such
+        as a replayed snapshot, keeps it following). ``follow_active_layers=True``
+        makes it follow the layer toggles again (:meth:`set_metaprofile_follow`).
+
+        Examples::
+
+            b.set_metaprofile_layers(tf=False)            # hide TF; now manual
+            b.set_metaprofile_layers(follow_active_layers=True)
         """
-        return self.set_display_settings(
-            enabled_meta_profiles=self._layer_toggle_map(layers, layer_states)
-        )
+        data: Dict[str, Any] = {}
+        toggles = self._layer_toggle_map(layers, layer_states)
+        if toggles:
+            data["enabled_meta_profiles"] = toggles
+        if follow_active_layers is not None:
+            data["metaprofile_follow_active_layers"] = bool(follow_active_layers)
+        if not data:
+            raise ValueError("Name metaprofile layers to show or hide, or pass follow_active_layers")
+        return self._post("/api/jupyter/settings", data)
+
+    def set_metaprofile_follow(self, follow: bool = True) -> dict:
+        """The default metaprofile follows the Tracks layer toggles (True) or keeps its own sources (False)."""
+        return self._post("/api/jupyter/settings", {"metaprofile_follow_active_layers": bool(follow)})
+
+    def get_metaprofile_layers(self) -> dict:
+        """What the open browser's default metaprofile shows: ``{"layers": {layer: True, ...},
+        "follow_active_layers": bool or None}`` (None: no default metaprofile yet, or no browser has synced)."""
+        settings = self.get_browser_settings() or {}
+        return {"layers": dict(settings.get("enabled_meta_profiles") or {}),
+                "follow_active_layers": settings.get("metaprofile_follow_active_layers")}
 
     def set_layer_cache(
         self,
@@ -2161,9 +2285,26 @@ class BrowserClient:
             "open_panel",
             "close_panel",
             "hidden_strip_panels",
-        }
+            "min_footprints",
+            "min_fp_quality",
+            "show_duplicate_reads",
+            "show_qc_fail_reads",
+            "metaprofile_follow_active_layers",
+            "layer_color_overrides",
+            "replace_layer_color_overrides",
+            "user_layer_colors",
+            "window_quant",
+            "plot",
+            "workspace",
+        } | set(self.PARITY_SETTING_KEYS)
         if any(key in kwargs for key in raw_keys):
-            return self.apply_browser_settings(kwargs)
+            kwargs = dict(kwargs)
+            saved_defaults = kwargs.pop("user_layer_colors", None)
+            result = self.apply_browser_settings(kwargs) if kwargs else {"success": True}
+            if saved_defaults is not None:
+                # Named explicitly: the open tab's saved defaults (a snapshot replay never sends them).
+                result["user_layer_colors"] = self._post("/api/jupyter/settings", {"user_layer_colors": saved_defaults})
+            return result
         return self.set_reproducibility(**kwargs)
 
     def get_browser_settings(self) -> dict:
@@ -2315,15 +2456,51 @@ class BrowserClient:
     def set_analysis_rules(self, cluster_feature_rules: Sequence[dict] = None,
                            analysis_sort_rules: Sequence[dict] = None,
                            analysis_filter_rules: Sequence[dict] = None) -> dict:
-        """Replace Analysis Rules panel definitions from Python/Jupyter."""
+        """Replace Analysis Rules panel definitions from Python/Jupyter.
+
+        Named nucleosome-class conditions (``nucNamed``; removed in 3.1) are
+        dropped with a warning, as the browser drops them from saved rules.
+        """
         data = {}
         if cluster_feature_rules is not None:
-            data["cluster_feature_rules"] = list(cluster_feature_rules)
+            data["cluster_feature_rules"] = self._strip_nuc_named(list(cluster_feature_rules), "cluster rules")
         if analysis_sort_rules is not None:
-            data["analysis_sort_rules"] = list(analysis_sort_rules)
+            data["analysis_sort_rules"] = self._strip_nuc_named(list(analysis_sort_rules), "sort rules")
         if analysis_filter_rules is not None:
-            data["analysis_filter_rules"] = list(analysis_filter_rules)
+            data["analysis_filter_rules"] = self._strip_nuc_named(list(analysis_filter_rules), "filter rules")
         return self._post("/api/jupyter/settings", data)
+
+    # Named nucleosome classes (small, hexasome, octasome, chromatosome) were removed in 3.1: FiberHMM 3.2 no longer
+    # writes them and the browser drops such conditions from saved rules, presets and sessions with one notice.
+    NUC_NAMED_KEYS = ("nucNamed", "nuc_named")
+
+    @classmethod
+    def _strip_nuc_named(cls, value: Any, what: str = "rules") -> Any:
+        """A copy of ``value`` without named nucleosome-class conditions; warns with the count dropped."""
+        dropped = [0]
+
+        def walk(node):
+            if isinstance(node, dict):
+                out = {}
+                for key, item in node.items():
+                    if key in cls.NUC_NAMED_KEYS:
+                        if item not in (None, [], "", {}):
+                            dropped[0] += 1
+                        continue
+                    out[key] = walk(item)
+                return out
+            if isinstance(node, list):
+                return [walk(item) for item in node]
+            return node
+
+        cleaned = walk(value)
+        if dropped[0]:
+            import warnings
+            warnings.warn(
+                f"Dropped {dropped[0]} named nucleosome-class condition(s) from the {what}: named classes were "
+                "removed in FiberBrowser 3.1 (coarse classes, z and posterior remain).",
+                UserWarning, stacklevel=3)
+        return cleaned
 
     def set_cluster_feature_rules(self, rules: Sequence[dict]) -> dict:
         """Replace Cluster-tab feature rules in the Analysis Rules panel."""
@@ -2624,6 +2801,12 @@ class BrowserClient:
             handle.write("\n")
         return filepath
 
+    PARITY_SETTING_KEYS = frozenset({
+        "min_footprints", "min_fp_quality", "show_duplicate_reads", "show_qc_fail_reads",
+        "metaprofile_follow_active_layers", "layer_color_overrides", "replace_layer_color_overrides",
+        "user_layer_colors", "window_quant", "plot", "workspace", "reversed",
+    })
+
     def apply_browser_settings(self, settings: dict, apply_peak_rules: bool = True,
                                clear_peaks: bool = True, rescan: bool = False) -> dict:
         """Apply a settings snapshot captured with ``get_browser_settings``."""
@@ -2678,9 +2861,32 @@ class BrowserClient:
                 "hidden_strip_panels",
                 "open_panel",
                 "close_panel",
+                "min_footprints",
+                "min_fp_quality",
+                "show_duplicate_reads",
+                "show_qc_fail_reads",
+                "metaprofile_follow_active_layers",
+                "layer_color_overrides",
+                "replace_layer_color_overrides",
+                "window_quant",
+                "plot",
+                "workspace",
+                "reversed",
             )
-            if key in settings
+            # A None among the 3.1 keys is "not reported" (no default metaprofile yet, ...), not a value.
+            if key in settings and (settings[key] is not None or key not in self.PARITY_SETTING_KEYS)
         }
+        # A snapshot's layer colours are the whole set: they replace the session's. Its Plots builder plot reopens
+        # (before the snapshot's workspace applies), with its BED region sets. The saved default colours belong to a
+        # computer, not a snapshot: they are never replayed (set_default_layer_colors sets them).
+        if isinstance(settings.get("layer_color_overrides"), dict) and "replace_layer_color_overrides" not in settings:
+            update["replace_layer_color_overrides"] = True
+        builder = settings.get("plots_workspace")
+        if "plot" not in update and isinstance(builder, dict) and isinstance(builder.get("current"), dict):
+            update["plot"] = builder["current"]
+            if isinstance(builder.get("regionSets"), list):
+                update["plots_region_sets"] = builder["regionSets"]
+            update.setdefault("workspace", "browser")
         if update:
             result["settings"] = self._post("/api/jupyter/settings", update)
 
@@ -2721,7 +2927,7 @@ class BrowserClient:
         analysis quality filters, display quality shading, and TF overlay
         settings.
         """
-        preset = self._json_safe(dict(colormap))
+        preset = self._strip_nuc_named(self._json_safe(dict(colormap)), "labeling preset")
         if isinstance(preset, dict):
             for filt in preset.get("qualityFilters") or []:
                 if not isinstance(filt, dict):
@@ -3291,17 +3497,24 @@ class BrowserClient:
         result = self._get("/api/genomes")
         return result.get('genomes', [])
 
-    def load_genome(self, genome_id: str) -> dict:
+    def load_genome(self, genome_id: str, confirm_large: bool = False) -> dict:
         """
         Load an online genome (remote FASTA + cached GTF).
 
         Args:
             genome_id: Genome identifier (e.g. 'dm6', 'hg38')
+            confirm_large: Go ahead with a download over the warning size. Without
+                it such a load answers ``needs_confirmation`` with ``download``
+                (url, bytes) and changes nothing.
 
         Returns:
-            dict with success status and details
+            dict with success status and details. A loaded genome is added to the
+            recent genomes (:meth:`get_recent_genomes`).
         """
-        return self._post("/api/load_genome", params={'genome_id': genome_id})
+        params = {'genome_id': genome_id}
+        if confirm_large:
+            params['confirm_large'] = 'true'
+        return self._post("/api/load_genome", params=params)
 
     def load_fasta(self, path: str) -> dict:
         """
@@ -3824,7 +4037,8 @@ class BrowserClient:
                 spanning: bool = False, dataset_id: str = None,
                 filter_mode: str = "either",
                 min_footprints: int = 0,
-                sample_seed: str = None) -> dict:
+                sample_seed: str = None,
+                hide_uncalled: Optional[bool] = None) -> dict:
         """
         Cluster reads for a single dataset using k-means.
 
@@ -3836,7 +4050,9 @@ class BrowserClient:
             end: End position
             spanning: Only use spanning reads
             dataset_id: Dataset ID (default: browser's first/current dataset)
-            min_footprints: Min footprints per read
+            min_footprints: Min footprints per read (-1: all reads, including uncalled)
+            hide_uncalled: False keeps reads without footprint calls (default:
+                the client's read policy)
 
         Returns:
             dict with 'assignments', 'cluster_counts', 'filtered_read_ids'
@@ -3851,6 +4067,9 @@ class BrowserClient:
             params['dataset_id'] = dataset_id
         if sample_seed:
             params['sample_seed'] = str(sample_seed)
+        hide = self._read_policy_values(hide_uncalled=hide_uncalled, min_footprints=min_footprints).get("hide_uncalled")
+        if hide is not None:
+            params['hide_uncalled'] = str(bool(hide)).lower()
         return self._post("/api/cluster",
                           data={'peak_indices': peak_indices, 'k': k, 'filter_mode': filter_mode},
                           params=params)
@@ -5112,7 +5331,12 @@ class BrowserClient:
                        chrom: str = None, start: int = None, end: int = None,
                        spanning: bool = False, as_dataframe: bool = True,
                        dataset_id: str = None,
-                       sample_seed: str = None) -> Union[dict, 'pd.DataFrame']:
+                       sample_seed: str = None,
+                       include_duplicates: Optional[bool] = None,
+                       include_qcfail: Optional[bool] = None,
+                       hide_uncalled: Optional[bool] = None,
+                       min_fp_quality: Optional[int] = None,
+                       min_footprints: Optional[int] = None) -> Union[dict, 'pd.DataFrame']:
         """
         Get per-read alignment and footprint statistics.
 
@@ -5127,6 +5351,14 @@ class BrowserClient:
             dataset_id: Dataset used when read_ids_by_dataset is a list
                 (default: first loaded dataset)
             sample_seed: Optional seed for reproducible backend working-set caps
+            include_duplicates, include_qcfail, hide_uncalled, min_fp_quality:
+                The read track's filters, as Read Stats applies them (default:
+                the client's read policy, else the browser's defaults). The
+                server's active quality filters (:meth:`set_quality_filters`)
+                apply too.
+            min_footprints: Min footprints as the read track applies it (-1:
+                all reads, including uncalled); the reads it hides in the region
+                are counted by reason in the summary.
 
         Returns:
             If as_dataframe: DataFrame with per-read stats
@@ -5146,6 +5378,11 @@ class BrowserClient:
         data = {'read_ids_by_dataset': read_ids_by_dataset}
         if sample_seed:
             data['sample_seed'] = str(sample_seed)
+        data.update(self._read_policy_values(include_duplicates=include_duplicates, include_qcfail=include_qcfail,
+                                             hide_uncalled=hide_uncalled, min_fp_quality=min_fp_quality,
+                                             min_footprints=min_footprints))
+        if min_footprints is not None:
+            data['min_footprints'] = int(min_footprints)
         resp = self._post("/api/reads/stats", data=data, params=params)
         resp = self._read_stats_with_viewer_order(resp, read_ids_by_dataset)
         if as_dataframe:
@@ -6711,19 +6948,27 @@ class BrowserClient:
                           include_layers: bool = False,
                           layer_names: Optional[Union[str, Sequence[str]]] = None,
                           include_cigar: bool = False,
-                          min_fp_quality: int = 0,
+                          min_fp_quality: Optional[int] = None,
                           min_footprints: int = 0,
                           max_reads: int = 500,
                           fill_gap_size: int = None,
                           infer_legacy_layers: Optional[bool] = None,
                           legacy_nuc_min_size: Optional[int] = None,
-                          sample_seed: str = None) -> list:
+                          sample_seed: str = None,
+                          include_duplicates: Optional[bool] = None,
+                          include_qcfail: Optional[bool] = None,
+                          hide_uncalled: Optional[bool] = None) -> list:
         """Get compact read data with intervals and per-type modification marks.
 
         Args:
             min_fp_quality: Minimum nq quality score (0-255). Footprints below
-                this threshold are hidden. Useful for filtering low-confidence calls.
-            min_footprints: Minimum footprint count per read.
+                this threshold are hidden. None: the client's read policy, else
+                no gate; 0 turns a policy's gate off for this call.
+            min_footprints: Minimum footprint count per read (-1: "All reads,
+                including uncalled", as the browser's Min footprints).
+            include_duplicates, include_qcfail, hide_uncalled: The read track's
+                toggles (default: the client's read policy, else the browser's
+                defaults: duplicates, QC-fail and uncalled reads hidden).
             include_methylation: Include per-base modification marks parsed from
                 BAM MM/ML (split by mod code: A+a → m6A, C+m → 5mC, u / ChEBI
                 55797 → deam) and, for DAF-seq, IUPAC R/Y codes or ref mismatches.
@@ -6772,10 +7017,13 @@ class BrowserClient:
             params['layer_names'] = layer_names_param
         elif include_layers:
             params['include_layers'] = 'true'
-        if min_fp_quality > 0:
-            params['min_fp_quality'] = min_fp_quality
-        if min_footprints > 0:
-            params['min_footprints'] = min_footprints
+        if min_fp_quality is not None:
+            # An explicit value (0 too) wins over the client's read policy.
+            params['min_fp_quality'] = int(min_fp_quality)
+        if min_footprints:
+            params['min_footprints'] = int(min_footprints)
+        self._add_read_policy_params(params, include_duplicates=include_duplicates, include_qcfail=include_qcfail,
+                                     hide_uncalled=hide_uncalled, min_footprints=min_footprints)
         if fill_gap_size is not None:
             params['fill_gap_size'] = fill_gap_size
         if infer_legacy_layers is not None:
@@ -7172,8 +7420,14 @@ class BrowserClient:
 
     def get_coverage(self, chrom: str = None, start: int = None,
                      end: int = None, dataset_id: str = None,
-                     bins: int = 500) -> list:
+                     bins: int = 500,
+                     include_duplicates: Optional[bool] = None,
+                     include_qcfail: Optional[bool] = None,
+                     hide_uncalled: Optional[bool] = None) -> list:
         """Get per-bin read coverage for a region.
+
+        ``include_duplicates`` / ``include_qcfail`` / ``hide_uncalled`` are the
+        read track's toggles (default: the client's read policy).
 
         Returns list of coverage values.
         """
@@ -7184,6 +7438,8 @@ class BrowserClient:
                   'bins': bins}
         if dataset_id:
             params['dataset_id'] = dataset_id
+        self._add_read_policy_params(params, include_quality=False, include_duplicates=include_duplicates,
+                                     include_qcfail=include_qcfail, hide_uncalled=hide_uncalled)
         resp = self._get('/api/coverage', params=params)
         return resp.get('coverage', [])
 
@@ -7551,14 +7807,17 @@ class BrowserClient:
                             include_methylation: bool = False,
                             include_layers: bool = False,
                             layer_names: Optional[Union[str, Sequence[str]]] = None,
-                            min_fp_quality: int = 0,
+                            min_fp_quality: Optional[int] = None,
                             min_footprints: int = 0,
                             fill_gap_size: int = None,
                             max_reads: Optional[int] = None,
                             profile_max_reads: Optional[int] = None,
                             infer_legacy_layers: Optional[bool] = None,
                             legacy_nuc_min_size: Optional[int] = None,
-                            sample_seed: str = None) -> Tuple[dict, Optional[str]]:
+                            sample_seed: str = None,
+                            include_duplicates: Optional[bool] = None,
+                            include_qcfail: Optional[bool] = None,
+                            hide_uncalled: Optional[bool] = None) -> Tuple[dict, Optional[str]]:
         """Build `/api/reads/compact_all` params plus the resolved dataset ID."""
         if chrom is None:
             region = self.get_region()
@@ -7578,10 +7837,13 @@ class BrowserClient:
             params['layer_names'] = layer_names_param
         elif include_layers:
             params['include_layers'] = 'true'
-        if min_fp_quality > 0:
-            params['min_fp_quality'] = min_fp_quality
-        if min_footprints > 0:
-            params['min_footprints'] = min_footprints
+        if min_fp_quality is not None:
+            # An explicit value (0 too) wins over the client's read policy.
+            params['min_fp_quality'] = int(min_fp_quality)
+        if min_footprints:
+            params['min_footprints'] = int(min_footprints)
+        self._add_read_policy_params(params, include_duplicates=include_duplicates, include_qcfail=include_qcfail,
+                                     hide_uncalled=hide_uncalled, min_footprints=min_footprints)
         if fill_gap_size is not None:
             params['fill_gap_size'] = fill_gap_size
         if profile_max_reads is not None:
@@ -7598,14 +7860,17 @@ class BrowserClient:
                                include_methylation: bool = False,
                                include_layers: bool = False,
                                layer_names: Optional[Union[str, Sequence[str]]] = None,
-                               min_fp_quality: int = 0,
+                               min_fp_quality: Optional[int] = None,
                                min_footprints: int = 0,
                                fill_gap_size: int = None,
                                max_reads: Optional[int] = None,
                                profile_max_reads: Optional[int] = None,
                                infer_legacy_layers: Optional[bool] = None,
                                legacy_nuc_min_size: Optional[int] = None,
-                               sample_seed: str = None) -> dict:
+                               sample_seed: str = None,
+                               include_duplicates: Optional[bool] = None,
+                               include_qcfail: Optional[bool] = None,
+                               hide_uncalled: Optional[bool] = None) -> dict:
         """Get the raw compact-all response, including per-dataset count metadata.
 
         The response shape mirrors the browser API:
@@ -7631,6 +7896,9 @@ class BrowserClient:
             infer_legacy_layers=infer_legacy_layers,
             legacy_nuc_min_size=legacy_nuc_min_size,
             sample_seed=sample_seed,
+            include_duplicates=include_duplicates,
+            include_qcfail=include_qcfail,
+            hide_uncalled=hide_uncalled,
         )
         return self._get('/api/reads/compact_all', params=params)
 
@@ -7640,14 +7908,17 @@ class BrowserClient:
                       include_methylation: bool = False,
                       include_layers: bool = False,
                       layer_names: Optional[Union[str, Sequence[str]]] = None,
-                      min_fp_quality: int = 0,
+                      min_fp_quality: Optional[int] = None,
                       min_footprints: int = 0,
                       fill_gap_size: int = None,
                       max_reads: Optional[int] = None,
                       profile_max_reads: Optional[int] = None,
                       infer_legacy_layers: Optional[bool] = None,
                       legacy_nuc_min_size: Optional[int] = None,
-                      sample_seed: str = None) -> list:
+                      sample_seed: str = None,
+                      include_duplicates: Optional[bool] = None,
+                      include_qcfail: Optional[bool] = None,
+                      hide_uncalled: Optional[bool] = None) -> list:
         """Get all compact reads for one dataset.
 
         By default this disables the `/api/reads/compact_all` display cap
@@ -7673,6 +7944,9 @@ class BrowserClient:
             infer_legacy_layers=infer_legacy_layers,
             legacy_nuc_min_size=legacy_nuc_min_size,
             sample_seed=sample_seed,
+            include_duplicates=include_duplicates,
+            include_qcfail=include_qcfail,
+            hide_uncalled=hide_uncalled,
         )
         response = self._get('/api/reads/compact_all', params=params)
         datasets = response.get('datasets', {})
@@ -8865,7 +9139,18 @@ class BrowserClient:
         payload.update(kwargs)
         payload.pop('format', None)  # Always PNG for render() — use save_figure for other formats
 
-        r = self._post_response("/api/render", data=payload, timeout=120)
+        try:
+            r = self._post_response("/api/render", data=payload, timeout=120)
+        except requests.exceptions.HTTPError as exc:
+            # Say what the server said (a refused track, a bad region), not just the status.
+            message = None
+            try:
+                message = exc.response.json().get('error')
+            except Exception:  # noqa: BLE001
+                pass
+            if message:
+                raise RuntimeError(message) from None
+            raise
 
         if r.headers.get('content-type', '').startswith('application/json'):
             # Error response
@@ -8891,8 +9176,16 @@ class BrowserClient:
                match_ui_size: bool = True,
                show_nudges: bool = False, timeout_ms: int = None,
                engine: str = 'headless', source: str = 'auto',
-               row_height: float = None, max_reads: int = None,
-               dataset_ids: Optional[Union[str, Sequence[str]]] = None) -> bytes:
+               row_height: float = None, max_reads: Union[int, Dict[str, int]] = None,
+               dataset_ids: Optional[Union[str, Sequence[str]]] = None,
+               spanning_only: Optional[bool] = None, sample_seed: Optional[str] = None,
+               hide_tracks: Optional[Union[str, Sequence[str]]] = None,
+               annotations: Optional[dict] = None,
+               page_size: Any = None, page_fit: Optional[str] = None,
+               min_font_pt: Optional[float] = None, raster_dpi: Optional[float] = None,
+               pdf_fonts: Optional[str] = None,
+               return_manifest: bool = False, manifest_read_ids: bool = False,
+               meta_locus: Optional[Union[dict, str]] = None) -> bytes:
         """Render a figure of the browser's view (Export button equivalent).
 
         By default this is the open browser's current view: same panels,
@@ -8921,10 +9214,46 @@ class BrowserClient:
             source: Headless engine: ``"auto"`` (session if given, else the open
                 tab, else defaults), ``"session"``, ``"current"`` or ``"defaults"``.
             row_height, max_reads, dataset_ids: Headless engine: read row height
-                in px, reads per panel, and which datasets to draw.
+                in px, reads per panel, and which datasets to draw. ``max_reads``
+                may be a dict of per-panel caps keyed by dataset id, panel id or
+                dataset label (``{"ds1": 200, "ds2": 150}``).
+
+        Scripted-figure options (headless engine; each is left out of the
+        request unless given, so the view renders as before; a session's
+        ``headless_figure`` block can set the same options, and these win):
+            spanning_only: Only reads spanning the region (else the view's setting).
+            sample_seed: Seed for which reads are sampled when a panel has more
+                reads than it draws (else the view's ``analysisSampleSeed``).
+            hide_tracks: Rows to leave out of every panel, e.g. ``["sv"]`` for the
+                "SV · in loaded reads" strip, ``"coverage"``, ``"axis"``,
+                ``"gene"``, ``"header"``; ``"sv_marks"`` also turns off the
+                per-read SV marks (the browser's SV display switch).
+            annotations: BED overlay, opening-width classes and side statistics
+                (see docs/jupyter-api.md, "Scripted figures (headless)").
+            page_size, page_fit: Physical page size (``"180x120mm"``, ``"7x5in"``,
+                ``(180, 120, "mm")``) and how the figure fits it: ``"contain"``
+                (default; uniform scale, top-left), ``"width"`` (fill the width;
+                height follows), ``"height"`` or ``"stretch"``.
+            min_font_pt: Smallest text size on the page, in final points.
+            raster_dpi: Read rasters (and the whole PNG) at this resolution.
+            pdf_fonts: ``"truetype"`` embeds TrueType fonts (matplotlib's
+                pdf.fonttype 42); default ``"standard"`` (base-14 Helvetica).
+            return_manifest: Return ``(bytes, manifest)``; the manifest lists each
+                panel's drawn read count, cluster sizes and annotation statistics
+                (``manifest_read_ids=True`` adds the drawn read ids in order).
+            meta_locus: Pooled loci (a meta-locus): ``{"bed": "sites.bed", "anchor":
+                "start" | "centre" | "end", "flank_bp": 2000, "datasets": [...], "seed": 1,
+                "count": 2000}`` or a pool id (``start_meta_locus_pool``). Reads are drawn
+                aligned on the anchor (minus-strand sites flipped, as the browser does)
+                on the relative axis; each panel draws its whole share of the working set
+                (the browser's working set for that pool, seed and count; ``max_reads``
+                caps it). A session saved on a meta-locus view brings its own. The
+                manifest's ``meta_locus`` block records the BED sha256, anchor, flank,
+                datasets, pool size, seed, count and spec hash. See docs/jupyter-api.md,
+                "Pooled loci (meta-locus) from Python and the command line".
 
         Returns:
-            The file bytes.
+            The file bytes (``(bytes, manifest)`` with ``return_manifest``).
         """
         if engine == 'headless':
             # Only coordinates the caller gave: otherwise the server takes the
@@ -8937,10 +9266,21 @@ class BrowserClient:
                     body[key] = value if key == 'chrom' else int(value)
             if load_session:
                 body['load_session'] = True
+            per_dataset = dict(max_reads) if isinstance(max_reads, dict) else None
+            if isinstance(hide_tracks, str):
+                hide_tracks = [t for t in hide_tracks.replace(',', ' ').split() if t]
             optional = {'width': width, 'title': title if (include_title or title) else None,
                         'include_coords': include_coords or None,
-                        'row_height': row_height, 'max_reads': max_reads,
-                        'dataset_ids': self._list_param(dataset_ids)}
+                        'row_height': row_height, 'max_reads': None if per_dataset is not None else max_reads,
+                        'max_reads_by_dataset': per_dataset,
+                        'dataset_ids': self._list_param(dataset_ids),
+                        'spanning_only': spanning_only, 'sample_seed': sample_seed,
+                        'hide_tracks': list(hide_tracks) if hide_tracks is not None else None,
+                        'annotations': annotations, 'page_size': page_size, 'page_fit': page_fit,
+                        'min_font_pt': min_font_pt, 'raster_dpi': raster_dpi, 'pdf_fonts': pdf_fonts,
+                        'manifest': True if return_manifest else None,
+                        'manifest_read_ids': True if (return_manifest and manifest_read_ids) else None,
+                        'meta_locus': self._meta_locus_param(meta_locus)}
             body.update({k: v for k, v in optional.items() if v is not None})
             if session is not None:
                 body['source'] = 'session'
@@ -8951,6 +9291,11 @@ class BrowserClient:
                     with open(os.path.expanduser(str(session)), encoding='utf-8') as handle:
                         body['session'] = json.load(handle)
             r = self._http_session().post(f"{self.url}/api/render", json=body, timeout=300)
+            if return_manifest and r.status_code == 200:
+                import base64
+                reply = r.json()
+                if 'figure_b64' in reply:
+                    return base64.b64decode(reply['figure_b64']), reply.get('manifest') or {}
             if r.status_code != 200 or r.headers.get('content-type', '').startswith('application/json'):
                 try:
                     message = r.json().get('error')
@@ -8960,6 +9305,13 @@ class BrowserClient:
             return r.content
         if engine != 'browser':
             raise ValueError("engine must be 'headless' or 'browser'")
+        headless_only = {'meta_locus': meta_locus, 'spanning_only': spanning_only, 'sample_seed': sample_seed, 'hide_tracks': hide_tracks,
+                         'annotations': annotations, 'page_size': page_size, 'page_fit': page_fit,
+                         'min_font_pt': min_font_pt, 'raster_dpi': raster_dpi, 'pdf_fonts': pdf_fonts,
+                         'return_manifest': return_manifest or None}
+        named = sorted(k for k, v in headless_only.items() if v is not None)
+        if named:
+            raise ValueError(f"{', '.join(named)}: headless-engine options; use engine='headless'")
         # engine='browser': the real app in headless Chromium (Node + Playwright).
         body: Dict[str, Any] = {
             'format': format, 'scale': float(scale),
@@ -8992,6 +9344,119 @@ class BrowserClient:
                 message = r.text[:300]
             raise RuntimeError(message or f'Figure render failed ({r.status_code})')
         return r.content
+
+    def recluster_session(self, session: Union[str, dict], *, method: str = 'kmeans', k: int = 5,
+                          seed: str = 'fiberbrowser-analysis', features: Optional[Sequence] = None,
+                          feature_mode: str = 'accessibility', balance_windows: bool = True,
+                          max_reads: Optional[int] = None, dataset_ids: Optional[Sequence[str]] = None,
+                          region: Optional[str] = None, load_session: bool = True,
+                          out_session: Optional[str] = None, out_tsv: Optional[str] = None,
+                          meta_locus: Optional[Union[dict, str]] = None,
+                          features_relative: Optional[Sequence] = None, anchor_window: Optional[int] = None) -> dict:
+        """Re-cluster a saved session's panels on the data it points at, reproducibly.
+
+        Cluster assignments in a session are keyed by read name, so they are lost when the
+        session's files change (re-called or deduplicated data). This clusters the view's
+        region again through the browser's joint region clustering with ``balance_windows``
+        (one pooled fit, each panel contributing equally; k-means/minibatch), assigns every
+        read covering the features, and stores the result in a copy of the session, ready
+        for :meth:`figure`. The same seed, data and options give the same assignments.
+        Labels are canonical: 0 is the largest cluster over all panels.
+
+        Args:
+            session: A session dict or a path to a session JSON file.
+            method, k, seed: Clustering method (``kmeans``, ``minibatch``, ``combinatorial``,
+                ``binary``, ``graph``, ``agglom``, ``hdbscan``), cluster count and seed.
+            features: Absolute ``(start, end)`` intervals in the region to cluster on (e.g. the
+                rows of a BED); default: the whole region as one feature. Only reads covering
+                every feature are clustered (and then shown).
+            feature_mode: Per-feature signal (default ``"accessibility"``; also ``"tf"``, ...).
+            max_reads: Reads per panel to cluster (seeded sample); default all.
+            dataset_ids: Only these panels (dataset ids, panel ids or labels).
+            region: Cluster another region than the session's view (``"chr1:1-2000"``).
+            out_session: Also write the updated session JSON here.
+            out_tsv: Also write the assignments here (panel, dataset, label, read, cluster) and
+                per-cluster read counts next to it (``<name>.counts.tsv``).
+            meta_locus: Re-cluster a meta-locus view: a spec (``{"bed", "anchor", "flank_bp",
+                "datasets", "seed", "count"}``) or a pool id; ``session`` may then be None. A
+                session saved on a meta-locus view brings its own. Its working set (the
+                read-site pairs of that seed and count) is clustered on ``features_relative``
+                (``[(from, to), ...]`` bp from the anchor; default the anchor
+                +- ``anchor_window``, 500 bp). The TSV then also has each row's read-site key,
+                read name, site, site name, contig and strand.
+
+        Returns:
+            ``{"session": updated session, "results": [per panel: assignments, cluster_counts,
+            ...], "cluster": the parameters and counts (also in session["headless_cluster"])}``.
+        """
+        import os
+        if session is not None and not isinstance(session, dict):
+            with open(os.path.expanduser(str(session)), encoding='utf-8') as handle:
+                session = json.load(handle)
+        if session is None and meta_locus is None:
+            raise ValueError("Pass session, or meta_locus for a meta-locus view")
+        body = {'session': session, 'load_session': bool(load_session and session is not None), 'method': method, 'k': int(k),
+                'seed': str(seed), 'feature_mode': feature_mode, 'balance_windows': bool(balance_windows)}
+        if features is not None:
+            body['features'] = [[int(a), int(b)] for a, b in features]
+        optional = {'max_reads': max_reads, 'dataset_ids': self._list_param(dataset_ids), 'region': region,
+                    'meta_locus': self._meta_locus_param(meta_locus),
+                    'features_relative': [[int(a), int(b)] for a, b in features_relative] if features_relative else None,
+                    'anchor_window': int(anchor_window) if anchor_window is not None else None}
+        body.update({key: value for key, value in optional.items() if value is not None})
+        r = self._http_session().post(f"{self.url}/api/render/cluster", json=body, timeout=1800)
+        reply = r.json() if r.headers.get('content-type', '').startswith('application/json') else {}
+        if r.status_code != 200:
+            raise RuntimeError(reply.get('error') or r.text[:300] or f'Clustering failed ({r.status_code})')
+        if out_session:
+            with open(out_session, 'w', encoding='utf-8') as handle:
+                json.dump(reply['session'], handle, indent=1)
+        if out_tsv:
+            self.write_cluster_tsv(reply['results'], out_tsv)
+        return reply
+
+    @staticmethod
+    def _meta_locus_param(meta_locus) -> Optional[Union[dict, str]]:
+        """A meta-locus spec for the server: ``datasets`` as a list, ``bed`` as an absolute path."""
+        if meta_locus is None or isinstance(meta_locus, str):
+            return meta_locus
+        import os
+        spec = dict(meta_locus)
+        if isinstance(spec.get('datasets'), str):
+            spec['datasets'] = [d for d in spec['datasets'].replace(',', ' ').split() if d]
+        for key in ('bed', 'bed_path'):
+            if spec.get(key):
+                spec[key] = os.path.abspath(os.path.expanduser(str(spec[key])))
+        return spec
+
+    @staticmethod
+    def write_cluster_tsv(results: Sequence[dict], path: str) -> Tuple[str, str]:
+        """Write :meth:`recluster_session` results: assignments to ``path``, per-cluster
+        read counts to ``<path without .tsv>.counts.tsv``. Returns both paths."""
+        base = path[:-4] if path.endswith('.tsv') else path
+        counts_path = base + '.counts.tsv'
+        # A meta-locus view: each row is a read-site pair; its key, name, site and real place follow.
+        meta = any(r.get('sites') for r in results)
+        site_cols = ('read_site_key', 'read_name', 'site', 'site_name', 'site_chrom', 'site_strand')
+        with open(path, 'w', encoding='utf-8') as handle:
+            handle.write("panel\tdataset_id\tdataset_label\tread_id\tcluster"
+                         + ("\t" + "\t".join(site_cols) if meta else "") + "\n")
+            for r in results:
+                sites = r.get('sites') or {}
+                for rid, label in r['assignments'].items():
+                    extra = ""
+                    if meta:
+                        st = sites.get(rid) or {}
+                        extra = "\t" + "\t".join(str(st.get(k, "")) for k in
+                                                  ('key', 'read_name', 'site', 'site_name', 'chrom', 'strand'))
+                    handle.write(f"{r['state_key']}\t{r['dataset_id']}\t{r['label']}\t{rid}\t{label}{extra}\n")
+        with open(counts_path, 'w', encoding='utf-8') as handle:
+            handle.write("panel\tdataset_id\tdataset_label\tcluster\treads\tfraction\n")
+            for r in results:
+                total = sum(r['cluster_counts'].values()) or 1
+                for label, n in r['cluster_counts'].items():
+                    handle.write(f"{r['state_key']}\t{r['dataset_id']}\t{r['label']}\t{label}\t{n}\t{n / total:.4f}\n")
+        return path, counts_path
 
     @staticmethod
     def _parse_region_string(region: str) -> tuple:
@@ -9029,9 +9494,12 @@ class BrowserClient:
         else:
             kwargs.setdefault('format', 'png')
         data = self.figure(region, **kwargs)
+        manifest = None
+        if isinstance(data, tuple):  # return_manifest=True
+            data, manifest = data
         with open(filepath, 'wb') as f:
             f.write(data)
-        return filepath
+        return (filepath, manifest) if manifest is not None else filepath
 
     def save_figure(self, filepath: str, **render_kwargs) -> str:
         """Render the browser's view headlessly (see :meth:`render`) and save it.
@@ -9097,6 +9565,837 @@ class BrowserClient:
             img.save(filepath)
 
         return filepath
+
+    # =========================================================================
+    # 3.1 features: read filters, layer colours, Quantify a window, Plots,
+    # meta-locus, Find sequence, recent genomes, runs
+    # =========================================================================
+
+    @staticmethod
+    def _camel_keys(values: Optional[dict]) -> dict:
+        """snake_case keys to the browser's camelCase (``group_by`` -> ``groupBy``); camelCase keys pass as given."""
+        out = {}
+        for key, value in (values or {}).items():
+            parts = str(key).split("_")
+            out[parts[0] + "".join(p[:1].upper() + p[1:] for p in parts[1:]) if len(parts) > 1 else key] = value
+        return out
+
+    def _settings_snapshot(self) -> dict:
+        try:
+            return self.get_browser_settings() or {}
+        except Exception:  # noqa: BLE001 - no browser has synced yet
+            return {}
+
+    # ---------- Read filters in the open browser ----------
+
+    def set_read_filters(self, min_footprints: Optional[int] = None, min_fp_quality: Optional[int] = None,
+                         show_duplicates: Optional[bool] = None, show_qc_fail: Optional[bool] = None,
+                         all_reads: Optional[bool] = None) -> dict:
+        """Set the browser's read filters, as the Reads toolbar does.
+
+        Args:
+            min_footprints: Min footprints per read; -1 is "All reads, including uncalled".
+            min_fp_quality: Footprint-quality gate (0-255; 0 off).
+            show_duplicates, show_qc_fail: The duplicate (0x400) and QC-fail (0x200) toggles.
+            all_reads: True: "All reads, including uncalled" (min_footprints -1). False: back to a threshold
+                (``min_footprints``, default 5, the browser's default).
+
+        With no browser tab, figures from the defaults use them too (:meth:`figure`). Pair with
+        :meth:`set_read_policy` for this client's own read requests.
+        """
+        if all_reads is True:
+            min_footprints = -1
+        elif all_reads is False and (min_footprints is None or int(min_footprints) < 0):
+            min_footprints = 5
+        data: Dict[str, Any] = {}
+        if min_footprints is not None:
+            if int(min_footprints) < -1:
+                raise ValueError("min_footprints must be -1 (all reads, including uncalled) or more")
+            data["min_footprints"] = int(min_footprints)
+        if min_fp_quality is not None:
+            if not 0 <= int(min_fp_quality) <= 255:
+                raise ValueError("min_fp_quality must be 0-255")
+            data["min_fp_quality"] = int(min_fp_quality)
+        if show_duplicates is not None:
+            data["show_duplicate_reads"] = bool(show_duplicates)
+        if show_qc_fail is not None:
+            data["show_qc_fail_reads"] = bool(show_qc_fail)
+        if not data:
+            raise ValueError("Give at least one read filter")
+        return self._post("/api/jupyter/settings", data)
+
+    def get_read_filters(self) -> dict:
+        """The open browser's read filters: ``min_footprints`` (-1: all reads, including uncalled),
+        ``min_fp_quality``, ``show_duplicate_reads``, ``show_qc_fail_reads`` (None: no browser has synced)."""
+        s = self._settings_snapshot()
+        return {k: s.get(k) for k in ("min_footprints", "min_fp_quality", "show_duplicate_reads", "show_qc_fail_reads")}
+
+    def set_reverse_view(self, reversed: bool = True) -> dict:
+        """Reverse the view (the browser's Reverse; "Flip to gene direction" turns it on for a minus-strand
+        gene, so reads and metaprofiles flip together). Figures drawn with no tab follow it too."""
+        return self._post("/api/jupyter/settings", {"reversed": bool(reversed)})
+
+    # ---------- Layer colours ----------
+
+    def set_layer_colors(self, colors: Optional[Dict[str, Optional[str]]] = None, replace: bool = False,
+                         **layer_colors: Optional[str]) -> dict:
+        """Set the session's layer colours (Labels → Layer colours), as ``#rrggbb``.
+
+        They win over the saved defaults (:meth:`set_default_layer_colors`), which win over the built-in colours.
+        ``None`` for a layer resets it; ``replace=True`` drops the session's other colours. Aliases share a colour
+        (msp = fire, mod = m6a, footprint = nuc). Saved with the session; figures follow them (with no browser tab
+        too), and the default metaprofile's sources that follow a layer take its colour.
+
+        Example::
+
+            b.set_layer_colors(nuc="#4b5563", tf="#dc2626")
+            b.set_layer_colors({"fire": None})       # back to the default
+        """
+        merged = {**(colors or {}), **layer_colors}
+        if not merged and not replace:
+            raise ValueError("Give layer colours (layer='#rrggbb'), or replace=True to clear them")
+        data: Dict[str, Any] = {"layer_color_overrides": merged}
+        if replace:
+            data["replace_layer_color_overrides"] = True
+        return self._post("/api/jupyter/settings", data)
+
+    def reset_layer_colors(self, layers: Optional[Union[str, Sequence[str]]] = None,
+                           include_saved_defaults: bool = False) -> dict:
+        """Reset layer colours: the named layers (default: every layer) lose the session's colour; with
+        ``include_saved_defaults`` their saved defaults go too, so the built-in colours show."""
+        names = self._list_param(layers)
+        if names is None:
+            result = self.set_layer_colors(replace=True)
+        else:
+            result = self.set_layer_colors({name: None for name in names})
+        if include_saved_defaults:
+            if names is None:
+                names = list(self.get_default_layer_colors())
+            if names:
+                self.set_default_layer_colors({name: None for name in names})
+        return result
+
+    def get_default_layer_colors(self) -> dict:
+        """The saved default layer colours on this computer (``layer_colors`` in the analysis preferences)."""
+        return dict(self._get("/api/preferences/analysis").get("layer_colors") or {})
+
+    def set_default_layer_colors(self, colors: Optional[Dict[str, Optional[str]]] = None,
+                                 **layer_colors: Optional[str]) -> dict:
+        """Save default layer colours on this computer ("Save as my default colours"; ``None`` forgets one).
+
+        New sessions start with them, and every figure uses them under the session's own colours. Refused on a
+        public server and in a tour tab. The open browser takes them at once. Returns the saved defaults.
+        """
+        merged = {**(colors or {}), **layer_colors}
+        if not merged:
+            raise ValueError("Give layer colours to save (layer='#rrggbb', or None to forget one)")
+        r = self._http_session().put(f"{self.url}/api/preferences/analysis", json={"layer_colors": merged}, timeout=30)
+        if r.status_code >= 400:
+            try:
+                detail = r.json().get("detail")
+            except Exception:  # noqa: BLE001
+                detail = r.text[:200]
+            raise RuntimeError(detail or f"Could not save the default layer colours ({r.status_code})")
+        saved = dict((r.json() or {}).get("layer_colors") or {})
+        try:
+            self._post("/api/jupyter/settings", {"user_layer_colors": merged})
+        except Exception:  # noqa: BLE001 - the preferences file is what counts; a tab reads it on load
+            pass
+        return saved
+
+    def save_layer_colors_as_default(self) -> dict:
+        """The colours the open browser shows now (saved defaults with the session's over them) become the
+        saved defaults, as "Save as my default colours"."""
+        colors = self.get_layer_colors()
+        return self.set_default_layer_colors(colors["effective"]) if colors["effective"] else {}
+
+    def get_layer_colors(self) -> dict:
+        """Layer colours: ``session`` (the open browser's session colours), ``saved_defaults`` (this computer's)
+        and ``effective`` (session over saved defaults; a layer in neither has its built-in colour)."""
+        session = dict(self._settings_snapshot().get("layer_color_overrides") or {})
+        try:
+            saved = self.get_default_layer_colors()
+        except Exception:  # noqa: BLE001 - a public server keeps no preferences
+            saved = dict(self._settings_snapshot().get("user_layer_colors") or {})
+        return {"session": session, "saved_defaults": saved, "effective": {**saved, **session}}
+
+    # ---------- Quantify a window ----------
+
+    QUANT_ANCHORS = ("tss", "gene-end", "centre", "position", "site")
+
+    def set_window_quant(self, window: Any = ..., spec: Optional[dict] = None, axis: Optional[dict] = None,
+                         open_in: Any = ...) -> dict:
+        """Set Quantify a window in the open browser (the metaprofiles' window, measures and axis).
+
+        Args:
+            window: ``{"chrom", "from", "to", "relative"}`` (bp; ``relative``: from/to are distances from the
+                axis anchor), or None to clear it. Left out: unchanged.
+            spec: Fields of the quantification to change: ``measures`` (ids; empty: the active layers),
+                ``bounds`` (window | region | sites), ``comparison`` (clusters | datasets | clusters-datasets |
+                pools), ``value`` (raw | enrichment), ``baseline``, ``stat`` (mean | area), ``compare``
+                (off | diff | log2ratio), ``ci``, ``resamples``, ``seed``, ``min_reads``, ``read_cap``,
+                ``layer_units`` (curve | exact), ``read_source`` (panel | fetch), ``size_from`` / ``size_to``, ...
+                snake_case or the browser's camelCase.
+            axis: ``mode`` (genome | relative), ``anchor`` (tss | gene-end | centre | position | site), ``gene``
+                (an id; None: the gene nearest the view centre), ``position`` (bp).
+            open_in: Show the results card on the metaprofile ``"track"`` or in the cluster profiles
+                ``"cluster"``; None closes it. Left out: unchanged.
+
+        Quantify charts are drawn in the browser; figures leave the window band out, as browser exports do.
+        """
+        wq: Dict[str, Any] = {}
+        if window is not ...:
+            wq["window"] = window
+        if spec:
+            wq["spec"] = self._camel_keys(spec)
+        if axis:
+            ax = dict(axis)
+            if ax.get("anchor") is not None and ax["anchor"] not in self.QUANT_ANCHORS:
+                raise ValueError(f"anchor must be one of {', '.join(self.QUANT_ANCHORS)}")
+            wq["axis"] = ax
+        if open_in is not ...:
+            if open_in not in ("track", "cluster", None):
+                raise ValueError("open_in must be 'track', 'cluster' or None")
+            wq["open_in"] = open_in
+        if not wq:
+            raise ValueError("Give a window, spec, axis or open_in")
+        return self._post("/api/jupyter/settings", {"window_quant": wq})
+
+    def set_quant_window(self, chrom: str = None, start: int = None, end: int = None,
+                         relative: bool = False) -> dict:
+        """The quantification window: genomic ``start``-``end`` on ``chrom`` (default: the view's chromosome), or
+        with ``relative=True`` distances from the axis anchor. No arguments clear it."""
+        if start is None and end is None:
+            return self.set_window_quant(window=None)
+        if start is None or end is None or int(end) <= int(start):
+            raise ValueError("Give start < end")
+        if chrom is None:
+            chrom = (self.get_region() or {}).get("chrom")
+        return self.set_window_quant(window={"chrom": chrom, "from": int(start), "to": int(end), "relative": bool(relative)})
+
+    def set_quant_spec(self, **spec) -> dict:
+        """Change the quantification's measures, bounds, comparison and statistics (see :meth:`set_window_quant`)."""
+        return self.set_window_quant(spec=spec)
+
+    def set_metaprofile_axis(self, mode: str = "relative", anchor: str = "tss", gene: str = None,
+                             position: int = None) -> dict:
+        """The metaprofiles' x-axis: genome coordinates (``mode="genome"``) or relative to an anchor (a gene's
+        TSS or end, the view centre, a position, or the meta-locus site). Relative numbers are signed by the
+        anchor's direction; :meth:`set_reverse_view` flips reads and plots together."""
+        if mode not in ("genome", "relative"):
+            raise ValueError("mode must be 'genome' or 'relative'")
+        axis = {"mode": mode, "anchor": anchor, "gene": gene, "position": int(position) if position is not None else None}
+        return self.set_window_quant(axis=axis)
+
+    def open_quantify(self, where: Optional[str] = "track") -> dict:
+        """Show the Quantify card on the metaprofile track (``"track"``) or in the cluster profiles
+        (``"cluster"``); None closes it."""
+        return self.set_window_quant(open_in=where)
+
+    def get_window_quant(self) -> dict:
+        """The open browser's Quantify a window state: ``window``, ``spec``, ``axis`` and ``openIn``."""
+        return dict(self._settings_snapshot().get("window_quant") or {})
+
+    # ---------- Plots ----------
+
+    def set_workspace(self, view: str = "browser") -> dict:
+        """Which workspace covers the reads: ``"browser"``, ``"plots"`` or ``"hub"`` (the feature hub).
+
+        The hub workspace is experimental: with Settings › Read Display › Experimental (hub workspace) off, the
+        default, ``"hub"`` leaves the browser showing. ``get_plots_state()["workspace"]`` says what is shown."""
+        if view not in WORKSPACES:
+            raise ValueError(f"workspace must be one of {', '.join(WORKSPACES)}")
+        return self._post("/api/jupyter/settings", {"workspace": view})
+
+    def open_plot(self, spec: Optional[dict] = None, **fields) -> dict:
+        """Open Plots with a new plot in the builder, as the Plots toolbar does.
+
+        ``spec`` is a PlotSpec as Plots saves it (a Gallery entry's ``plot``, a session's
+        ``plotsWorkspace.current``); ``fields`` override it (snake_case or camelCase): ``type`` (metaprofile,
+        heatmap, size-enrichment, v-plot, histogram, differential, co-accessibility, ...), ``source`` or
+        ``sources`` (several layers in one plot), ``where`` (view | bed | features | random), ``group_by``
+        (dataset | cluster | ...), ``compare``, ``summary``, ``sampling``, ``axis`` and each type's settings.
+        Fields left out take the browser's defaults (the browser normalises the spec, so an unknown value
+        falls back rather than failing).
+
+        Plots are drawn by the browser: figures (:meth:`figure`, either engine) draw the read view, not Plots.
+        Use :meth:`keep_plot` to keep the result in the Gallery and Save in Plots to export it.
+        """
+        plot = {**(spec or {}), **self._camel_keys(fields)}
+        return self._post("/api/jupyter/settings", {"plot": plot})
+
+    def close_plots(self) -> dict:
+        """Back to the browser from Plots or the hub."""
+        return self.set_workspace("browser")
+
+    def keep_plot(self, name: str = None) -> dict:
+        """Keep the Plots builder's plot in the Gallery (Keep; the plot must have been drawn)."""
+        action = {"type": "plots_keep"}
+        if name:
+            action["name"] = str(name)
+        return self.queue_browser_actions([action], label="Python: keep plot")
+
+    def get_plots_state(self) -> dict:
+        """Plots in the open browser: ``workspace`` (which one covers the reads), ``builder`` (the plot being
+        edited and the BED sets loaded) and ``gallery`` (each card's id, name, status: working or kept)."""
+        s = self._settings_snapshot()
+        return {"workspace": s.get("workspace"), "builder": dict(s.get("plots_workspace") or {}),
+                "gallery": list(s.get("plots_gallery") or [])}
+
+    def get_plot_spec(self) -> dict:
+        """The PlotSpec in the Plots builder (``open_plot(spec)`` reopens it)."""
+        return dict((self.get_plots_state()["builder"] or {}).get("current") or {})
+
+    def load_bed_regions(self, path: str) -> dict:
+        """Read a BED file as Plots does for Where = BED region sets: its regions (chrom, start, end, name,
+        strand), skipped lines and name. The server reads the path (a lab server: inside its data roots)."""
+        return self._post("/api/plots/bed_regions", {"path": str(path)})
+
+    # ---------- Meta-locus (Preview) ----------
+
+    def start_meta_locus_pool(self, bed_path: str = None, regions: Sequence[Sequence[Any]] = None,
+                              name: str = None, dataset_ids: Optional[Union[str, Sequence[str]]] = None,
+                              anchor: str = "centre", flank_bp: int = 10_000, wait: bool = False,
+                              timeout: float = 600, poll_interval: float = 1.0, **pool_rules) -> dict:
+        """Pool a BED file's sites into one virtual locus (the meta-locus): reads of each site, minus-strand sites
+        flipped, built in the background. A pool of the same spec is reused.
+
+        Args:
+            bed_path: A BED file the server can read; or ``regions`` as ``[[chrom, start, end, strand, name], ...]``.
+            anchor: Where each site is centred: ``"centre"``, ``"start"`` or ``"end"`` (strand-aware).
+            flank_bp: Bases each side of the anchor.
+            dataset_ids: Datasets to pool (default: every dataset).
+            wait: Poll until the pool is ready (or fails), up to ``timeout`` seconds.
+            **pool_rules: Other pool rules (``policy``, ``min_overlap_bp``, ``max_entries``, ``workers``, ...).
+
+        Returns the pool's status (``pool_id``, ``status``, ``progress``). Not on a public server.
+        """
+        body: Dict[str, Any] = {"anchor": anchor, "flank_bp": int(flank_bp), **pool_rules}
+        if bed_path:
+            body["bed_path"] = str(bed_path)
+        elif regions:
+            body["regions"] = [list(r) for r in regions]
+        else:
+            raise ValueError("Give bed_path or regions")
+        if name:
+            body["name"] = name
+        ids = self._list_param(dataset_ids)
+        if ids:
+            body["dataset_ids"] = ids
+        status = self._post("/api/meta_locus/pools", body)
+        if wait:
+            status = self.wait_meta_locus_pool(status["pool_id"], timeout=timeout, poll_interval=poll_interval)
+        return status
+
+    def wait_meta_locus_pool(self, pool_id: str, timeout: float = 600, poll_interval: float = 1.0) -> dict:
+        """Poll a pool until it is ready, failed or cancelled; raises TimeoutError after ``timeout`` seconds."""
+        import time
+        deadline = time.monotonic() + float(timeout)
+        while True:
+            status = self.get_meta_locus_pool(pool_id)
+            if status.get("status") not in ("building", "queued", "pending"):
+                return status
+            if time.monotonic() > deadline:
+                raise TimeoutError(f"Meta-locus pool {pool_id} still building after {timeout} s")
+            time.sleep(float(poll_interval))
+
+    def probe_meta_locus_pool(self, bed_path: str = None, regions: Sequence[Sequence[Any]] = None,
+                              anchor: str = "centre", flank_bp: int = 10_000, **pool_rules) -> dict:
+        """Is the pool of this spec built already (``cached``: opens at once)?"""
+        body: Dict[str, Any] = {"anchor": anchor, "flank_bp": int(flank_bp), **pool_rules}
+        if bed_path:
+            body["bed_path"] = str(bed_path)
+        if regions:
+            body["regions"] = [list(r) for r in regions]
+        return self._post("/api/meta_locus/pools/probe", body)
+
+    def list_meta_locus_pools(self) -> List[dict]:
+        """The server's meta-locus pools (status of each)."""
+        return list(self._get("/api/meta_locus/pools").get("pools") or [])
+
+    def get_meta_locus_pool(self, pool_id: str) -> dict:
+        """A pool's status and progress (sites, entries done, fraction, ETA; per dataset)."""
+        return self._get(f"/api/meta_locus/pools/{pool_id}")
+
+    def cancel_meta_locus_pool(self, pool_id: str) -> dict:
+        """Ask a building pool to stop."""
+        return self._post(f"/api/meta_locus/pools/{pool_id}/cancel", {})
+
+    def delete_meta_locus_pool(self, pool_id: str) -> dict:
+        """Drop a pool from the server."""
+        return self._delete(f"/api/meta_locus/pools/{pool_id}")
+
+    META_LOCUS_READ_FILTERS = frozenset({
+        "include_duplicates", "min_footprints", "min_fp_quality", "hide_terminal_gaps", "terminal_gap_threshold",
+        "include_methylation", "include_layers", "requested_layers", "include_layer_qualities", "count_unit",
+    })
+
+    def get_meta_locus_reads(self, pool_id: str, seed: int = 1, count: int = 2000,
+                             cursor: Optional[Dict[str, int]] = None, **filters) -> dict:
+        """A seeded working set of the pool's reads (the browser's working set), More reads (pass the previous
+        answer's ``cursor``) or a Resample (another ``seed``). Reads are in window coordinates with their site in
+        ``meta``. ``filters`` are the pool's read filters: ``include_duplicates``, ``min_footprints``,
+        ``min_fp_quality``, ``hide_terminal_gaps``, ``terminal_gap_threshold``, ``include_methylation``,
+        ``include_layers``. QC-fail reads are not part of a pool's working set."""
+        unknown = sorted(set(filters) - self.META_LOCUS_READ_FILTERS)
+        if unknown:
+            raise ValueError("Not a meta-locus read filter: " + ", ".join(unknown)
+                             + " (supported: " + ", ".join(sorted(self.META_LOCUS_READ_FILTERS)) + ")")
+        body: Dict[str, Any] = {"seed": int(seed), "count": int(count), **filters}
+        if cursor:
+            body["cursor"] = dict(cursor)
+        return self._post_response(f"/api/meta_locus/pools/{pool_id}/reads", data=body, timeout=600).json()
+
+    def get_meta_locus_view(self, pool_id: str) -> dict:
+        """What the pool's virtual contig shows (seed, count, added reads)."""
+        return self._get(f"/api/meta_locus/pools/{pool_id}/view")
+
+    def set_meta_locus_view(self, pool_id: str, seed: int = None, count: int = None, more: int = None,
+                            resample: bool = False, clear_extra: bool = False) -> dict:
+        """Change what the virtual contig shows: a working set of ``count`` reads at ``seed``, ``more`` reads,
+        a resample, or without the reads Find more / refill added."""
+        body: Dict[str, Any] = {}
+        for key, value in (("seed", seed), ("count", count), ("more", more)):
+            if value is not None:
+                body[key] = int(value)
+        if resample:
+            body["resample"] = True
+        if clear_extra:
+            body["clear_extra"] = True
+        return self._post(f"/api/meta_locus/pools/{pool_id}/view", body)
+
+    def find_more_meta_locus(self, pool_id: str, read_ids_by_dataset: Dict[str, Sequence[str]], k: int = 200,
+                             max_scan: int = None, peak_regions: Sequence[Sequence[int]] = None) -> dict:
+        """Find more like these reads in the pool (matches and read-site observations scanned, Wilson 95%)."""
+        body: Dict[str, Any] = {"read_ids": {d: list(ids) for d, ids in read_ids_by_dataset.items()}, "k": int(k)}
+        if max_scan is not None:
+            body["max_scan"] = int(max_scan)
+        if peak_regions:
+            body["peak_regions"] = [list(p) for p in peak_regions]
+        return self._post_response(f"/api/meta_locus/pools/{pool_id}/find_more", data=body, timeout=600).json()
+
+    def refill_meta_locus(self, pool_id: str, assignments: Dict[str, Dict[str, int]],
+                          target_per_cluster: int = None, max_scan: int = None,
+                          peak_regions: Sequence[Sequence[int]] = None) -> dict:
+        """Keep the workspace full: top up each cluster from the pool (``assignments``: dataset -> read -> cluster)."""
+        body: Dict[str, Any] = {"assignments": assignments}
+        if target_per_cluster is not None:
+            body["target_per_cluster"] = int(target_per_cluster)
+        if max_scan is not None:
+            body["max_scan"] = int(max_scan)
+        if peak_regions:
+            body["peak_regions"] = [list(p) for p in peak_regions]
+        return self._post_response(f"/api/meta_locus/pools/{pool_id}/refill", data=body, timeout=600).json()
+
+    def open_meta_locus(self, bed_path: str, anchor: str = "centre", flank_bp: int = 10_000,
+                        dataset_ids: Optional[Union[str, Sequence[str]]] = None, count: int = None,
+                        seed: int = None, name: str = None, enable_preview: bool = False,
+                        navigate: bool = True) -> dict:
+        """Open a BED as a meta-locus in the open browser (Open BED as meta-locus): the pool builds, the view
+        moves to it and shows a seeded working set of ``count`` reads. The meta-locus is a Preview feature:
+        ``enable_preview=True`` turns Preview features on (as Settings does) when they are off."""
+        action: Dict[str, Any] = {"type": "open_meta_locus", "bed_path": str(bed_path), "anchor": anchor,
+                                  "flank_bp": int(flank_bp), "navigate": bool(navigate)}
+        ids = self._list_param(dataset_ids)
+        if ids:
+            action["dataset_ids"] = ids
+        if count is not None:
+            action["count"] = int(count)
+        if seed is not None:
+            action["seed"] = int(seed)
+        if name:
+            action["name"] = name
+        if enable_preview:
+            action["enable_preview"] = True
+        return self.queue_browser_actions([action], label="Python: meta-locus")
+
+    def _meta_locus_action(self, action_type: str, **fields) -> dict:
+        action = {"type": action_type, **{k: v for k, v in fields.items() if v is not None}}
+        return self.queue_browser_actions([action], label="Python: meta-locus")
+
+    def meta_locus_more_reads(self, count: int = 1000) -> dict:
+        """More reads on the open meta-locus (the next of the pool's sampling order)."""
+        return self._meta_locus_action("meta_locus_more_reads", count=int(count))
+
+    def meta_locus_resample(self, seed: int = None) -> dict:
+        """Resample the open meta-locus (a new seed, default the next; same working-set size)."""
+        return self._meta_locus_action("meta_locus_resample", seed=seed)
+
+    def meta_locus_find_more(self, k: int = 200, read_ids_by_dataset: Dict[str, Sequence[str]] = None) -> dict:
+        """Find more like this on the open meta-locus: the selected reads, or the given ones."""
+        return self._meta_locus_action("meta_locus_find_more", k=int(k), read_ids_by_dataset=read_ids_by_dataset)
+
+    def meta_locus_clear_extra(self) -> dict:
+        """Take out the reads Find more / Keep workspace full added."""
+        return self._meta_locus_action("meta_locus_clear_extra")
+
+    def meta_locus_back(self) -> dict:
+        """Back to the real locus from the meta-locus."""
+        return self._meta_locus_action("meta_locus_back")
+
+    def meta_locus_return(self) -> dict:
+        """Back to the meta-locus from the real locus."""
+        return self._meta_locus_action("meta_locus_return")
+
+    def get_meta_locus_state(self) -> Optional[dict]:
+        """The open browser's meta-locus (BED path, anchor, flank, seed, count, added reads, pool id), or None."""
+        return self._settings_snapshot().get("meta_locus")
+
+    # ---------- Meta-locus: headless numbers (no browser tab needed) ----------
+
+    def _meta_numbers_body(self, pool, session, seed, count, load_session: bool = False) -> Dict[str, Any]:
+        body: Dict[str, Any] = {'load_session': True} if (load_session and session is not None) else {}
+        if session is not None:
+            if not isinstance(session, dict):
+                import os
+                with open(os.path.expanduser(str(session)), encoding='utf-8') as handle:
+                    session = json.load(handle)
+            if pool is None and (seed is not None or count is not None):
+                # The session's own pool with another working set: a copy of its meta-locus block with them.
+                import copy
+                saved = ((session.get('frontend') or {}).get('metaLocus')) if isinstance(session, dict) else None
+                if not isinstance(saved, dict):
+                    raise ValueError("seed / count need a pool, or a session saved on a meta-locus view")
+                session = copy.deepcopy(session)
+                if seed is not None:
+                    session['frontend']['metaLocus']['seed'] = int(seed)
+                if count is not None:
+                    session['frontend']['metaLocus']['count'] = int(count)
+            body['session'] = session
+        if pool is not None:
+            spec = {'pool_id': pool} if isinstance(pool, str) else dict(pool)
+            if seed is not None:
+                spec['seed'] = int(seed)
+            if count is not None:
+                spec['count'] = int(count)
+            body['meta_locus'] = self._meta_locus_param(spec)
+        elif session is None:
+            raise ValueError("Give a pool (pool id or spec) or a session saved on a meta-locus view")
+        return body
+
+    def get_meta_locus_profile(self, pool: Union[str, dict, None] = None, seed: Optional[int] = None,
+                               count: Optional[int] = None, channels: Optional[Union[str, Sequence[str]]] = None, *,
+                               session: Union[str, dict, None] = None, bins: Optional[int] = None,
+                               out_tsv: Optional[str] = None, out_json: Optional[str] = None,
+                               load_session: bool = False) -> dict:
+        """The metaprofile of a meta-locus per bin, channel and group: all reads, each dataset, each cluster.
+
+        The curves the browser draws (the read track's 'touch' bins over the view's 500-bin grid, from each panel's
+        profile pool), with each bin's position in bp from the anchor and the reads covering it.
+
+        Args:
+            pool: A pool id (``start_meta_locus_pool``) or a spec ``{"bed", "anchor", "flank_bp", "datasets"}``.
+            seed, count: The working set (the browser's seed and size; default 1 and 2000).
+            channels: Layers (``"nuc"``, ``"tf"``, ``"fire"``, ``"m6a"``, ...); default the active layers.
+            session: A session saved on a meta-locus view (its pool, working set, clusters and settings), instead of
+                or with ``pool``.
+            out_tsv, out_json: Also write the table (group, channel, bin, rel_start, rel_end, value,
+                reads_covering) or the whole answer here.
+            load_session: Load the session's datasets first (replaces what an open browser shows), as
+                ``figure(load_session=True)`` does.
+
+        Returns ``{"channels", "bins", "bin_bp", "axis_zero", "groups": {group: {"n_reads", "coverage",
+        "channels": {channel: [values]}}}, "tsv", "meta_locus"}``.
+        """
+        body = self._meta_numbers_body(pool, session, seed, count, load_session)
+        if channels is not None:
+            body['channels'] = [channels] if isinstance(channels, str) else list(channels)
+        if bins is not None:
+            body['bins'] = int(bins)
+        reply = self._post_json_or_raise("/api/meta_locus/profile", body)
+        if out_tsv:
+            with open(out_tsv, 'w', encoding='utf-8') as handle:
+                handle.write(reply['tsv'] + "\n")
+        if out_json:
+            with open(out_json, 'w', encoding='utf-8') as handle:
+                json.dump(reply, handle, indent=1)
+        return reply
+
+    def quantify_window(self, bounds: Optional[dict] = None, measures: Optional[Sequence[str]] = None,
+                        comparison: Optional[str] = None, seed: Optional[int] = None, *,
+                        spec: Optional[dict] = None, out_tsv: Optional[str] = None, load_session: bool = False,
+                        **spec_fields) -> dict:
+        """Quantify a window headlessly: the table the browser's Quantify card gives, computed on the server with the
+        card's own engine (its Python twin), the same Wilson and bootstrap intervals and the same seeds.
+
+        Args:
+            bounds: Where: ``{"meta_locus": <pool id or spec>, "window": [-200, 50]}`` (bp from the anchor; minus-
+                strand sites are already flipped), or ``{"session": <path or dict>, ...}`` (a session's view and
+                clusters), plus optional ``"seed"`` / ``"count"`` (the working set), ``"window_genomic"``
+                ([start, end) on the view's contig), ``"region"``. No window: the whole view (as the card says).
+            measures: ``["layer:nuc", "layer:tf", "layer:fire", "layer:m6a", "size:band", ...]``; default the
+                active layers. Families, geometries and the regularity score are browser-side (refused).
+            comparison: ``"clusters"`` (falls back to datasets when nothing is clustered, as the card does),
+                ``"datasets"``, ``"clusters-datasets"`` or ``"pools"`` (meta-locus). Default: the session's saved
+                Quantify comparison, else ``"clusters"``.
+            seed: The sampling seed, which is also the bootstrap seed unless ``boot_seed`` is given.
+            spec / spec_fields: Any other QuantSpec field (camelCase or snake_case): ``value`` ("raw" |
+                "enrichment"), ``baseline``, ``form``, ``compare``, ``reference``, ``stat``, ``ci``,
+                ``resamples``, ``boot_seed``, ``test``, ``adjust``, ``min_reads``, ``read_cap``,
+                ``flank_fraction``, ``layer_units`` ("curve" | "exact"), ``read_source``, ``size_from``,
+                ``size_to``, ``bounds`` ("window" | "region" | "sites").
+            out_tsv: Also write the card's TSV (with header lines saying what was measured) here.
+            load_session: Load the session's datasets first (replaces what an open browser shows).
+
+        Returns ``{"result": {cells, groups, measures, tests, ...}, "tsv", "header", "bounds", "comparison",
+        "read_source", "sampled", "meta_locus"}``.
+        """
+        bounds = dict(bounds or {})
+        q = dict(spec or {})
+        q.update(spec_fields)
+        if measures is not None:
+            q['measures'] = [measures] if isinstance(measures, str) else list(measures)
+        if comparison is not None:   # unset: the session's saved comparison stands (else the card's default)
+            q.setdefault('comparison', comparison)
+        if seed is not None:
+            q['seed'] = int(seed)
+        body = self._meta_numbers_body(bounds.pop('meta_locus', None), bounds.pop('session', None),
+                                       bounds.pop('seed', None), bounds.pop('count', None), load_session)
+        for key in ('window', 'window_genomic'):
+            if bounds.get(key) is not None:
+                body[key] = [int(bounds[key][0]), int(bounds[key][1])]
+                bounds.pop(key)
+        if bounds.get('region'):
+            body['region'] = str(bounds.pop('region'))
+        if bounds:
+            raise ValueError("Unknown bounds field(s): " + ", ".join(sorted(bounds))
+                             + " (use meta_locus, session, window, window_genomic, region, seed, count)")
+        body['spec'] = q
+        reply = self._post_json_or_raise("/api/meta_locus/quantify", body)
+        if out_tsv:
+            with open(out_tsv, 'w', encoding='utf-8') as handle:
+                handle.write(reply['tsv'] + "\n")
+        return reply
+
+    def _post_json_or_raise(self, path: str, body: dict, timeout: float = 1800) -> dict:
+        """POST and return the JSON answer; the server's own message on an error."""
+        r = self._http_session().post(f"{self.url}{path}", json=body, timeout=timeout)
+        try:
+            reply = r.json()
+        except Exception:
+            reply = {}
+        if r.status_code != 200:
+            raise RuntimeError(reply.get('error') or reply.get('detail') or r.text[:300] or f"{path} failed ({r.status_code})")
+        return reply
+
+    # ---------- Find sequence ----------
+
+    def get_sequence_search_status(self) -> dict:
+        """Whether the loaded genome is searchable, whether BLAST and its database are ready, and the defaults."""
+        return self._get("/api/sequence_search/status")
+
+    def find_sequence(self, sequence: str, mode: str = None, max_mismatches: int = None, evalue: float = None,
+                      max_hits: int = None, min_length: int = None, exact_max_length: int = None,
+                      blast_task: str = None, wait: bool = True, timeout: float = 600,
+                      poll_interval: float = 0.5) -> dict:
+        """Find a sequence in the loaded genome (Find sequence): exact matches (with mismatches) or BLAST.
+
+        ``sequence`` may be FASTA or have spaces and numbers. Options left None take the server's defaults
+        (:meth:`get_sequence_search_status`). With ``wait`` the finished job is returned (its hits in
+        ``job["result"]["hits"]``); otherwise
+        the job to poll with :meth:`get_sequence_search_job`. Not on a public server.
+        """
+        body: Dict[str, Any] = {"sequence": str(sequence)}
+        for key, value in (("mode", mode), ("max_mismatches", max_mismatches), ("evalue", evalue),
+                           ("max_hits", max_hits), ("min_length", min_length),
+                           ("exact_max_length", exact_max_length), ("blast_task", blast_task)):
+            if value is not None:
+                body[key] = value
+        job = self._post("/api/sequence_search", body)
+        if job.get("success") is False or not wait:
+            return job
+        job_id = job.get("job_id") or (job.get("job") or {}).get("id")
+        if not job_id or job.get("status") in ("done", "error", "cancelled"):
+            return job
+        import time
+        deadline = time.monotonic() + float(timeout)
+        while True:
+            state = self.get_sequence_search_job(job_id)
+            if state.get("status") not in ("queued", "running", "pending"):
+                return state
+            if time.monotonic() > deadline:
+                raise TimeoutError(f"Sequence search {job_id} still running after {timeout} s")
+            time.sleep(float(poll_interval))
+
+    def get_sequence_search_job(self, job_id: str) -> dict:
+        """A sequence search job's status and, when done, its hits."""
+        return self._get(f"/api/sequence_search/jobs/{job_id}")
+
+    def cancel_sequence_search(self, job_id: str) -> dict:
+        """Cancel a running sequence search."""
+        return self._delete(f"/api/sequence_search/jobs/{job_id}")
+
+    def add_sequence_search_track(self, job_id: str, label: str = None) -> dict:
+        """A finished search's hits as a temporary annotation track (this session only)."""
+        return self._post(f"/api/sequence_search/jobs/{job_id}/track", {"label": label} if label else {})
+
+    # ---------- Recent and pinned genomes, annotation ----------
+
+    def get_recent_genomes(self, limit: int = None) -> dict:
+        """Pinned genomes (in pin order) and recent ones: ``{"pinned": [...], "recent": [...], "max": n}``.
+        Each entry has a ``key`` for the calls below. Local work only (not on public servers or tour tabs)."""
+        return self._get("/api/recent_genomes", params={"limit": int(limit)} if limit is not None else None)
+
+    def pin_genome(self, key: str, pinned: bool = True) -> dict:
+        """Pin (or unpin) a recent genome."""
+        return self._post("/api/recent_genomes/pin", {"key": key, "pinned": bool(pinned)})
+
+    def unpin_genome(self, key: str) -> dict:
+        """Unpin a genome (it stays among the recent ones)."""
+        return self.pin_genome(key, pinned=False)
+
+    def reorder_pinned_genomes(self, keys: Sequence[str]) -> dict:
+        """Put the pinned genomes in this order."""
+        return self._post("/api/recent_genomes/reorder", {"keys": list(keys)})
+
+    def remove_recent_genome(self, key: str) -> dict:
+        """Forget one recent genome."""
+        return self._post("/api/recent_genomes/remove", {"key": key})
+
+    def clear_recent_genomes(self) -> dict:
+        """Forget the recent genomes (pinned ones stay)."""
+        return self._post("/api/recent_genomes/clear", {})
+
+    def open_recent_genome(self, key: str, confirm_large: bool = False) -> dict:
+        """Load a pinned or recent genome in one step (a registry genome with its annotation, or a local FASTA
+        with its paired annotation). What is loaded already is kept; a missing file is reported."""
+        return self._post_response("/api/recent_genomes/open", data={"key": key, "confirm_large": bool(confirm_large)},
+                                   timeout=1800).json()
+
+    def get_annotation_status(self) -> dict:
+        """Whether the loaded reference has a gene annotation, and the one that can be loaded for it (as the
+        browser's "No genes loaded for dm6 · Load dm6 genes" prompt decides):
+
+        ``{"loaded", "gene_count", "genome_id" (the registry annotation loaded, else None), "fits",
+        "reference": {kind, label, assembly}, "downloadable" (the catalog annotation can be loaded here: load it
+        with reset_annotation(target["genome_id"])), "target" ({genome_id, name, gtf_label, cached} or None),
+        "can_upload_gtf" (a local FASTA with no known annotation: give one with load_gtf)}``."""
+        check = self._get("/api/genome/check")
+        annotation = check.get("annotation") or {}
+        reference = check.get("reference") or {}
+        target = annotation.get("target")
+        loaded = bool(annotation.get("loaded"))
+        return {
+            "loaded": loaded,
+            "gene_count": int(annotation.get("gene_count") or 0),
+            "genome_id": annotation.get("genome_id"),
+            "fits": annotation.get("fits"),
+            "reference": {k: reference.get(k) for k in ("kind", "label", "assembly")},
+            "downloadable": bool(not loaded and target and annotation.get("can_reset")),
+            "target": target,
+            # Not on a public server (it refuses uploads and annotation loads), as the browser offers it.
+            "can_upload_gtf": bool(not loaded and not target and reference.get("kind") == "fasta"
+                                   and check.get("can_load_genomes", True)),
+        }
+
+    def reset_annotation(self, genome_id: str, confirm_large: bool = False) -> dict:
+        """Use the registry genome's own annotation in place of the loaded one ("Reset to <genome> genes"); the
+        FASTA stays. Local work only."""
+        params = {"genome_id": genome_id}
+        if confirm_large:
+            params["confirm_large"] = "true"
+        return self._post_response("/api/genome/reset_annotation", params=params, timeout=1800).json()
+
+    def attach_panel_genome(self, dataset_ids, genome_id: str | None = None, fasta_path: str | None = None,
+                            gtf_path: str | None = None, contigs: bool = False, span: int = 10_000,
+                            confirm_large: bool = False) -> dict:
+        """Give datasets a reference of their own (a registry genome, a FASTA and annotation, or their own
+        contigs) beside the main genome. A registry download over the warning size answers
+        ``needs_confirmation`` with ``download`` (url, bytes, threshold): its FASTA, nothing is attached; its
+        annotation, the sequence is attached without genes. Call again with ``confirm_large=True`` to download it.
+        Local work only."""
+        ids = [dataset_ids] if isinstance(dataset_ids, str) else list(dataset_ids)
+        body = {"dataset_ids": ids, "contigs": bool(contigs), "span": int(span), "confirm_large": bool(confirm_large)}
+        for name, value in (("genome_id", genome_id), ("fasta_path", fasta_path), ("gtf_path", gtf_path)):
+            if value:
+                body[name] = value
+        return self._post_response("/api/panel_genomes/attach", data=body, timeout=1800).json()
+
+    def detach_panel_genome(self, dataset_ids) -> dict:
+        """These datasets use the main genome again (a reference no dataset uses is closed)."""
+        ids = [dataset_ids] if isinstance(dataset_ids, str) else list(dataset_ids)
+        return self._post_response("/api/panel_genomes/detach", data={"dataset_ids": ids}).json()
+
+    # ---------- FiberHMM runs (this computer) ----------
+
+    def _run_body(self, samples, reference, enzyme, output_root, regions, cores, options, min_mapq,
+                  input_kind, basecall, nuc_recall_policy=None) -> dict:
+        opts = dict(options or {})
+        if min_mapq is not None:
+            opts["min_mapq"] = int(min_mapq)
+        if nuc_recall_policy is not None:
+            opts["nuc_recall_policy"] = str(nuc_recall_policy)
+        body: Dict[str, Any] = {
+            "samples": [dict(s) for s in samples], "reference": dict(reference or {}), "enzyme": enzyme,
+            "output_root": str(output_root or ""), "regions": list(regions or []), "cores": int(cores or 0),
+            "options": opts, "input_kind": input_kind,
+        }
+        if basecall:
+            body["basecall"] = dict(basecall)
+        return body
+
+    def validate_fiberhmm_run(self, samples: Sequence[dict], reference: dict, enzyme: str = "dddb",
+                              output_root: str = "", regions: Sequence[str] = None, cores: int = 0,
+                              options: dict = None, min_mapq: int = None, input_kind: str = "reads",
+                              basecall: dict = None, nuc_recall_policy: str = None) -> dict:
+        """Check a FiberHMM run as the Run wizard does (no job starts): errors, warnings and each job's command.
+
+        ``samples``: ``[{"name": ..., "files": [{"path": ...}, ...]}]`` (see :meth:`scan_run_inputs`).
+        ``min_mapq``: the alignment MAPQ filter; every new run passes ``--min-mapq`` explicitly (default 0).
+        ``nuc_recall_policy``: ``"conservative"`` (default) or ``"topology"`` (Hia5 and DddB only; it keeps
+        fragment structure in nucleosome recall and works well on some ONT Hia5 data).
+        """
+        return self._post("/api/pipeline/validate", self._run_body(samples, reference, enzyme, output_root, regions,
+                                                                  cores, options, min_mapq, input_kind, basecall,
+                                                                  nuc_recall_policy))
+
+    def run_fiberhmm(self, samples: Sequence[dict], reference: dict, enzyme: str = "dddb", output_root: str = "",
+                     regions: Sequence[str] = None, cores: int = 0, options: dict = None, min_mapq: int = None,
+                     input_kind: str = "reads", basecall: dict = None, nuc_recall_policy: str = None) -> dict:
+        """Start FiberHMM runs (one job per sample) as the Run wizard does; returns the jobs. ``min_mapq`` is
+        passed explicitly (``--min-mapq``). ``nuc_recall_policy``: as :meth:`validate_fiberhmm_run`. Local servers
+        only; on a lab server, members' runs follow its rules."""
+        return self._post("/api/pipeline/jobs", self._run_body(samples, reference, enzyme, output_root, regions,
+                                                              cores, options, min_mapq, input_kind, basecall,
+                                                              nuc_recall_policy))
+
+    def scan_run_inputs(self, paths: Sequence[str], input_kind: str = "reads") -> dict:
+        """Read files, folders and zips as the Run wizard does: the samples found (for :meth:`run_fiberhmm`)."""
+        return self._post("/api/pipeline/scan", {"paths": list(paths), "input_kind": input_kind})
+
+    def get_pipeline_jobs(self) -> List[dict]:
+        """FiberHMM run jobs on this server."""
+        return list(self._get("/api/pipeline/jobs").get("jobs") or [])
+
+    def get_pipeline_job(self, job_id: str) -> dict:
+        """One run job: its status, progress, command and outputs."""
+        return self._get(f"/api/pipeline/jobs/{job_id}")
+
+    def get_pipeline_job_log(self, job_id: str) -> str:
+        """A run job's log (plain text)."""
+        return self._get_response(f"/api/pipeline/jobs/{job_id}/log").text
+
+    def cancel_pipeline_job(self, job_id: str) -> dict:
+        """Cancel a run job."""
+        return self._post(f"/api/pipeline/jobs/{job_id}/cancel", {})
+
+    def recall_library_entry(self, entry_id: str, dry_run: bool = True, plan_id: str = None, cores: int = None,
+                             outdir: str = None, input: str = None, keep_old: Sequence[str] = None) -> dict:
+        """Re-call a library dataset with the current FiberHMM, keeping its run's settings (the recorded MAPQ
+        included). ``dry_run`` returns the plan with its ``plan_id``; start it with ``dry_run=False`` and that
+        ``plan_id`` (exactly that plan runs). ``keep_old``: default changes to undo."""
+        body: Dict[str, Any] = {"dry_run": bool(dry_run)}
+        if plan_id:
+            body["plan_id"] = plan_id
+        if cores is not None:
+            body["cores"] = int(cores)
+        if outdir:
+            body["outdir"] = str(outdir)
+        if input:
+            body["input"] = str(input)
+        if keep_old:
+            body["keep_old"] = list(keep_old)
+        return self._post(f"/api/library/entries/{entry_id}/recall", body)
 
     def __repr__(self):
         headless = getattr(self, '_headless_proc', None) is not None

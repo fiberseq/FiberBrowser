@@ -60,6 +60,7 @@ import hashlib
 import hmac
 import io
 import json
+import errno
 import os
 import re
 import signal
@@ -198,8 +199,17 @@ def confine(path):
     if not path.startswith("/"):
         return None
     try:
+        os.stat(path)
+    except OSError as exc:
+        # More links than the OS follows (or a loop): refused on every Python, as the OS would refuse to open it.
+        # Python 3.13's realpath resolves any number of links, where older ones raised RecursionError.
+        if exc.errno == errno.ELOOP:
+            return None
+    except ValueError:
+        return None
+    try:
         real = os.path.realpath(path)
-    except (OSError, ValueError, RuntimeError):  # RecursionError: a very long chain of links
+    except (OSError, ValueError, RuntimeError):  # RecursionError: a very long chain of links (Python < 3.13)
         return None
     return real if _under_roots(real) else None
 

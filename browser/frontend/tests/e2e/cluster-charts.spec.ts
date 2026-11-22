@@ -1,7 +1,8 @@
 /**
  * Cluster charts (fb-n5-charts): with one dataset loaded Composition shows the
- * bar chart (and Pie); Footprint sizes shows Size enrichment per cluster and
- * switches to the V-plot; picking a cluster by its name filters Profiles, and the pick is
+ * bar chart (and Pie); "Footprint sizes → Plots" opens Plots on Size enrichment per
+ * cluster (pinned to the clustered locus), which switches to the V-plot; there is no
+ * Footprint sizes tab; picking a cluster by its name filters Profiles, and the pick is
  * the app's cluster selection.
  *
  * Pinned to the tracked NAPA demo BAM (chr19:47514000-47518000).
@@ -87,31 +88,40 @@ test('one dataset: Composition shows the bar chart, and Pie; Line needs two data
   await expect(composition.getByTestId('composition-pie').locator('canvas').first()).toBeVisible();
 });
 
-test('Footprint sizes per cluster: Size enrichment by default, V-plot in one click', async ({ server, page }) => {
+test('Footprint sizes → Plots: Size enrichment per cluster, V-plot in one click; no Footprint sizes tab', async ({ server, page }) => {
   test.setTimeout(180_000);
   await openAt(page, server);
   await cluster(page);
+  await panelButton(page, 'cluster-detail').click();
+  const panel = page.locator('[data-panel-content-type="cluster-detail"]');
+  await panel.getByRole('button', { name: 'Charts', exact: true }).click();
+  await expect(panel.getByRole('group', { name: 'Chart', exact: true }).locator('[data-analysis-tab="vplot"]')).toHaveCount(0);
+  await expect(panel.getByTestId('cluster-detail-plot-clusters')).toHaveCount(0);
+  if (SHOTS) await panel.screenshot({ path: `${SHOTS}/cluster-charts-tabs.png` });
+
   const first = page.waitForResponse(res => res.url().includes('/api/cluster/vplot'), { timeout: 90_000 });
-  const panel = await openChart(page, 'vplot');
+  await panel.getByTestId('cluster-detail-sizes-in-plots').click();
   const req = JSON.parse((await first).request().postData() || '{}');
   expect(req).toMatchObject({ mode: 'span', normalization: 'row', group_by: 'cluster', raw_values: true });
-  const sizes = panel.getByTestId('footprint-sizes');
-  await expect(sizes).toHaveAttribute('data-view', 'enrichment');
-  await expect(sizes).toHaveAttribute('data-group', 'clusters');
-  await expect(sizes.getByTestId('footprint-sizes-plot').locator('canvas').first()).toBeVisible({ timeout: 60_000 });
+  const ws = page.getByTestId('plots-workspace');
+  await expect(ws.getByTestId('plots-type-size-enrichment')).toHaveAttribute('aria-pressed', 'true');
+  await expect(ws.getByTestId('plots-group-cluster')).toHaveAttribute('aria-pressed', 'true');
+  await expect(ws.getByTestId('plots-cluster-pin-note')).toBeVisible();
+  const plot = ws.getByTestId('plots-size-plot');
+  await expect(plot).toHaveAttribute('data-state', 'current', { timeout: 90_000 });
+  expect(await plot.getByTestId('plots-size-panel').count()).toBeGreaterThan(1);
 
   const mid = page.waitForResponse(res => res.url().includes('/api/cluster/vplot')
     && JSON.parse(res.request().postData() || '{}').mode === 'midpoint', { timeout: 90_000 });
-  await sizes.getByTestId('footprint-sizes-view-vplot').click();
+  await ws.getByTestId('plots-type-vplot').click();
   const answer = await mid;
-  expect(JSON.parse(answer.request().postData() || '{}').normalization).toBe('raw');
+  expect(JSON.parse(answer.request().postData() || '{}')).toMatchObject({ normalization: 'raw', group_by: 'cluster' });
   const body = await answer.json();
   const matrices = Object.values(body.data as Record<string, Record<string, { mode: string; matrix: number[][] }>>)
     .flatMap(byCluster => Object.values(byCluster));
   expect(matrices.length).toBeGreaterThan(0);
   expect(matrices.every(m => m.mode === 'midpoint')).toBe(true);
-  await expect(sizes).toHaveAttribute('data-view', 'vplot');
-  await expect(panel.getByTestId('vplot-caption')).toContainText('Midpoint');
+  await expect(ws.getByTestId('plots-caption')).toContainText('Midpoint');
 });
 
 test('picking a cluster by its name filters Profiles and selects it in the app', async ({ server, page }) => {

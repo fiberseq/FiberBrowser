@@ -11,7 +11,7 @@
  */
 import { wilsonInterval } from '../../utils/statistics';
 import { percentileInterval, poissonWeights } from '../../utils/stableSample';
-import { poolProfiles, type RawProfile } from './profileEngine';
+import { finishProfile, poolProfiles, type ProfileFinishOptions, type RawProfile } from './profileEngine';
 import type { SizeMatrix } from '../../utils/footprintSizeMatrix';
 
 export type SummaryKind = 'window-mean' | 'band-share' | 'box-mean';
@@ -33,9 +33,12 @@ export interface SummarySettings {
   bootSeed: number | null;
   /** BED: the bootstrap's units (regions are independent; reads within regions are not). */
   unit: 'regions' | 'reads';
+  /** A profile's value: 'curve', the mean of the drawn curve over the window's bins (smoothing and blank bins as drawn,
+   *  so a bar equals the curve beside it; the default), or 'pooled', Σ signal / Σ coverage over the window (3.1.0). */
+  statistic: 'curve' | 'pooled';
 }
 
-export const DEFAULT_SUMMARY: SummarySettings = Object.freeze({ on: false, chart: 'bar', from: null, to: null, sizeFrom: 0, sizeTo: 90, ci: 'auto', resamples: 1000, bootSeed: null, unit: 'regions' }) as SummarySettings;
+export const DEFAULT_SUMMARY: SummarySettings = Object.freeze({ on: false, chart: 'bar', from: null, to: null, sizeFrom: 0, sizeTo: 90, ci: 'auto', resamples: 1000, bootSeed: null, unit: 'regions', statistic: 'curve' }) as SummarySettings;
 
 export function normalizeSummary(raw: unknown): SummarySettings {
   const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
@@ -45,13 +48,16 @@ export function normalizeSummary(raw: unknown): SummarySettings {
   const rs = num(r.resamples);
   const bs = num(r.bootSeed);
   return { on: r.on === true, chart: r.chart === 'line' ? 'line' : 'bar', from: num(r.from), to: num(r.to), sizeFrom: Math.min(sf, st), sizeTo: Math.max(sf, st), ci,
-    resamples: rs == null ? 1000 : Math.round(Math.min(10000, Math.max(50, rs))), bootSeed: bs == null ? null : Math.round(Math.max(0, bs)), unit: r.unit === 'reads' ? 'reads' : 'regions' };
+    resamples: rs == null ? 1000 : Math.round(Math.min(10000, Math.max(50, rs))), bootSeed: bs == null ? null : Math.round(Math.max(0, bs)), unit: r.unit === 'reads' ? 'reads' : 'regions',
+    // A summary saved before 3.1.1 has no statistic: it keeps the pooled value it was saved with; new plots start
+    // from DEFAULT_SUMMARY (the curve).
+    statistic: r.statistic === 'pooled' || r.statistic === 'curve' ? r.statistic : raw && typeof raw === 'object' && Object.keys(r).length ? 'pooled' : 'curve' };
 }
 
 /** The interval method a summary uses (auto: bootstrap for means, exact Wilson for a band share of counts). */
 export function resolveCi(kind: SummaryKind, s: SummarySettings, countWeighting = true, normalization: 'fraction' | 'count' | 'relative' = 'fraction'): 'bootstrap' | 'wilson' | 'none' {
   // Wilson is for a share of reads: not a box mean, a count per bin or a relative value.
-  if (s.ci !== 'auto') return s.ci === 'wilson' && (kind === 'box-mean' || normalization !== 'fraction') ? 'none' : s.ci;
+  if (s.ci !== 'auto') return s.ci === 'wilson' && (kind === 'box-mean' || normalization !== 'fraction' || (kind === 'window-mean' && s.statistic !== 'pooled')) ? 'none' : s.ci;
   return kind === 'band-share' && countWeighting ? 'wilson' : 'bootstrap';
 }
 
@@ -74,18 +80,41 @@ export function bootstrapRatio(units: Array<{ id: string; num: number; den: numb
 
 /** The percentile interval of any statistic of the units' summed values, over Poisson-bootstrap resamples (seeded):
  *  each unit carries a few numbers (sums), each resample adds them weighted by the unit's draws, `stat` reads the sums. */
-export function bootstrapSums(units: Array<{ id: string; v: number[] }>, resamples: number, seed: number, stat: (sums: Float64Array) => number | null, level = 0.95): [number, number] | null {
+export function bootstrapSums(units: Array<{ id: string; v: ArrayLike<number> }>, resamples: number, seed: number, stat: (sums: Float64Array) => number | null, level = 0.95,
+  weights?: BootstrapWeights): [number, number] | null {
   if (!units.length) return null;
   const k = units[0].v.length;
-  const S = new Float64Array(resamples * k);
-  for (const u of units) {
-    if (u.v.every(x => !x)) continue;
-    const w = poissonWeights(seed, u.id, resamples);
-    for (let b = 0; b < resamples; b++) if (w[b]) for (let j = 0; j < k; j++) S[b * k + j] += w[b] * u.v[j];
-  }
+  const S = bootstrapDraws(units, resamples, seed, weights);
   const vals: number[] = [];
   for (let b = 0; b < resamples; b++) { const x = stat(S.subarray(b * k, b * k + k)); if (x != null && Number.isFinite(x)) vals.push(x); }
   return percentileInterval(vals, level);
+}
+
+/** Each unit's Poisson-bootstrap draws, kept per (seed, resamples, unit id): one unit gets the same draws in every group,
+ *  baseline and reference it is part of, so ratios and differences between them resample jointly. */
+export type BootstrapWeights = Map<string, Uint8Array>;
+
+export function cachedPoissonWeights(cache: BootstrapWeights | undefined, seed: number, id: string, resamples: number): Uint8Array {
+  if (!cache) return poissonWeights(seed, id, resamples);
+  const key = `${seed}\u0000${resamples}\u0000${id}`;
+  let w = cache.get(key);
+  if (!w) { w = poissonWeights(seed, id, resamples); cache.set(key, w); }
+  return w;
+}
+
+/** The resampled sums (resamples × k, row-major) of the units' k values: resample b adds each unit's values times its
+ *  b-th Poisson(1) draw (the same draws as bootstrapSums and the server's stable_sample). */
+export function bootstrapDraws(units: Array<{ id: string; v: ArrayLike<number> }>, resamples: number, seed: number, weights?: BootstrapWeights): Float64Array {
+  const k = units[0]?.v.length ?? 0;
+  const S = new Float64Array(resamples * k);
+  for (const u of units) {
+    let any = false;
+    for (let j = 0; j < k; j++) if (u.v[j]) { any = true; break; }
+    if (!any) continue;
+    const w = cachedPoissonWeights(weights, seed, u.id, resamples);
+    for (let b = 0; b < resamples; b++) if (w[b]) for (let j = 0; j < k; j++) S[b * k + j] += w[b] * u.v[j];
+  }
+  return S;
 }
 
 /** A unit's window sums (metaprofile) or band / total weight (histogram). */
@@ -116,7 +145,27 @@ export function ciText(method: 'bootstrap' | 'wilson' | 'none', s: SummarySettin
   return `bootstrap 95% (${s.resamples.toLocaleString('en-US')} Poisson resamples of ${unitNoun}, seed ${seed})`;
 }
 
-export interface SummaryValue { id: string; title: string; color?: string; value: number | null; lo: number | null; hi: number | null; n: number | null }
+export interface SummaryValue {
+  id: string; title: string; color?: string; value: number | null; lo: number | null; hi: number | null; n: number | null;
+  /** Curve bootstrap: fewer resamples than asked (the work cap), said in the header. */
+  resamplesUsed?: number;
+  /** Several sources: the bar's source (its series: colour, legend) and the group or comparison it is a bar of. */
+  series?: string; seriesLabel?: string; cluster?: string; clusterTitle?: string;
+}
+
+/** Whether summary values are several sources' (grouped bars: one cluster per group, one bar per source). */
+export const isGroupedSummary = (values: SummaryValue[]): boolean => new Set(values.map(v => v.series).filter(Boolean)).size > 1;
+
+/** Clusters (groups or comparisons, in order) and series (sources, in order) of grouped summary values. */
+export function summaryLayout(values: SummaryValue[]): { clusters: Array<{ id: string; title: string }>; series: Array<{ id: string; label: string; color?: string }> } {
+  const clusters: Array<{ id: string; title: string }> = [], series: Array<{ id: string; label: string; color?: string }> = [];
+  for (const v of values) {
+    const c = v.cluster ?? v.id, sId = v.series ?? '';
+    if (!clusters.some(x => x.id === c)) clusters.push({ id: c, title: v.clusterTitle ?? v.title });
+    if (!series.some(x => x.id === sId)) series.push({ id: sId, label: v.seriesLabel ?? sId, ...(v.color ? { color: v.color } : {}) });
+  }
+  return { clusters, series };
+}
 
 const wilson = (k: number, n: number) => (n > 0 ? wilsonInterval(Math.round(Math.max(0, Math.min(n, k))), Math.round(n)) : null);
 
@@ -199,17 +248,97 @@ export function boxMean(m: SizeMatrix, d: { size_min: number; size_bin: number; 
 }
 
 export function summaryTsv(values: SummaryValue[], what: string): string {
+  if (isGroupedSummary(values)) {
+    // One row block per source: group, source, value, interval, n.
+    const { series } = summaryLayout(values);
+    const rows = series.flatMap(sr => values.filter(v => (v.series ?? '') === sr.id)
+      .map(v => [v.clusterTitle ?? v.title, sr.label, v.value ?? 'NA', v.lo ?? 'NA', v.hi ?? 'NA', v.n ?? 'NA'].join('\t')));
+    return [`# summary: ${what}`, 'group\tsource\tvalue\tlo95\thi95\tn', ...rows].join('\n');
+  }
   return [`# summary: ${what}`, 'group\tvalue\tlo95\thi95\tn', ...values.map(v => [v.title, v.value ?? 'NA', v.lo ?? 'NA', v.hi ?? 'NA', v.n ?? 'NA'].join('\t'))].join('\n');
+}
+
+/** Bootstrap work budget for curve summaries (units × values × resamples): beyond it the resamples are reduced (min 200). */
+export const CURVE_BOOT_BUDGET = 2e7;
+
+/** The mean of the drawn curve (finishProfile: smoothing, blank bins, marks per bp, relative) over the window's bins;
+ *  blank bins don't count; null when every bin in the window is blank. */
+export function curveWindowMean(raw: RawProfile, finish: ProfileFinishOptions, start: number, from: number | null, to: number | null): number | null {
+  const vals = finishProfile(raw, finish);
+  let sum = 0, k = 0;
+  for (let i = 0; i < vals.length; i++) {
+    const x = start + i * finish.binBp;
+    if ((from != null && x + finish.binBp <= from) || (to != null && x >= to)) continue;
+    const v = vals[i];
+    if (v != null && Number.isFinite(v)) { sum += v; k++; }
+  }
+  return k ? sum / k : null;
+}
+
+/** Resamples for a curve bootstrap of `units` units with `width` values each (CURVE_BOOT_BUDGET). */
+export const curveResamples = (resamples: number, units: number, width: number): number =>
+  Math.min(resamples, Math.max(200, Math.floor(CURVE_BOOT_BUDGET / Math.max(1, units * width))));
+
+/** Resampled curves: each unit's per-bin coverage and signal (sides laid end to end), drawn with the same Poisson
+ *  draws as every other summary, then each resample's sides rebuilt as raw profiles and handed to `stat`. */
+function curveBootstrap(sides: SummaryUnit[][], n: number, resamples: number, seed: number,
+  stat: (raws: RawProfile[]) => number | null): { ci: [number, number] | null; used: number } {
+  const width = 2 * n * sides.length;
+  // A read's coverage and signal are runs of equal values (it covers a stretch; calls fill bins): each unit is kept as
+  // run-length segments, added per resample through a difference array (cost per segment, not per bin).
+  const units = sides.flatMap((us, si) => us.map(u => {
+    const seg: number[] = [];   // start, end, value triples over the laid-out axis
+    const runs = (get: (i: number) => number, base: number) => {
+      let i = 0;
+      while (i < n) {
+        const v = get(i);
+        let e = i + 1;
+        while (e < n && get(e) === v) e++;
+        if (v) seg.push(base + i, base + e, v);
+        i = e;
+      }
+    };
+    runs(i => u.cov[i] ?? 0, si * 2 * n);
+    runs(i => u.sig[i] ?? 0, si * 2 * n + n);
+    return { id: u.id, seg: Float64Array.from(seg) };
+  }));
+  const nseg = units.reduce((a, u) => a + u.seg.length / 3, 0);
+  // Per resample: its segments, the prefix sums, and finishing the curves (smoothing ~40 operations per bin).
+  const B = curveResamples(resamples, 1, nseg + width * 40);
+  const D = new Float64Array(B * (width + 1));
+  for (const u of units) {
+    if (!u.seg.length) continue;
+    const w = poissonWeights(seed, u.id, B);
+    for (let b = 0; b < B; b++) {
+      const k = w[b];
+      if (!k) continue;
+      const off = b * (width + 1);
+      for (let j = 0; j < u.seg.length; j += 3) { const kv = k * u.seg[j + 2]; D[off + u.seg[j]] += kv; D[off + u.seg[j + 1]] -= kv; }
+    }
+  }
+  const vals: number[] = [];
+  const row = new Float64Array(width);
+  for (let b = 0; b < B; b++) {
+    const off = b * (width + 1);
+    let acc = 0;
+    for (let x = 0; x < width; x++) { acc += D[off + x]; row[x] = Math.abs(acc) < 1e-9 ? 0 : acc; }
+    const raws = sides.map((_, si) => ({ group: '', nReads: 0, coverage: row.slice(si * 2 * n, si * 2 * n + n), signal: row.slice(si * 2 * n + n, si * 2 * n + 2 * n) }) as RawProfile);
+    const x = stat(raws);
+    if (x != null && Number.isFinite(x)) vals.push(x);
+  }
+  return { ci: percentileInterval(vals), used: B };
 }
 
 /** The summary values of profile groups (metaprofile: window mean; histogram: band share), in group order, with the
  *  interval the settings resolve to (bootstrap over the groups' units when they have them). */
-export function profileSummary(groups: Array<{ id: string; title: string; color?: string; raw: RawProfile; units?: SummaryUnit[] }>,
+export function profileSummary(groups: Array<{ id: string; title: string; color?: string; raw: RawProfile; units?: SummaryUnit[]; source?: string; base?: string; baseTitle?: string; sourceLabel?: string }>,
   o: { histogram: boolean; start: number; binBp: number; sizeMin: number; s: SummarySettings; seed: number; countWeighting?: boolean;
     /** The profile's scale: fraction (Σ signal / Σ coverage), count (signal per bin), relative (the window over the whole axis). */
     normalization?: 'fraction' | 'count' | 'relative'; from?: number | null; to?: number | null;
     /** Mark profiles: 'fraction' is marks per read per bp (each value over binBp), as the profile drawn. */
-    marksPerBp?: boolean }): SummaryValue[] {
+    marksPerBp?: boolean;
+    /** How the curve is drawn (statistic 'curve'): its smoothing, blank bins, normalisation and bin width. */
+    finish?: ProfileFinishOptions }): SummaryValue[] {
   const kind: SummaryKind = o.histogram ? 'band-share' : 'window-mean';
   const norm = o.histogram ? 'fraction' : o.normalization ?? 'fraction';
   const method = resolveCi(kind, o.s, o.countWeighting ?? true, norm);
@@ -222,7 +351,18 @@ export function profileSummary(groups: Array<{ id: string; title: string; color?
         const ci = g.units?.length ? bootstrapRatio(g.units.map(u => ({ id: u.id, ...unitBand(u, o.sizeMin, o.binBp, o.s.sizeFrom, o.s.sizeTo) })), o.s.resamples, o.seed) : null;
         lo = ci ? ci[0] : null; hi = ci ? ci[1] : null;
       }
-      return { id: g.id, title: g.title, ...(g.color ? { color: g.color } : {}), ...base, lo, hi };
+      return { id: g.id, title: g.title, ...(g.color ? { color: g.color } : {}), ...base, lo, hi, ...seriesOf(g) };
+    }
+    if (o.finish && o.s.statistic !== 'pooled') {
+      // The drawn curve's mean over the window (a bar equals the curve); Wilson is for pooled shares, so none here.
+      const value = curveWindowMean(g.raw, o.finish, o.start, from, to);
+      let lo: number | null = null, hi: number | null = null, used: number | undefined;
+      if (method === 'bootstrap' && g.units?.length && value != null) {
+        const r = curveBootstrap([g.units], g.raw.coverage.length, o.s.resamples, o.seed, ([raw]) => curveWindowMean(raw, o.finish!, o.start, from, to));
+        lo = r.ci ? r.ci[0] : null; hi = r.ci ? r.ci[1] : null; used = r.used;
+      }
+      const n = windowMean(g.raw, o.start, o.binBp, from, to, false).n;
+      return { id: g.id, title: g.title, ...(g.color ? { color: g.color } : {}), value, lo, hi, n, ...(used != null && used < o.s.resamples ? { resamplesUsed: used } : {}), ...seriesOf(g) };
     }
     const base = windowMean(g.raw, o.start, o.binBp, from, to, method === 'wilson');
     const bins = binsOf(g.raw.coverage.length, o.start, o.binBp, from, to);
@@ -241,8 +381,15 @@ export function profileSummary(groups: Array<{ id: string; title: string; color?
     }
     const per = o.marksPerBp && norm === 'fraction' ? Math.max(1e-9, o.binBp) : 1;
     const scale = (v: number | null) => (v == null || per === 1 ? v : v / per);
-    return { id: g.id, title: g.title, ...(g.color ? { color: g.color } : {}), ...base, value: scale(value), lo: scale(lo), hi: scale(hi) };
+    return { id: g.id, title: g.title, ...(g.color ? { color: g.color } : {}), ...base, value: scale(value), lo: scale(lo), hi: scale(hi), ...seriesOf(g) };
   });
+}
+
+/** A combined group's bar placement (several sources): its source and its group. */
+function seriesOf(g: { title: string; source?: string; base?: string; baseTitle?: string; sourceLabel?: string }): Partial<SummaryValue> {
+  if (!g.source) return {};
+  const label = g.sourceLabel ?? (g.baseTitle && g.title.startsWith(`${g.baseTitle} · `) ? g.title.slice(g.baseTitle.length + 3) : g.source);
+  return { series: g.source, seriesLabel: label, cluster: g.base ?? g.title, clusterTitle: g.baseTitle ?? g.title };
 }
 
 /** One side of a summary as the bootstrap carries it: what its statistic reads from four sums. */
@@ -270,7 +417,9 @@ function sideValue(S: ArrayLike<number>, off: number, side: SideStat): number | 
 export type SummaryCompareOp = 'diff' | 'log2ratio';
 
 /** A comparison as a summary pairs it: the groups pooled on each side ("rest" and "all": several; "all": A among them). */
-export interface SummaryPair { id: string; label: string; a: string[]; b: string[] }
+export interface SummaryPair { id: string; label: string; a: string[]; b: string[];
+  /** Several sources: the pair's source, its colour and name, and the comparison it belongs to. */
+  source?: string; sourceColor?: string; sourceLabel?: string; facet?: string; facetLabel?: string }
 
 /** A − B, or log2(A / B) (null unless both are positive). */
 export function compareValues(op: SummaryCompareOp, a: number | null, b: number | null): number | null {
@@ -282,7 +431,7 @@ export function compareValues(op: SummaryCompareOp, a: number | null, b: number 
 /** The interval a comparison's summary uses: a seeded bootstrap (Wilson is for one group's share, not a difference). */
 export const resolveCompareCi = (s: SummarySettings): 'bootstrap' | 'none' => (s.ci === 'none' || s.ci === 'wilson' ? 'none' : 'bootstrap');
 
-type ProfileSummaryGroup = { id: string; title: string; color?: string; raw: RawProfile; units?: SummaryUnit[] };
+type ProfileSummaryGroup = { id: string; title: string; color?: string; raw: RawProfile; units?: SummaryUnit[]; source?: string; base?: string; baseTitle?: string };
 type ProfileSummaryOptions = Parameters<typeof profileSummary>[1];
 
 /** The summary of each comparison: each side summarised as profileSummary does (the pooled window mean, count,
@@ -305,13 +454,19 @@ export function compareSummary(groups: ProfileSummaryGroup[], pairs: SummaryPair
     const A = pool(p.a), B = pool(p.b);
     const value = compareValues(o.op, one(A.raw), one(B.raw));
     let lo: number | null = null, hi: number | null = null;
-    if (method === 'bootstrap' && A.units.length && B.units.length) {
+    if (method === 'bootstrap' && A.units.length && B.units.length && o.finish && o.s.statistic !== 'pooled' && !o.histogram) {
+      // Each side's curve mean, both sides from one set of draws (paired), as the values themselves.
+      const r = curveBootstrap([A.units, B.units], n, o.s.resamples, o.seed,
+        ([a, b]) => compareValues(o.op, curveWindowMean(a, o.finish!, o.start, from, to), curveWindowMean(b, o.finish!, o.start, from, to)));
+      lo = r.ci ? r.ci[0] : null; hi = r.ci ? r.ci[1] : null;
+    } else if (method === 'bootstrap' && A.units.length && B.units.length) {
       const zero = [0, 0, 0, 0];
       const us = [...A.units.map(u => ({ id: u.id, v: [...unitSums(u, side, o, from, to), ...zero] })), ...B.units.map(u => ({ id: u.id, v: [...zero, ...unitSums(u, side, o, from, to)] }))];
       const ci = bootstrapSums(us, o.s.resamples, o.seed, S => compareValues(o.op, sideValue(S, 0, side), sideValue(S, 4, side)));
       lo = ci ? ci[0] : null; hi = ci ? ci[1] : null;
     }
-    return { id: p.id, title: p.label, value, lo, hi, n: null };
+    return { id: p.id, title: p.label, value, lo, hi, n: null,
+      ...(p.source ? { series: p.source, seriesLabel: p.sourceLabel ?? p.source, cluster: p.facet ?? p.id, clusterTitle: p.facetLabel ?? p.label, ...(p.sourceColor ? { color: p.sourceColor } : {}) } : {}) };
   });
 }
 
@@ -327,7 +482,8 @@ export function compareSummaryCi(groups: Array<{ units?: SummaryUnit[] }>, s: Su
  *  reference line and the constant-by-construction note (as profileSummaryView). */
 export function compareSummaryView(groups: ProfileSummaryGroup[], pairs: SummaryPair[],
   o: { histogram: boolean; start: number; binBp: number; sizeMin: number; s: SummarySettings; seed: number; countWeighting?: boolean;
-    normalization: 'fraction' | 'count' | 'relative'; anchored: boolean; unitNoun: string; what: string; marksPerBp?: boolean; op: SummaryCompareOp }) {
+    normalization: 'fraction' | 'count' | 'relative'; anchored: boolean; unitNoun: string; what: string; marksPerBp?: boolean; op: SummaryCompareOp;
+    finish?: ProfileFinishOptions }) {
   const n = groups[0]?.raw.coverage.length ?? 0;
   const end = o.start + n * o.binBp;
   const norm = o.histogram ? 'fraction' : o.normalization;
@@ -340,7 +496,8 @@ export function compareSummaryView(groups: ProfileSummaryGroup[], pairs: Summary
   const sEff = { ...o.s, from: win.from, to: win.to };
   const opText = o.op === 'diff' ? 'A − B' : 'log2(A / B)';
   const scale = relative ? ' (relative to the window, 1 = average)' : norm === 'count' ? ' (count per bin)' : '';
-  const head = o.histogram ? `the share of ${sEff.sizeFrom}–${sEff.sizeTo} bp` : `the mean${scale} over ${windowText(sEff.from, sEff.to, win.isDefault)}`;
+  const curve = !o.histogram && !!o.finish && o.s.statistic !== 'pooled';
+  const head = o.histogram ? `the share of ${sEff.sizeFrom}–${sEff.sizeTo} bp` : `the ${curve ? 'curve\'s mean' : o.finish ? 'pooled mean' : 'mean'}${scale} over ${windowText(sEff.from, sEff.to, win.isDefault)}`;
   const measures = `${opText} of ${head}, one value per comparison; ${ci}. Of: ${o.what}`;
   return { values, measures, note, reference: 0, window: o.histogram ? `${sEff.sizeFrom}–${sEff.sizeTo} bp` : windowShort(sEff.from, sEff.to, win.isDefault, o.anchored) };
 }
@@ -384,11 +541,12 @@ export function profileSummaryCi(groups: Array<{ units?: SummaryUnit[] }>, o: { 
 }
 
 /** "Share of 0–90 bp per group, groups in panel order; bootstrap 95% (…). Of: …": what a summary measures. */
-export function summaryMeasures(kind: SummaryKind, s: SummarySettings, what: string, ci?: string, o: { scale?: string; isDefault?: boolean } = {}): string {
+export function summaryMeasures(kind: SummaryKind, s: SummarySettings, what: string, ci?: string, o: { scale?: string; isDefault?: boolean; statistic?: 'curve' | 'pooled' } = {}): string {
   const fmtX = (v: number) => (Math.abs(v) >= 1000 ? v.toLocaleString('en-US') : String(v));
   const where = s.from == null && s.to == null ? 'the whole axis' : `${s.from == null ? '−∞' : fmtX(s.from)} to ${s.to == null ? '+∞' : fmtX(s.to)}${o.isDefault ? ' (the default centre window)' : ''}`;
   const scale = o.scale ? ` (${o.scale})` : '';
-  const head = kind === 'band-share' ? `Share of ${s.sizeFrom}–${s.sizeTo} bp per group` : kind === 'window-mean' ? `Mean${scale} over ${where} per group` : `Mean${scale} of ${s.sizeFrom}–${s.sizeTo} bp × ${where} per group`;
+  const how = o.statistic === 'curve' ? ' of the curve' : o.statistic === 'pooled' ? ' (pooled: Σ signal / Σ coverage)' : '';
+  const head = kind === 'band-share' ? `Share of ${s.sizeFrom}–${s.sizeTo} bp per group` : kind === 'window-mean' ? `Mean${how}${scale} over ${where} per group` : `Mean${scale} of ${s.sizeFrom}–${s.sizeTo} bp × ${where} per group`;
   const method = resolveCi(kind, s);
   const interval = ci ?? (method === 'none' ? 'no interval' : method === 'wilson' ? ciText('wilson', s, 0, 'reads', kind === 'band-share', kind)
     : 'interval not available (the bootstrap needs per-unit values, not kept for this plot)');
@@ -397,9 +555,10 @@ export function summaryMeasures(kind: SummaryKind, s: SummarySettings, what: str
 
 /** A profile summary as drawn: its values, header, reference line and (constant by construction) note. The window
  *  defaults to the centre when the profile is relative to its window (its whole-window mean is 1 by construction). */
-export function profileSummaryView(groups: Array<{ id: string; title: string; color?: string; raw: RawProfile; units?: SummaryUnit[] }>,
+export function profileSummaryView(groups: Array<{ id: string; title: string; color?: string; raw: RawProfile; units?: SummaryUnit[]; source?: string; base?: string; baseTitle?: string }>,
   o: { histogram: boolean; start: number; binBp: number; sizeMin: number; s: SummarySettings; seed: number; countWeighting?: boolean;
-    normalization: 'fraction' | 'count' | 'relative'; anchored: boolean; unitNoun: string; what: string; marksPerBp?: boolean }) {
+    normalization: 'fraction' | 'count' | 'relative'; anchored: boolean; unitNoun: string; what: string; marksPerBp?: boolean;
+    finish?: ProfileFinishOptions }) {
   const n = groups[0]?.raw.coverage.length ?? 0;
   const end = o.start + n * o.binBp;
   const norm = o.histogram ? 'fraction' : o.normalization;
@@ -410,8 +569,12 @@ export function profileSummaryView(groups: Array<{ id: string; title: string; co
     ? 'Each value is relative to its mean across the whole window, so the whole-window mean is 1 by construction; pick a window (Summary › Window).' : null;
   const values = profileSummary(groups, { ...o, normalization: norm, from: win.from, to: win.to });
   const ci = profileSummaryCi(groups, { histogram: o.histogram, s: o.s, seed: o.seed, countWeighting: o.countWeighting, unitNoun: o.unitNoun, normalization: norm });
-  const measures = summaryMeasures(o.histogram ? 'band-share' : 'window-mean', sEff, o.what, ci,
-    { scale: relative ? 'relative to the window, 1 = average' : norm === 'count' ? 'count per bin' : undefined, isDefault: win.isDefault });
+  const curve = !o.histogram && !!o.finish && o.s.statistic !== 'pooled';
+  const capped = values.reduce((m, v) => (v.resamplesUsed != null ? Math.min(m, v.resamplesUsed) : m), Infinity);
+  const measures = summaryMeasures(o.histogram ? 'band-share' : 'window-mean', sEff, o.what,
+    ci + (Number.isFinite(capped) ? ` (capped at ${capped.toLocaleString('en-US')} resamples: a wide window)` : ''),
+    { scale: relative ? 'relative to the window, 1 = average' : norm === 'count' ? 'count per bin' : undefined, isDefault: win.isDefault,
+      ...(o.histogram ? {} : { statistic: curve ? 'curve' as const : 'pooled' as const }) });
   return { values, measures, note, reference: relative ? 1 : 0 };
 }
 

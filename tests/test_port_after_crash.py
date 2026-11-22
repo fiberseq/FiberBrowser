@@ -187,6 +187,11 @@ def _free_port() -> int:
         return sock.getsockname()[1]
 
 
+# A cold server start under a loaded full suite can take well over a minute (numba, imports): the assertions about
+# the port and the crash recovery don't depend on how long it takes.
+LAUNCH_TIMEOUT_S = 180
+
+
 def _launch_state(port: int, timeout: float, proc: subprocess.Popen) -> dict:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -222,7 +227,7 @@ def test_relaunch_after_a_crash_with_the_tab_open_keeps_the_port(tmp_path):
             procs.append(subprocess.Popen(cmd, cwd=REPO, env=env, stdin=subprocess.DEVNULL,
                                           stdout=out, stderr=subprocess.STDOUT))
         try:
-            first = _launch_state(port, 90, procs[-1])
+            first = _launch_state(port, LAUNCH_TIMEOUT_S, procs[-1])
         except RuntimeError:
             pytest.fail(first_log.read_text()[-2000:])
         # The open tab: a kept-alive connection to the server.
@@ -237,7 +242,7 @@ def test_relaunch_after_a_crash_with_the_tab_open_keeps_the_port(tmp_path):
             procs.append(subprocess.Popen(cmd, cwd=REPO, env=env, stdin=subprocess.DEVNULL,
                                           stdout=out, stderr=subprocess.STDOUT))
         try:
-            second = _launch_state(port, 90, procs[-1])
+            second = _launch_state(port, LAUNCH_TIMEOUT_S, procs[-1])
         except RuntimeError:
             pytest.fail(log.read_text()[-2000:])
         assert "instead" not in log.read_text()
