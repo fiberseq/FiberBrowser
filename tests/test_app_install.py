@@ -435,13 +435,21 @@ def test_windows_rollback_command_plan_restores_application_and_home(tmp_path, f
 
 @pytest.mark.skipif(not shutil.which('pwsh'), reason='PowerShell unavailable: generated helper cannot be executed locally')
 @pytest.mark.parametrize('failure', ['', 'export', 'install', 'first_start', 'launch', 'late_start', 'restore'])
-def test_execute_windows_helper_with_stubbed_native_commands(windows, tmp_path, failure):
+def test_execute_windows_helper_with_stubbed_native_commands(windows, tmp_path, failure, monkeypatch):
     import json
     calls = tmp_path / 'powershell-calls.jsonl'
     # No real filesystem mutation, installer, WSL, or Windows GUI. Only this
-    # temporary calls file is written by the harness. The scenario variable must
-    # not be named $failure: the helper's catch block sets $failure (script scope).
+    # temporary calls file and the helper's install log are written. The scenario
+    # variable must not be named $failure: the helper's catch block sets $failure
+    # (script scope).
+    # The helper appends wsl.exe output to "<installer>.install.log" with the >>
+    # operator, which can't be stubbed. A C:\ installer path fails on pwsh off
+    # Windows ("Cannot find drive") and would write to the real C:\ on Windows, so
+    # the installer sits on a private FBTEST: drive mapped to tmp_path.
+    monkeypatch.setattr(app_install, "windows_path", lambda p: "FBTEST:\\Downloads\\" + p.name)
+    (tmp_path / 'Downloads').mkdir()
     prelude = r'''
+New-PSDrive -Name FBTEST -PSProvider FileSystem -Root DRIVEROOT | Out-Null
 $script:registered = 'old'
 $script:snapshot = ''
 $script:startupReads = 0
@@ -509,7 +517,8 @@ function Start-Process {
     $process | Add-Member -MemberType ScriptProperty -Name HasExited -Value { return ($script:scenario -eq 'late_start' -and $script:startupReads -ge 3) }
     return $process
 }
-'''.replace('FAILURE', app_install.ps_quote(failure)).replace('CALLS', app_install.ps_quote(str(calls)))
+'''.replace('FAILURE', app_install.ps_quote(failure)).replace('CALLS', app_install.ps_quote(str(calls))) \
+       .replace('DRIVEROOT', app_install.ps_quote(str(tmp_path)))
     script = tmp_path / 'test-helper.ps1'
     script.write_text(prelude + app_install.windows_helper(dict(installer=str(windows), root=r'C:\FakeApp', launcher=42), 'a' * 64))
     ran = subprocess.run([shutil.which('pwsh'), '-NoProfile', '-NonInteractive', '-File', str(script)],

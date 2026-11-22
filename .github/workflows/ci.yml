@@ -2,6 +2,9 @@ name: CI
 
 on:
   push:
+    # Branches only: a release tag points at a commit main's push already tested, so a tag push would run (and
+    # fail or pass) the same CI a second time.
+    branches: ["**"]
   pull_request:
   workflow_dispatch:
   schedule:
@@ -11,10 +14,15 @@ on:
 permissions:
   contents: read
 
+# Every Linux job runs on ubuntu-24.04, never ubuntu-latest: ubuntu-latest moved to 26.04 in Nov 2026, where
+# `playwright install --with-deps chromium` refuses ("Playwright does not support chromium on ubuntu26.04-x64").
+# 24.04 also carries pwsh, which test_app_install's Windows-helper execution test needs. Move all workflows
+# together, once Playwright supports the newer image (tests/test_ci_workflows.py checks this).
+
 jobs:
   backend:
     name: backend (Python ${{ matrix.python }}, FastAPI ${{ matrix.fastapi }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -71,7 +79,7 @@ jobs:
     # Bump FIBERHMM_PAIR_REF to the FiberHMM commit each FiberBrowser release is paired with; it must be a commit
     # reachable on FIBERHMM_PAIR_REPO.
     name: contract tests against pinned FiberHMM
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       FIBERHMM_PAIR_REPO: https://github.com/fiberseq/FiberHMM
       FIBERHMM_PAIR_REF: 00e511c7488b0e737fbc4bc1dcc4b1926a0b0e51
@@ -106,7 +114,7 @@ jobs:
           python -m pytest -q -rs -p no:cacheprovider tests/test_pipeline_pod5.py -k real
 
   frontend:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: browser/frontend
@@ -160,7 +168,7 @@ jobs:
     # (npm run test:e2e:release). The headless-render tests moved to the frontend job (every push).
     name: browser end-to-end (nightly, shard ${{ matrix.shard }}/3)
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # 3.1.1 added the 3.1 specs to the release list: three shards, each well inside its limit, so a long list never
     # runs into the timeout and drops specs silently.
     timeout-minutes: 75
